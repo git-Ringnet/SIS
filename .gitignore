@@ -1,18 +1,86 @@
-# Build and Release Folders
-bin-debug/
-bin-release/
-[Oo]bj/
-[Bb]in/
+# ==========================================
+# 1. AI Assistants, Skills & Local Configs
+# ==========================================
+.claude/
+.cursor/
+.kiro/
+.codex/
+.idea/
+.vscode/
+.zed/
+.nova/
+.agents/
+.changelogs/
+.mcp.json
+CLAUDE.md
+AGENTS.md
+boost.json
+backend/boost.json
 
-# Other files and folders
-.settings/
+# ==========================================
+# 2. Server Configuration, Secrets & Environment
+# ==========================================
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+auth.json
+.npmrc
+*.pem
+*.key
+storage/*.key
+storage/oauth-*.key
+backend/storage/*.key
+backend/storage/oauth-*.key
+Homestead.json
+Homestead.yaml
 
-# Executables
-*.swf
-*.air
-*.ipa
-*.apk
+# ==========================================
+# 3. Dependencies & Packages
+# ==========================================
+node_modules/
+vendor/
+backend/vendor/
+frontend/node_modules/
 
-# Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
-# should NOT be excluded as they contain compiler settings and other important
-# information for Eclipse / Flash Builder.
+# ==========================================
+# 4. Logs, Cache & Storage
+# ==========================================
+*.log
+*.sqlite
+backend/storage/logs/*
+!backend/storage/logs/.gitignore
+backend/storage/framework/cache/*
+!backend/storage/framework/cache/.gitignore
+backend/storage/framework/sessions/*
+!backend/storage/framework/sessions/.gitignore
+backend/storage/framework/views/*
+!backend/storage/framework/views/.gitignore
+backend/storage/pail
+.phpunit.result.cache
+.phpunit.cache
+.phpactor.json
+_ide_helper.php
+
+# ==========================================
+# 5. Build Artifacts & Static Assets
+# ==========================================
+dist/
+frontend/dist/
+public/build/
+public/hot
+public/storage
+backend/public/build/
+backend/public/hot
+backend/public/storage
+
+# ==========================================
+# 6. Operating System Files
+# ==========================================
+.DS_Store
+Thumbs.db
