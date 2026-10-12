@@ -1,11 +1,13 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { studentApi, courseApi } from '../services/api';
 import Badge from '../components/Badge.vue';
 import Modal from '../components/Modal.vue';
 import AddSupplyModal from '../components/AddSupplyModal.vue';
 import AttendanceButton from '../components/AttendanceButton.vue';
+import SearchableSelect from '../components/SearchableSelect.vue';
+import DatePickerVN from '../components/DatePickerVN.vue';
 import {
   UserPlus,
   Search,
@@ -90,8 +92,29 @@ watch(
   }
 );
 
-const onCourseChange = () => {
-  const selectedCourse = courses.value.find((c) => c.id === Number(newStudentForm.value.course_id));
+const courseOptions = computed(() => {
+  return courses.value.map((c) => ({
+    id: c.id,
+    name: `${c.name} (${formatVND(c.price)})`,
+    rawName: c.name,
+    price: c.price,
+    default_sessions: c.default_sessions,
+  }));
+});
+
+const filterCourseOptions = computed(() => {
+  return [
+    { id: 'all', name: 'Tất cả khóa học' },
+    ...courses.value.map((c) => ({
+      id: c.id,
+      name: c.name,
+    })),
+  ];
+});
+
+const onCourseChange = (courseOpt) => {
+  const cId = courseOpt?.id || Number(newStudentForm.value.course_id);
+  const selectedCourse = courses.value.find((c) => c.id === cId);
   if (selectedCourse) {
     newStudentForm.value.total_sessions = selectedCourse.default_sessions || 12;
     newStudentForm.value.invoice_amount = selectedCourse.price || 3600000;
@@ -190,7 +213,7 @@ const formatVND = (val) => {
       <div class="flex items-center gap-2 flex-wrap">
         <button
           @click="showCreateModal = true"
-          class="inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-red-700 transition-all"
+          class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-xs shadow-indigo-600/20 hover:bg-indigo-700 transition-all active:scale-[0.98]"
         >
           <UserPlus class="h-4 w-4" />
           <span>+ Học viên mới</span>
@@ -198,8 +221,8 @@ const formatVND = (val) => {
       </div>
     </div>
 
-    <!-- Filters Row matching Senyapp exact dropdowns -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 shadow-2xs">
+    <!-- Filters Row: Modern Indigo Style -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
       <!-- Tên học viên -->
       <div>
         <input
@@ -207,7 +230,7 @@ const formatVND = (val) => {
           v-model="search"
           @keyup.enter="fetchData"
           placeholder="Tên học viên..."
-          class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2 text-xs font-medium focus:border-red-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-red-500 transition-all"
+          class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-sm font-normal focus:border-indigo-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
         />
       </div>
 
@@ -218,20 +241,18 @@ const formatVND = (val) => {
           v-model="phoneSearch"
           @keyup.enter="fetchData"
           placeholder="Điện thoại..."
-          class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2 text-xs font-medium focus:border-red-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-red-500 transition-all"
+          class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-sm font-normal focus:border-indigo-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
         />
       </div>
 
       <!-- Khóa học -->
       <div>
-        <select
+        <SearchableSelect
           v-model="courseId"
+          :options="filterCourseOptions"
           @change="fetchData"
-          class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2 text-xs font-medium focus:border-red-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-red-500 transition-all"
-        >
-          <option value="all">Tất cả khóa học</option>
-          <option v-for="c in courses" :key="c.id" :value="c.id">{{ c.name }}</option>
-        </select>
+          placeholder="Tất cả khóa học"
+        />
       </div>
 
       <!-- Trạng thái -->
@@ -239,7 +260,7 @@ const formatVND = (val) => {
         <select
           v-model="status"
           @change="fetchData"
-          class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2 text-xs font-medium focus:border-red-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-red-500 transition-all"
+          class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-sm font-normal focus:border-indigo-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
         >
           <option value="all">Tất cả trạng thái</option>
           <option value="active">Đang học</option>
@@ -252,10 +273,10 @@ const formatVND = (val) => {
       <div>
         <button
           @click="alertFilter = alertFilter === 'expiring' ? '' : 'expiring'; fetchData()"
-          class="w-full rounded-xl px-3 py-2 text-xs font-bold border transition-all flex items-center justify-center gap-1.5"
-          :class="alertFilter === 'expiring' ? 'bg-red-50 border-red-300 text-red-700 ring-1 ring-red-400' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'"
+          class="w-full rounded-xl px-3.5 py-2.5 text-sm font-medium border transition-all flex items-center justify-center gap-1.5"
+          :class="alertFilter === 'expiring' ? 'bg-amber-50 border-amber-300 text-amber-800 ring-2 ring-amber-400/20' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'"
         >
-          <Flame class="h-3.5 w-3.5 text-red-600" />
+          <Flame class="h-4 w-4 text-amber-500" />
           <span>Sắp hết (&le; 5)</span>
         </button>
       </div>
@@ -264,29 +285,29 @@ const formatVND = (val) => {
       <div>
         <button
           @click="alertFilter = alertFilter === 'absence' ? '' : 'absence'; fetchData()"
-          class="w-full rounded-xl px-3 py-2 text-xs font-bold border transition-all flex items-center justify-center gap-1.5"
-          :class="alertFilter === 'absence' ? 'bg-amber-50 border-amber-300 text-amber-800 ring-1 ring-amber-400' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'"
+          class="w-full rounded-xl px-3.5 py-2.5 text-sm font-medium border transition-all flex items-center justify-center gap-1.5"
+          :class="alertFilter === 'absence' ? 'bg-rose-50 border-rose-300 text-rose-800 ring-2 ring-rose-400/20' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'"
         >
-          <AlertTriangle class="h-3.5 w-3.5 text-amber-600" />
+          <AlertTriangle class="h-4 w-4 text-rose-500" />
           <span>Vắng &ge; 2</span>
         </button>
       </div>
     </div>
 
-    <!-- Student Table Card matching Screenshot 1 -->
+    <!-- Student Table Card -->
     <div class="rounded-2xl border border-slate-200 bg-white shadow-2xs overflow-hidden">
       <div class="overflow-x-auto">
-        <table class="w-full text-left text-xs min-w-[900px]">
-          <thead class="bg-slate-50/90 text-slate-500 border-b border-slate-200/80 font-bold uppercase tracking-wider text-[11px]">
+        <table class="w-full text-left text-sm min-w-[950px]">
+          <thead class="bg-slate-50/90 text-slate-500 border-b border-slate-200/80 font-bold uppercase tracking-wider text-xs">
             <tr>
-              <th class="py-3.5 px-4">Tên</th>
-              <th class="py-3.5 px-4">Phụ huynh</th>
-              <th class="py-3.5 px-4">Điện thoại</th>
-              <th class="py-3.5 px-4 text-center">Số buổi</th>
-              <th class="py-3.5 px-4 text-center">Vắng</th>
-              <th class="py-3.5 px-4 text-center">Trạng thái</th>
-              <th class="py-3.5 px-4 text-center">Điểm danh</th>
-              <th class="py-3.5 px-4 text-right">Thao tác</th>
+              <th class="py-4 px-4">Tên</th>
+              <th class="py-4 px-4">Phụ huynh</th>
+              <th class="py-4 px-4">Điện thoại</th>
+              <th class="py-4 px-4 text-center">Số buổi</th>
+              <th class="py-4 px-4 text-center">Vắng</th>
+              <th class="py-4 px-4 text-center">Trạng thái</th>
+              <th class="py-4 px-4 text-center">Điểm danh</th>
+              <th class="py-4 px-4 text-right">Thao tác</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100 text-slate-700">
@@ -296,19 +317,19 @@ const formatVND = (val) => {
               class="hover:bg-slate-50/80 transition-colors"
             >
               <!-- Name & Course -->
-              <td class="py-3.5 px-4">
-                <div class="flex items-center gap-2.5">
-                  <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-red-50 font-black text-red-600 text-xs shrink-0">
+              <td class="py-4 px-4">
+                <div class="flex items-center gap-3">
+                  <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50 font-black text-indigo-700 text-sm shrink-0">
                     {{ student.name.charAt(0) }}
                   </div>
                   <div class="min-w-0">
                     <router-link
                       :to="`/students/${student.id}`"
-                      class="font-black text-slate-900 hover:text-red-600 block text-xs sm:text-sm tracking-tight truncate"
+                      class="font-black text-slate-900 hover:text-indigo-600 block text-sm sm:text-base tracking-tight truncate"
                     >
                       {{ student.name }}
                     </router-link>
-                    <span class="text-[11px] text-slate-400 block font-medium truncate">
+                    <span class="text-xs text-slate-400 block font-medium truncate">
                       {{ student.course?.name }}
                     </span>
                   </div>
@@ -506,16 +527,13 @@ const formatVND = (val) => {
               <label class="block text-xs font-bold text-slate-700 mb-1">
                 Khóa học đăng ký <span class="text-red-600">*</span>
               </label>
-              <select
+              <SearchableSelect
                 v-model="newStudentForm.course_id"
+                :options="courseOptions"
+                placeholder="Chọn khóa học..."
                 @change="onCourseChange"
                 required
-                class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-xs sm:text-sm font-medium focus:border-red-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-red-500 transition-all"
-              >
-                <option v-for="c in courses" :key="c.id" :value="c.id">
-                  {{ c.name }} ({{ formatVND(c.price) }})
-                </option>
-              </select>
+              />
             </div>
             <div>
               <label class="block text-xs font-bold text-slate-700 mb-1">
@@ -534,10 +552,9 @@ const formatVND = (val) => {
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             <div>
               <label class="block text-xs font-bold text-slate-700 mb-1">Ngày bắt đầu học</label>
-              <input
-                type="date"
+              <DatePickerVN
                 v-model="newStudentForm.join_date"
-                class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-xs sm:text-sm font-medium focus:border-red-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-red-500 transition-all"
+                :default-today="true"
               />
             </div>
             <div>
@@ -572,7 +589,7 @@ const formatVND = (val) => {
             <button
               type="submit"
               :disabled="isSubmitting"
-              class="rounded-xl bg-red-600 px-6 py-2.5 text-xs sm:text-sm font-bold text-white hover:bg-red-700 shadow-xs transition-colors disabled:opacity-50 flex items-center gap-2"
+              class="rounded-xl bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 shadow-xs shadow-indigo-600/20 transition-colors disabled:opacity-50 flex items-center gap-2"
             >
               <CheckCircle2 class="h-4 w-4" />
               <span>{{ isSubmitting ? 'Đang lưu...' : 'Lưu Học Viên' }}</span>
@@ -634,12 +651,11 @@ const formatVND = (val) => {
             </div>
             <div>
               <label class="block text-xs font-bold text-slate-700 mb-1">Khóa học</label>
-              <select
+              <SearchableSelect
                 v-model="editingStudent.course_id"
-                class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-xs sm:text-sm font-medium focus:border-red-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-red-500 transition-all"
-              >
-                <option v-for="c in courses" :key="c.id" :value="c.id">{{ c.name }}</option>
-              </select>
+                :options="courseOptions"
+                placeholder="Chọn khóa học..."
+              />
             </div>
           </div>
 
@@ -688,7 +704,7 @@ const formatVND = (val) => {
             <button
               type="submit"
               :disabled="isSubmitting"
-              class="rounded-xl bg-red-600 px-6 py-2.5 text-xs sm:text-sm font-bold text-white hover:bg-red-700 shadow-xs disabled:opacity-50"
+              class="rounded-xl bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 shadow-xs shadow-indigo-600/20 disabled:opacity-50"
             >
               Cập Nhật
             </button>

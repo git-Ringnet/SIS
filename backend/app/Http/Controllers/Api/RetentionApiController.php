@@ -71,7 +71,7 @@ class RetentionApiController extends Controller
             default => 'note_added',
         };
 
-        $content = $validated['note'];
+        $content = $validated['note'] ?? null;
         if (! $content) {
             $content = match ($newStatus) {
                 'invoice_sent' => 'Đã gửi thông báo học phí và thông tin thanh toán cho phụ huynh.',

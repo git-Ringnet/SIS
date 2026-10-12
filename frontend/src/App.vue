@@ -32,6 +32,16 @@ const route = useRoute();
 const router = useRouter();
 const { user, isAuthenticated, logout } = useAuth();
 const showMobileMenu = ref(false);
+const isSidebarCollapsed = ref(localStorage.getItem('sis_sidebar_collapsed') === 'true');
+
+const toggleSidebar = () => {
+  if (window.innerWidth < 1024) {
+    showMobileMenu.value = true;
+  } else {
+    isSidebarCollapsed.value = !isSidebarCollapsed.value;
+    localStorage.setItem('sis_sidebar_collapsed', isSidebarCollapsed.value);
+  }
+};
 
 const isStandalonePage = computed(() => {
   return route.meta?.public === true || route.meta?.standalone === true || ['login', 'register', 'student-detail'].includes(route.name);
@@ -51,7 +61,7 @@ const operationNavigation = [
   { name: 'Hóa đơn', href: '/invoices', icon: FileText },
   { name: 'Học cụ', href: '/inventory', icon: Package },
   { name: 'Sinh nhật', href: '/birthdays', icon: Cake },
-  { name: 'Học viên đã nghỉ', href: '/inactive-students', icon: UserMinus },
+  { name: 'HV Tạm dừng - Nghỉ', href: '/inactive-students', icon: UserMinus },
 ];
 
 const configNavigation = [
@@ -72,13 +82,6 @@ const currentPageTitle = computed(() => {
   return route.meta?.title || 'Bảng điều khiển';
 });
 
-const userInitials = computed(() => {
-  if (!user.value?.name) return 'KA';
-  const parts = user.value.name.trim().split(' ');
-  if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-});
-
 const handleLogout = async () => {
   if (confirm('Bạn có chắc chắn muốn đăng xuất khỏi hệ thống?')) {
     await logout();
@@ -95,18 +98,24 @@ const handleLogout = async () => {
   <!-- Authenticated Full-Width Dashboard Layout -->
   <div v-else class="min-h-screen bg-[#f8fafc] flex antialiased w-full text-slate-800">
     <!-- Desktop Sidebar -->
-    <aside class="hidden lg:flex lg:w-60 xl:w-64 lg:flex-col lg:fixed lg:inset-y-0 z-30 bg-white border-r border-slate-200/90 shadow-2xs">
+    <aside
+      class="hidden lg:flex lg:flex-col lg:fixed lg:inset-y-0 z-30 bg-white border-r border-slate-200/90 shadow-2xs transition-all duration-300"
+      :class="isSidebarCollapsed ? 'lg:w-16' : 'lg:w-60 xl:w-64'"
+    >
       <!-- Brand Logo - Khoa Anh Music & Art -->
-      <div class="flex h-16 shrink-0 items-center justify-between px-4 border-b border-slate-100 bg-white">
-        <router-link to="/" class="flex items-center gap-2.5">
-          <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-red-600 text-white shadow-xs">
+      <div
+        class="flex h-16 shrink-0 items-center border-b border-slate-100 bg-white transition-all duration-300"
+        :class="isSidebarCollapsed ? 'justify-center px-2' : 'justify-between px-4'"
+      >
+        <router-link to="/" class="flex items-center gap-2.5" :title="isSidebarCollapsed ? 'Khoa Anh Music' : ''">
+          <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-rose-500 via-rose-600 to-red-600 text-white shadow-sm shadow-rose-600/20 shrink-0">
             <Music class="h-5 w-5" />
           </div>
-          <div>
+          <div v-if="!isSidebarCollapsed" class="overflow-hidden whitespace-nowrap">
             <span class="text-sm font-black tracking-tight text-slate-900 block leading-tight">
-              Khoa Anh <span class="text-red-600">Music</span>
+              Khoa Anh <span class="text-rose-600">Music</span>
             </span>
-            <span class="text-[10px] font-semibold text-slate-400 block tracking-wider uppercase">
+            <span class="text-[10px] font-semibold text-rose-900/40 block tracking-wider uppercase">
               EduCRM &bull; SIS
             </span>
           </div>
@@ -114,109 +123,127 @@ const handleLogout = async () => {
       </div>
 
       <!-- Navigation Links Groups -->
-      <div class="flex flex-1 flex-col overflow-y-auto px-3 py-3 space-y-4">
+      <div
+        class="flex flex-1 flex-col overflow-y-auto py-3 space-y-3 transition-all duration-300"
+        :class="isSidebarCollapsed ? 'px-2' : 'px-3'"
+      >
         <!-- 1. Main Navigation -->
         <nav class="space-y-1">
           <router-link
             v-for="item in mainNavigation"
             :key="item.name"
             :to="item.href"
-            class="group flex items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-semibold transition-all"
+            :title="isSidebarCollapsed ? item.name : ''"
+            class="group flex items-center rounded-xl transition-all"
             :class="[
+              isSidebarCollapsed
+                ? 'w-10 h-10 mx-auto justify-center'
+                : 'gap-2.5 px-3 py-2 text-sm font-medium',
               isCurrentUrl(item.href)
-                ? 'bg-red-600 text-white shadow-xs font-bold'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                ? 'bg-rose-600 text-white shadow-sm shadow-rose-600/25 font-semibold'
+                : 'text-slate-600 hover:bg-rose-50/70 hover:text-rose-900'
             ]"
           >
             <component
               :is="item.icon"
-              class="h-4 w-4 shrink-0 transition-colors"
-              :class="isCurrentUrl(item.href) ? 'text-white' : 'text-slate-500 group-hover:text-slate-900'"
+              class="shrink-0 transition-colors"
+              :class="[
+                isSidebarCollapsed ? 'h-5 w-5' : 'h-4 w-4',
+                isCurrentUrl(item.href) ? 'text-white' : 'text-slate-500 group-hover:text-rose-600'
+              ]"
             />
-            <span class="truncate">{{ item.name }}</span>
+            <span v-if="!isSidebarCollapsed" class="truncate">{{ item.name }}</span>
           </router-link>
         </nav>
 
         <!-- 2. Vận hành -->
         <div>
-          <p class="px-3 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+          <div v-if="isSidebarCollapsed" class="my-2 border-t border-slate-100"></div>
+          <p v-else class="px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
             Vận hành
           </p>
-          <nav class="mt-1.5 space-y-1">
+          <nav class="space-y-1" :class="isSidebarCollapsed ? 'mt-1' : 'mt-1.5'">
             <router-link
               v-for="item in operationNavigation"
               :key="item.name"
               :to="item.href"
-              class="group flex items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-semibold transition-all"
+              :title="isSidebarCollapsed ? item.name : ''"
+              class="group flex items-center rounded-xl transition-all"
               :class="[
+                isSidebarCollapsed
+                  ? 'w-10 h-10 mx-auto justify-center'
+                  : 'gap-2.5 px-3 py-2 text-sm font-medium',
                 isCurrentUrl(item.href)
-                  ? 'bg-red-600 text-white shadow-xs font-bold'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  ? 'bg-rose-600 text-white shadow-sm shadow-rose-600/25 font-semibold'
+                  : 'text-slate-600 hover:bg-rose-50/70 hover:text-rose-900'
               ]"
             >
               <component
                 :is="item.icon"
-                class="h-4 w-4 shrink-0 transition-colors"
-                :class="isCurrentUrl(item.href) ? 'text-white' : 'text-slate-500 group-hover:text-slate-900'"
+                class="shrink-0 transition-colors"
+                :class="[
+                  isSidebarCollapsed ? 'h-5 w-5' : 'h-4 w-4',
+                  isCurrentUrl(item.href) ? 'text-white' : 'text-slate-500 group-hover:text-rose-600'
+                ]"
               />
-              <span class="truncate">{{ item.name }}</span>
+              <span v-if="!isSidebarCollapsed" class="truncate">{{ item.name }}</span>
             </router-link>
           </nav>
         </div>
 
         <!-- 3. Cấu hình -->
         <div>
-          <p class="px-3 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+          <div v-if="isSidebarCollapsed" class="my-2 border-t border-slate-100"></div>
+          <p v-else class="px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
             Cấu hình
           </p>
-          <nav class="mt-1.5 space-y-1">
+          <nav class="space-y-1" :class="isSidebarCollapsed ? 'mt-1' : 'mt-1.5'">
             <router-link
               v-for="item in configNavigation"
               :key="item.name"
               :to="item.href"
-              class="group flex items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-semibold transition-all"
+              :title="isSidebarCollapsed ? item.name : ''"
+              class="group flex items-center rounded-xl transition-all"
               :class="[
+                isSidebarCollapsed
+                  ? 'w-10 h-10 mx-auto justify-center'
+                  : 'gap-2.5 px-3 py-2 text-sm font-medium',
                 isCurrentUrl(item.href)
-                  ? 'bg-red-600 text-white shadow-xs font-bold'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  ? 'bg-rose-600 text-white shadow-sm shadow-rose-600/25 font-semibold'
+                  : 'text-slate-600 hover:bg-rose-50/70 hover:text-rose-900'
               ]"
             >
               <component
                 :is="item.icon"
-                class="h-4 w-4 shrink-0 transition-colors"
-                :class="isCurrentUrl(item.href) ? 'text-white' : 'text-slate-500 group-hover:text-slate-900'"
+                class="shrink-0 transition-colors"
+                :class="[
+                  isSidebarCollapsed ? 'h-5 w-5' : 'h-4 w-4',
+                  isCurrentUrl(item.href) ? 'text-white' : 'text-slate-500 group-hover:text-rose-600'
+                ]"
               />
-              <span class="truncate">{{ item.name }}</span>
+              <span v-if="!isSidebarCollapsed" class="truncate">{{ item.name }}</span>
             </router-link>
           </nav>
-        </div>
-
-        <!-- Retention Quick Banner -->
-        <div class="rounded-xl border border-red-200/80 bg-red-50/60 p-3 text-slate-700">
-          <div class="flex items-center gap-1.5 text-red-600">
-            <Flame class="h-4 w-4 animate-pulse shrink-0" />
-            <span class="text-[11px] font-bold uppercase tracking-wide">Quy trình Retention</span>
-          </div>
-          <p class="mt-1 text-[11px] text-slate-500 leading-relaxed">
-            Học viên &le; 5 buổi & tự động hóa gia hạn 1-click.
-          </p>
-          <router-link
-            to="/retention"
-            class="mt-2 inline-flex items-center justify-center w-full rounded-lg bg-red-600 hover:bg-red-700 px-2 py-1.5 text-xs font-bold text-white transition-colors shadow-2xs"
-          >
-            Checklist sắp hết buổi &rarr;
-          </router-link>
         </div>
       </div>
 
       <!-- Logout Footer -->
-      <div class="border-t border-slate-100 p-3 bg-white">
+      <div
+        class="border-t border-slate-100 bg-white transition-all duration-300"
+        :class="isSidebarCollapsed ? 'p-2' : 'p-3'"
+      >
         <button
           @click="handleLogout"
-          class="flex items-center gap-2.5 w-full rounded-xl px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-red-50 hover:text-red-600 transition-colors"
+          :title="isSidebarCollapsed ? `Đăng xuất (${user?.name || 'Admin'})` : ''"
+          class="flex items-center rounded-xl text-slate-600 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+          :class="[
+            isSidebarCollapsed
+              ? 'w-10 h-10 mx-auto justify-center'
+              : 'w-full gap-2.5 px-3 py-2 text-sm font-normal'
+          ]"
         >
-          <LogOut class="h-4 w-4 text-red-600" />
-          <span>Đăng xuất ({{ user?.name || 'Admin' }})</span>
+          <LogOut class="text-rose-500 shrink-0" :class="isSidebarCollapsed ? 'h-5 w-5' : 'h-4 w-4'" />
+          <span v-if="!isSidebarCollapsed" class="truncate">Đăng xuất ({{ user?.name || 'Admin' }})</span>
         </button>
       </div>
     </aside>
@@ -227,7 +254,7 @@ const handleLogout = async () => {
       <div class="relative flex w-64 max-w-xs flex-1 flex-col bg-white p-4 overflow-y-auto">
         <div class="flex items-center justify-between pb-3 border-b border-slate-100">
           <div class="flex items-center gap-2">
-            <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-red-600 text-white">
+            <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-tr from-rose-500 to-red-600 text-white">
               <Music class="h-4 w-4" />
             </div>
             <span class="text-sm font-black text-slate-900">Khoa Anh Music</span>
@@ -243,8 +270,8 @@ const handleLogout = async () => {
             :key="item.name"
             :to="item.href"
             @click="showMobileMenu = false"
-            class="flex items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-semibold"
-            :class="isCurrentUrl(item.href) ? 'bg-red-600 text-white' : 'text-slate-700 hover:bg-slate-100'"
+            class="flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-normal"
+            :class="isCurrentUrl(item.href) ? 'bg-rose-600 text-white font-semibold' : 'text-slate-700 hover:bg-rose-50/70 hover:text-rose-900'"
           >
             <component :is="item.icon" class="h-4 w-4" />
             <span>{{ item.name }}</span>
@@ -254,7 +281,7 @@ const handleLogout = async () => {
         <div class="mt-4 pt-3 border-t border-slate-100">
           <button
             @click="handleLogout"
-            class="flex items-center gap-2 w-full rounded-xl px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50"
+            class="flex items-center gap-2 w-full rounded-xl px-3 py-2 text-sm font-normal text-rose-600 hover:bg-rose-50"
           >
             <LogOut class="h-4 w-4" />
             <span>Đăng xuất</span>
@@ -264,20 +291,23 @@ const handleLogout = async () => {
     </div>
 
     <!-- Main Content Full Width Area -->
-    <div class="flex flex-1 flex-col lg:pl-60 xl:pl-64 min-w-0 w-full">
+    <div
+      class="flex flex-1 flex-col min-w-0 w-full transition-all duration-300"
+      :class="isSidebarCollapsed ? 'lg:pl-16' : 'lg:pl-60 xl:pl-64'"
+    >
       <!-- Top Header -->
       <header class="sticky top-0 z-20 flex h-14 sm:h-15 shrink-0 items-center justify-between border-b border-slate-200/80 bg-white/95 backdrop-blur-md px-4 sm:px-6 lg:px-8">
         <div class="flex items-center gap-3">
           <button
-            @click="showMobileMenu = true"
-            class="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 lg:hidden"
+            @click="toggleSidebar"
+            class="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors"
+            :title="isSidebarCollapsed ? 'Mở rộng sidebar' : 'Thu gọn sidebar'"
           >
             <Menu class="h-5 w-5" />
           </button>
 
           <!-- Breadcrumb / Page Title -->
-          <div class="flex items-center gap-2">
-            <LayoutDashboard class="h-4 w-4 text-slate-400 hidden sm:inline" />
+          <div class="flex items-center">
             <h2 class="text-sm sm:text-base font-bold text-slate-900">
               {{ currentPageTitle }}
             </h2>
@@ -288,33 +318,20 @@ const handleLogout = async () => {
         <div class="flex items-center gap-2.5">
           <router-link
             to="/students?create=true"
-            class="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 hover:text-red-600 shadow-2xs transition-colors"
+            class="hidden sm:inline-flex items-center gap-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white px-3.5 py-2 text-sm font-semibold shadow-xs shadow-rose-600/20 transition-all active:scale-[0.98]"
           >
-            <Plus class="h-3.5 w-3.5 text-red-600" />
+            <Plus class="h-4 w-4 text-white" />
             <span>Học viên mới</span>
           </router-link>
 
-          <router-link
-            to="/retention"
-            class="inline-flex items-center gap-1.5 rounded-lg bg-red-50 border border-red-200 px-3 py-1.5 text-xs font-bold text-red-700 hover:bg-red-100 shadow-2xs transition-colors"
-          >
-            <Flame class="h-3.5 w-3.5 text-red-600" />
-            <span>Xử lý Tái ký</span>
-          </router-link>
-
           <!-- User Profile -->
-          <div class="flex items-center gap-2 pl-2 border-l border-slate-200">
-            <div class="flex h-7.5 w-7.5 items-center justify-center rounded-full bg-red-600 text-white font-black text-xs shadow-2xs">
-              {{ userInitials }}
-            </div>
-            <div class="hidden md:block text-left">
-              <span class="text-xs font-bold text-slate-800 block leading-tight">
-                {{ user?.name || 'Khoa Anh Music' }}
-              </span>
-              <span class="text-[10px] text-slate-400 font-medium block truncate max-w-[150px]">
-                {{ user?.email || 'admin@khoaanhmusic.com' }}
-              </span>
-            </div>
+          <div class="pl-3 border-l border-slate-200 text-left">
+            <span class="text-sm font-bold text-slate-800 block leading-tight">
+              {{ user?.name || 'Khoa Anh Music' }}
+            </span>
+            <span class="text-xs text-slate-400 font-medium block truncate max-w-[180px]">
+              {{ user?.email || 'admin@khoaanhmusic.com' }}
+            </span>
           </div>
         </div>
       </header>

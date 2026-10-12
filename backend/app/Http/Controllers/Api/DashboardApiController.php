@@ -61,7 +61,7 @@ class DashboardApiController extends Controller
             : 100.0;
 
         // 4. Urgent Alerts (Eager Loading with courses and latest retention logs)
-        $expiringStudents = Student::with(['course', 'latestRetentionLog'])
+        $expiringStudents = Student::with(['course', 'latestRetentionLog', 'retentionLogs'])
             ->where('status', 'active')
             ->where('remaining_sessions', '<=', 5)
             ->orderBy('remaining_sessions', 'asc')
@@ -94,6 +94,27 @@ class DashboardApiController extends Controller
         $courses = Course::withCount('activeStudents')->get();
         $templates = MessageTemplate::all();
 
+        // 8. Việc cần xử lý hôm nay (Today's Urgent Actions)
+        $todoDebtInvoices = $debtInvoicesCount;
+        $todoTuitionDue = Student::where('status', 'active')
+            ->where(function ($query) use ($today) {
+                $query->whereDate('end_date', '<=', $today->copy()->addDays(5))
+                    ->orWhere('remaining_sessions', '<=', 1);
+            })
+            ->count();
+        $attendedStudentIdsToday = Attendance::whereDate('attended_at', $today)->pluck('student_id');
+        $todoNotAttendedToday = Student::where('status', 'active')
+            ->whereNotIn('id', $attendedStudentIdsToday)
+            ->count();
+        $todoConsecutiveAbsences = $absenceAlerts->count();
+        $todoBirthdaysThisMonth = Student::where('status', 'active')
+            ->whereMonth('dob', Carbon::now()->month)
+            ->count();
+        $todoExpiringFewSessions = Student::where('status', 'active')
+            ->whereBetween('remaining_sessions', [0, 2])
+            ->count();
+        $todoPausedReturning = Student::where('status', 'paused')->count();
+
         return response()->json([
             'stats' => [
                 'activeStudents' => $activeStudentsCount,
@@ -113,6 +134,14 @@ class DashboardApiController extends Controller
                 'absenceCount' => $absenceAlerts->count(),
                 'leadsCount' => $leadsCount,
                 'newLeadsCount' => $newLeadsCount,
+                // Việc cần xử lý hôm nay
+                'todoDebtInvoices' => $todoDebtInvoices,
+                'todoTuitionDue' => $todoTuitionDue,
+                'todoNotAttendedToday' => $todoNotAttendedToday,
+                'todoConsecutiveAbsences' => $todoConsecutiveAbsences,
+                'todoBirthdaysThisMonth' => $todoBirthdaysThisMonth,
+                'todoExpiringFewSessions' => $todoExpiringFewSessions,
+                'todoPausedReturning' => $todoPausedReturning,
             ],
             'expiringStudents' => $expiringStudents,
             'absenceAlerts' => $absenceAlerts,

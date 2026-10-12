@@ -1,12 +1,24 @@
 <?php
 
+use App\Http\Controllers\Api\AbsenceApiController;
+use App\Http\Controllers\Api\AttendanceApiController;
 use App\Http\Controllers\Api\AuthApiController;
+use App\Http\Controllers\Api\BirthdayApiController;
+use App\Http\Controllers\Api\CenterApiController;
 use App\Http\Controllers\Api\CourseApiController;
 use App\Http\Controllers\Api\DashboardApiController;
+use App\Http\Controllers\Api\ExportApiController;
+use App\Http\Controllers\Api\InactiveStudentApiController;
+use App\Http\Controllers\Api\InventoryApiController;
 use App\Http\Controllers\Api\InvoiceApiController;
 use App\Http\Controllers\Api\LeadApiController;
+use App\Http\Controllers\Api\ReportApiController;
 use App\Http\Controllers\Api\RetentionApiController;
+use App\Http\Controllers\Api\RevenueApiController;
+use App\Http\Controllers\Api\SettingsApiController;
+use App\Http\Controllers\Api\StaffApiController;
 use App\Http\Controllers\Api\StudentApiController;
+use App\Http\Controllers\Api\TeacherCheckinApiController;
 use Illuminate\Support\Facades\Route;
 
 // Authentication
@@ -45,9 +57,11 @@ Route::prefix('retention')->group(function () {
 // Leads CRM
 Route::prefix('leads')->group(function () {
     Route::get('/', [LeadApiController::class, 'index']);
+    Route::get('/export', [LeadApiController::class, 'export']);
     Route::post('/', [LeadApiController::class, 'store']);
     Route::post('/{lead}/status', [LeadApiController::class, 'updateStatus']);
     Route::post('/{lead}/convert', [LeadApiController::class, 'convertToStudent']);
+    Route::delete('/{lead}', [LeadApiController::class, 'destroy']);
 });
 
 // Courses
@@ -62,4 +76,93 @@ Route::prefix('courses')->group(function () {
 Route::prefix('invoices')->group(function () {
     Route::get('/', [InvoiceApiController::class, 'index']);
     Route::post('/', [InvoiceApiController::class, 'store']);
+});
+
+// Reports
+Route::get('/reports', [ReportApiController::class, 'index']);
+
+// Data Export
+Route::get('/export/{type}', [ExportApiController::class, 'export']);
+
+// Settings
+Route::prefix('settings')->group(function () {
+    Route::get('/', [SettingsApiController::class, 'index']);
+    Route::put('/profile', [SettingsApiController::class, 'updateProfile']);
+    Route::put('/password', [SettingsApiController::class, 'updatePassword']);
+    Route::put('/brand', [SettingsApiController::class, 'updateBrand']);
+    Route::put('/vat', [SettingsApiController::class, 'updateVat']);
+});
+
+// Staff
+Route::prefix('staff')->group(function () {
+    Route::get('/', [StaffApiController::class, 'index']);
+    Route::post('/invites', [StaffApiController::class, 'createInvite']);
+    Route::put('/members/{id}/role', [StaffApiController::class, 'updateRole']);
+    Route::put('/members/{id}/permissions', [StaffApiController::class, 'updatePermissions']);
+    Route::delete('/members/{id}', [StaffApiController::class, 'destroy']);
+});
+
+// Centers
+Route::prefix('centers')->group(function () {
+    Route::get('/', [CenterApiController::class, 'index']);
+    Route::post('/', [CenterApiController::class, 'store']);
+    Route::put('/{id}', [CenterApiController::class, 'update']);
+    Route::delete('/{id}', [CenterApiController::class, 'destroy']);
+    Route::post('/{id}/rooms', [CenterApiController::class, 'addRoom']);
+    Route::delete('/{centerId}/rooms/{roomId}', [CenterApiController::class, 'deleteRoom']);
+});
+
+// Inactive / Paused Students
+Route::prefix('inactive-students')->group(function () {
+    Route::get('/', [InactiveStudentApiController::class, 'index']);
+    Route::post('/{student}/reactivate', [InactiveStudentApiController::class, 'reactivate']);
+    Route::post('/{student}/pause', [InactiveStudentApiController::class, 'pause']);
+    Route::post('/{student}/drop', [InactiveStudentApiController::class, 'drop']);
+});
+
+// Birthdays
+Route::get('/birthdays', [BirthdayApiController::class, 'index']);
+
+// Inventory / Học cụ
+Route::prefix('inventory')->group(function () {
+    Route::get('/', [InventoryApiController::class, 'index']);
+    Route::post('/', [InventoryApiController::class, 'store']);
+    Route::get('/export', [InventoryApiController::class, 'export']);
+    Route::get('/template', [InventoryApiController::class, 'template']);
+    Route::post('/import', [InventoryApiController::class, 'import']);
+    Route::put('/{id}', [InventoryApiController::class, 'update']);
+    Route::delete('/{id}', [InventoryApiController::class, 'destroy']);
+    Route::post('/{id}/adjust', [InventoryApiController::class, 'adjust']);
+});
+
+// Revenue / Doanh thu
+Route::prefix('revenue')->group(function () {
+    Route::get('/', [RevenueApiController::class, 'index']);
+    Route::post('/', [RevenueApiController::class, 'store']);
+    Route::get('/export', [RevenueApiController::class, 'export']);
+    Route::post('/expenses', [RevenueApiController::class, 'storeExpense']);
+});
+
+// Absences / Vắng liên tiếp
+Route::prefix('absences')->group(function () {
+    Route::get('/', [AbsenceApiController::class, 'index']);
+    Route::post('/{student}/care', [AbsenceApiController::class, 'recordCare']);
+    Route::post('/{student}/reset', [AbsenceApiController::class, 'resetAbsences']);
+    Route::post('/{student}/makeup', [AbsenceApiController::class, 'scheduleMakeup']);
+});
+
+// Teacher Check-in / Điểm danh ca dạy giáo viên
+Route::prefix('teacher-checkin')->group(function () {
+    Route::get('/', [TeacherCheckinApiController::class, 'index']);
+    Route::post('/checkin', [TeacherCheckinApiController::class, 'checkin']);
+    Route::post('/absence', [TeacherCheckinApiController::class, 'recordAbsence']);
+    Route::post('/rates', [TeacherCheckinApiController::class, 'updateRates']);
+    Route::get('/export', [TeacherCheckinApiController::class, 'exportMonthly']);
+});
+
+// Attendance / Điểm danh học viên hàng ngày
+Route::prefix('attendance')->group(function () {
+    Route::get('/', [AttendanceApiController::class, 'index']);
+    Route::post('/single-lesson', [AttendanceApiController::class, 'scheduleSingleLesson']);
+    Route::post('/{student}/mark', [AttendanceApiController::class, 'markAttendance']);
 });

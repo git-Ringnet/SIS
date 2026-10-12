@@ -1,8 +1,10 @@
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { invoiceApi, studentApi } from '../services/api';
 import Badge from '../components/Badge.vue';
 import Modal from '../components/Modal.vue';
+import SearchableSelect from '../components/SearchableSelect.vue';
+import DatePickerVN from '../components/DatePickerVN.vue';
 import { Receipt, Plus, X } from 'lucide-vue-next';
 
 const invoices = ref([]);
@@ -38,6 +40,14 @@ const fetchData = async () => {
     console.error('Error fetching invoices: ', err);
   }
 };
+
+const studentOptions = computed(() => {
+  return students.value.map((s) => ({
+    id: s.id,
+    name: `${s.name} (${s.code || 'HV'})`,
+    sublabel: `PH: ${s.parent_name || 'N/A'} - SĐT: ${s.parent_phone || '—'}`,
+  }));
+});
 
 onMounted(fetchData);
 
@@ -82,12 +92,12 @@ const formatDate = (val) => {
           type="month"
           v-model="currentMonth"
           @change="fetchData"
-          class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-xs focus:ring-1 focus:ring-indigo-500"
+          class="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-700 shadow-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
         />
 
         <button
           @click="showModal = true"
-          class="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-indigo-600/20 hover:bg-indigo-700"
+          class="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-xs shadow-indigo-600/20 hover:bg-indigo-700 active:scale-[0.98] transition-all"
         >
           <Plus class="h-4 w-4" />
           <span>Tạo Phiếu Thu Mới</span>
@@ -96,11 +106,11 @@ const formatDate = (val) => {
     </div>
 
     <!-- Revenue Summary Card -->
-    <div class="rounded-2xl border border-slate-200 bg-gradient-to-r from-indigo-900 to-slate-900 p-6 text-white shadow-md flex items-center justify-between">
+    <div class="rounded-2xl border border-slate-200 bg-gradient-to-r from-indigo-900 via-indigo-950 to-slate-900 p-6 text-white shadow-md flex items-center justify-between">
       <div>
         <span class="text-xs uppercase font-semibold text-indigo-200 tracking-wider">Tổng thực thu trong tháng {{ currentMonth }}</span>
         <h2 class="text-3xl font-black mt-1 text-white">{{ formatVND(monthlyTotal) }}</h2>
-        <p class="text-xs text-indigo-300 mt-1">Tổng cộng {{ invoices.length }} phiếu thu đã hoàn tất.</p>
+        <p class="text-sm text-indigo-300 mt-1">Tổng cộng {{ invoices.length }} phiếu thu đã hoàn tất.</p>
       </div>
       <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10 text-white backdrop-blur-xs">
         <Receipt class="h-7 w-7" />
@@ -109,38 +119,38 @@ const formatDate = (val) => {
 
     <!-- Invoices Table -->
     <div class="rounded-2xl border border-slate-200 bg-white shadow-xs overflow-hidden">
-      <table class="w-full text-left text-xs">
-        <thead class="bg-slate-50 text-slate-500 border-b border-slate-100">
+      <table class="w-full text-left text-sm">
+        <thead class="bg-slate-50 text-slate-500 border-b border-slate-100 text-xs font-bold uppercase tracking-wider">
           <tr>
-            <th class="py-3.5 px-4 font-semibold">Mã phiếu thu</th>
-            <th class="py-3.5 px-4 font-semibold">Học viên / Phụ huynh</th>
-            <th class="py-3.5 px-4 font-semibold">Khóa học</th>
-            <th class="py-3.5 px-4 font-semibold">Số tiền thu</th>
-            <th class="py-3.5 px-4 font-semibold text-center">Cộng số buổi</th>
-            <th class="py-3.5 px-4 font-semibold">Hình thức</th>
-            <th class="py-3.5 px-4 font-semibold">Thời gian thanh toán</th>
-            <th class="py-3.5 px-4 font-semibold">Ghi chú</th>
+            <th class="py-4 px-4 font-semibold">Mã phiếu thu</th>
+            <th class="py-4 px-4 font-semibold">Học viên / Phụ huynh</th>
+            <th class="py-4 px-4 font-semibold">Khóa học</th>
+            <th class="py-4 px-4 font-semibold">Số tiền thu</th>
+            <th class="py-4 px-4 font-semibold text-center">Cộng số buổi</th>
+            <th class="py-4 px-4 font-semibold">Hình thức</th>
+            <th class="py-4 px-4 font-semibold">Thời gian thanh toán</th>
+            <th class="py-4 px-4 font-semibold">Ghi chú</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100 text-slate-700">
           <tr v-for="inv in invoices" :key="inv.id" class="hover:bg-slate-50">
-            <td class="py-3.5 px-4 font-mono font-bold text-slate-900">{{ inv.invoice_code }}</td>
-            <td class="py-3.5 px-4">
+            <td class="py-4 px-4 font-mono font-bold text-slate-900">{{ inv.invoice_code }}</td>
+            <td class="py-4 px-4">
               <span class="font-bold text-slate-900">{{ inv.student?.name }}</span>
-              <span class="block text-slate-400 text-[11px]">PH: {{ inv.student?.parent_name }}</span>
+              <span class="block text-slate-400 text-xs">PH: {{ inv.student?.parent_name }}</span>
             </td>
-            <td class="py-3.5 px-4">{{ inv.course?.name || inv.student?.course?.name }}</td>
-            <td class="py-3.5 px-4 font-extrabold text-emerald-600 text-sm">{{ formatVND(inv.amount) }}</td>
-            <td class="py-3.5 px-4 text-center font-bold text-indigo-600">+{{ inv.sessions_added }} buổi</td>
-            <td class="py-3.5 px-4">
+            <td class="py-4 px-4">{{ inv.course?.name || inv.student?.course?.name }}</td>
+            <td class="py-4 px-4 font-extrabold text-emerald-600 text-base">{{ formatVND(inv.amount) }}</td>
+            <td class="py-4 px-4 text-center font-bold text-indigo-600">+{{ inv.sessions_added }} buổi</td>
+            <td class="py-4 px-4">
               <Badge variant="gray" size="sm">{{ inv.payment_method }}</Badge>
             </td>
-            <td class="py-3.5 px-4 font-mono text-slate-500">{{ formatDate(inv.paid_at) }}</td>
-            <td class="py-3.5 px-4 text-slate-600">{{ inv.note || '—' }}</td>
+            <td class="py-4 px-4 font-mono text-slate-500">{{ formatDate(inv.paid_at) }}</td>
+            <td class="py-4 px-4 text-slate-600">{{ inv.note || '—' }}</td>
           </tr>
 
           <tr v-if="invoices.length === 0">
-            <td colspan="8" class="py-12 text-center text-xs text-slate-400">
+            <td colspan="8" class="py-12 text-center text-sm text-slate-400">
               Không có phiếu thu nào trong tháng này.
             </td>
           </tr>
@@ -158,10 +168,14 @@ const formatDate = (val) => {
 
         <form @submit.prevent="submit" class="mt-4 space-y-4">
           <div>
-            <label class="block text-xs font-semibold text-slate-700">Chọn học viên</label>
-            <select v-model="form.student_id" required class="mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-xs">
-              <option v-for="s in students" :key="s.id" :value="s.id">{{ s.name }} ({{ s.code }}) - PH: {{ s.parent_name }}</option>
-            </select>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Chọn học viên *</label>
+            <SearchableSelect
+              v-model="form.student_id"
+              :options="studentOptions"
+              sublabel-key="sublabel"
+              placeholder="Tìm kiếm và chọn học viên..."
+              required
+            />
           </div>
 
           <div class="grid grid-cols-2 gap-3">
@@ -186,8 +200,12 @@ const formatDate = (val) => {
               </select>
             </div>
             <div>
-              <label class="block text-xs font-semibold text-slate-700">Ngày thu tiền</label>
-              <input type="date" v-model="form.paid_at" required class="mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-xs" />
+              <label class="block text-xs font-semibold text-slate-700 mb-1">Ngày thu tiền</label>
+              <DatePickerVN
+                v-model="form.paid_at"
+                :default-today="true"
+                required
+              />
             </div>
           </div>
 

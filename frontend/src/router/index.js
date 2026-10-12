@@ -6,6 +6,18 @@ import StudentDetailView from '../views/StudentDetailView.vue';
 import LeadsView from '../views/LeadsView.vue';
 import InvoicesView from '../views/InvoicesView.vue';
 import CoursesView from '../views/CoursesView.vue';
+import CentersView from '../views/CentersView.vue';
+import ReportsView from '../views/ReportsView.vue';
+import DataExportView from '../views/DataExportView.vue';
+import SettingsView from '../views/SettingsView.vue';
+import StaffView from '../views/StaffView.vue';
+import InactiveStudentsView from '../views/InactiveStudentsView.vue';
+import BirthdaysView from '../views/BirthdaysView.vue';
+import InventoryView from '../views/InventoryView.vue';
+import RevenueView from '../views/RevenueView.vue';
+import AbsencesView from '../views/AbsencesView.vue';
+import TeacherCheckinView from '../views/TeacherCheckinView.vue';
+import AttendanceView from '../views/AttendanceView.vue';
 import GenericModuleView from '../views/GenericModuleView.vue';
 import LoginView from '../views/LoginView.vue';
 import RegisterView from '../views/RegisterView.vue';
@@ -20,25 +32,25 @@ const routes = [
   { path: '/retention', name: 'retention', component: RetentionView, meta: { title: 'Tái đăng ký & Giữ chân' } },
   { path: '/students', name: 'students', component: StudentsView, meta: { title: 'Học viên & Điểm danh' } },
   { path: '/students/:id', name: 'student-detail', component: StudentDetailView, props: true, meta: { standalone: true, title: 'Hồ sơ học viên' } },
-  { path: '/attendance', name: 'attendance', component: GenericModuleView, meta: { title: 'Điểm danh' } },
-  { path: '/teacher-checkin', name: 'teacher-checkin', component: GenericModuleView, meta: { title: 'Check-in ca dạy' } },
-  { path: '/absences', name: 'absences', component: GenericModuleView, meta: { title: 'Vắng liên tiếp' } },
+  { path: '/attendance', name: 'attendance', component: AttendanceView, meta: { title: 'Điểm danh' } },
+  { path: '/teacher-checkin', name: 'teacher-checkin', component: TeacherCheckinView, meta: { title: 'Check-in ca dạy' } },
+  { path: '/absences', name: 'absences', component: AbsencesView, meta: { title: 'Vắng liên tiếp' } },
 
   // 2. Vận hành
   { path: '/leads', name: 'leads', component: LeadsView, meta: { title: 'Khách hàng tiềm năng' } },
-  { path: '/revenue', name: 'revenue', component: GenericModuleView, meta: { title: 'Doanh thu' } },
+  { path: '/revenue', name: 'revenue', component: RevenueView, meta: { title: 'Doanh thu' } },
   { path: '/invoices', name: 'invoices', component: InvoicesView, meta: { title: 'Hóa đơn & Thu phí' } },
-  { path: '/inventory', name: 'inventory', component: GenericModuleView, meta: { title: 'Học cụ' } },
-  { path: '/birthdays', name: 'birthdays', component: GenericModuleView, meta: { title: 'Sinh nhật' } },
-  { path: '/inactive-students', name: 'inactive-students', component: GenericModuleView, meta: { title: 'Học viên đã nghỉ' } },
+  { path: '/inventory', name: 'inventory', component: InventoryView, meta: { title: 'Học cụ' } },
+  { path: '/birthdays', name: 'birthdays', component: BirthdaysView, meta: { title: 'Sinh nhật' } },
+  { path: '/inactive-students', name: 'inactive-students', component: InactiveStudentsView, meta: { title: 'HV Tạm dừng - Nghỉ' } },
 
   // 3. Cấu hình
   { path: '/courses', name: 'courses', component: CoursesView, meta: { title: 'Khóa học' } },
-  { path: '/centers', name: 'centers', component: GenericModuleView, meta: { title: 'Trung tâm' } },
-  { path: '/staff', name: 'staff', component: GenericModuleView, meta: { title: 'Nhân sự' } },
-  { path: '/settings', name: 'settings', component: GenericModuleView, meta: { title: 'Cài đặt' } },
-  { path: '/data', name: 'data', component: GenericModuleView, meta: { title: 'Dữ liệu' } },
-  { path: '/reports', name: 'reports', component: GenericModuleView, meta: { title: 'Báo cáo' } },
+  { path: '/centers', name: 'centers', component: CentersView, meta: { title: 'Trung tâm' } },
+  { path: '/staff', name: 'staff', component: StaffView, meta: { title: 'Nhân sự' } },
+  { path: '/settings', name: 'settings', component: SettingsView, meta: { title: 'Cài đặt' } },
+  { path: '/data', name: 'data', component: DataExportView, meta: { title: 'Dữ liệu' } },
+  { path: '/reports', name: 'reports', component: ReportsView, meta: { title: 'Báo cáo' } },
 ];
 
 const router = createRouter({

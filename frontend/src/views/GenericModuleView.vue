@@ -151,12 +151,6 @@ const currentConfig = computed(() => {
           >
             Xem danh sách học viên
           </router-link>
-          <router-link
-            to="/retention"
-            class="rounded-xl bg-red-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-red-700 shadow-xs transition-colors"
-          >
-            Quy trình giữ chân
-          </router-link>
         </div>
       </div>
     </div>

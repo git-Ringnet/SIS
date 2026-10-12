@@ -26,6 +26,9 @@ import {
   ChevronDown,
   Copy,
   ExternalLink,
+  QrCode,
+  Check,
+  X,
 } from 'lucide-vue-next';
 
 const route = useRoute();
@@ -41,6 +44,8 @@ const showRenewModal = ref(false);
 const showAbsenceModal = ref(false);
 const showSupplyModal = ref(false);
 const showEditCourseModal = ref(false);
+const showParentPortalModal = ref(false);
+const copiedPortalLink = ref(false);
 
 const absenceWithLeave = ref(true);
 const absenceNote = ref('');
@@ -199,10 +204,24 @@ const copyPlaceholder = () => {
   alert('Đã sao chép tên học viên: ' + student.value?.name);
 };
 
+const parentPortalUrl = computed(() => {
+  return `${window.location.origin}/students/${student.value?.id}`;
+});
+
+const openParentPortalModal = () => {
+  showParentPortalModal.value = true;
+};
+
 const copyParentPortalLink = () => {
-  const url = window.location.href;
-  navigator.clipboard?.writeText(url);
-  alert('Đã sao chép đường link Cổng phụ huynh:\n' + url);
+  navigator.clipboard?.writeText(parentPortalUrl.value);
+  copiedPortalLink.value = true;
+  setTimeout(() => {
+    copiedPortalLink.value = false;
+  }, 2500);
+};
+
+const openParentPortalInNewTab = () => {
+  window.open(parentPortalUrl.value, '_blank');
 };
 </script>
 
@@ -300,7 +319,7 @@ const copyParentPortalLink = () => {
 
           <!-- [ Cổng phụ huynh ] -->
           <button
-            @click="copyParentPortalLink"
+            @click="openParentPortalModal"
             class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3 py-1.5 font-semibold text-slate-700 transition-colors shrink-0 shadow-2xs"
           >
             <Share2 class="h-3.5 w-3.5 text-slate-500" />
@@ -531,5 +550,101 @@ const copyParentPortalLink = () => {
 
     <RetentionNoteModal :show="showNoteModal" :student="student" @close="showNoteModal = false" @saved="fetchData" />
     <RenewModal :show="showRenewModal" :student="student" @close="showRenewModal = false" @renewed="fetchData" />
+
+    <!-- Modal Cổng phụ huynh (Parent Portal) matching SenyApp -->
+    <Modal :show="showParentPortalModal" max-width="lg" @close="showParentPortalModal = false">
+      <div class="p-6">
+        <div class="flex items-center justify-between pb-4 border-b border-slate-100">
+          <div class="flex items-center gap-2.5">
+            <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+              <Share2 class="h-5 w-5" />
+            </div>
+            <div>
+              <h3 class="text-base font-bold text-slate-900">Cổng thông tin phụ huynh</h3>
+              <p class="text-xs text-slate-500">Dành cho phụ huynh học viên {{ student.name }}</p>
+            </div>
+          </div>
+          <button @click="showParentPortalModal = false" class="text-slate-400 hover:text-slate-600 p-1">
+            <X class="h-5 w-5" />
+          </button>
+        </div>
+
+        <div class="mt-5 space-y-5">
+          <!-- QR Code Card -->
+          <div class="flex flex-col items-center justify-center p-6 bg-slate-50/80 rounded-2xl border border-slate-200/80 text-center">
+            <div class="bg-white p-3 rounded-2xl shadow-xs border border-slate-200">
+              <img
+                :src="`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(parentPortalUrl)}`"
+                alt="QR Cổng phụ huynh"
+                class="w-40 h-40 object-contain"
+              />
+            </div>
+            <p class="mt-3 text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+              <QrCode class="h-4 w-4 text-rose-600" />
+              <span>Quét mã QR bằng Zalo hoặc Camera điện thoại</span>
+            </p>
+            <p class="text-[11px] text-slate-500 mt-0.5">
+              Phụ huynh quét mã để xem tiến độ, điểm danh và học phí tức thì
+            </p>
+          </div>
+
+          <!-- Link input & Copy button -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1.5">Đường dẫn Cổng phụ huynh</label>
+            <div class="flex items-center gap-2">
+              <input
+                type="text"
+                readonly
+                :value="parentPortalUrl"
+                class="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 select-all font-mono focus:outline-none"
+              />
+              <button
+                @click="copyParentPortalLink"
+                type="button"
+                class="inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition-all shadow-xs cursor-pointer"
+                :class="copiedPortalLink ? 'bg-emerald-600 text-white' : 'bg-rose-600 hover:bg-rose-700 text-white'"
+              >
+                <Check v-if="copiedPortalLink" class="h-4 w-4" />
+                <Copy v-else class="h-4 w-4" />
+                <span>{{ copiedPortalLink ? 'Đã sao chép!' : 'Sao chép' }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Features overview -->
+          <div class="p-3.5 bg-rose-50/60 rounded-xl border border-rose-100 text-xs space-y-1.5">
+            <div class="font-bold text-rose-900 flex items-center gap-1.5">
+              <CheckCircle2 class="h-4 w-4 text-rose-600" />
+              <span>Phụ huynh có thể xem gì tại cổng này?</span>
+            </div>
+            <ul class="list-disc list-inside space-y-1 text-slate-600 pl-1 text-[11px]">
+              <li>Lịch học & số buổi đã học / còn lại</li>
+              <li>Chi tiết từng buổi điểm danh (có mặt, vắng phép)</li>
+              <li>Nhận xét của giáo viên sau buổi học</li>
+              <li>Thông tin học phí và biên nhận hóa đơn</li>
+            </ul>
+          </div>
+
+          <!-- Footer Actions -->
+          <div class="flex items-center justify-end gap-2 border-t border-slate-100 pt-4">
+            <button
+              type="button"
+              @click="showParentPortalModal = false"
+              class="rounded-xl border border-slate-200 px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 cursor-pointer"
+            >
+              Đóng
+            </button>
+            <button
+              type="button"
+              @click="openParentPortalInNewTab"
+              class="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 text-xs font-bold transition-all cursor-pointer"
+            >
+              <ExternalLink class="h-3.5 w-3.5" />
+              <span>Mở cổng phụ huynh</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Modal>
   </div>
 </template>
