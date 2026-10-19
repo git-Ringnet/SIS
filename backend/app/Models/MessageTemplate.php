@@ -2,12 +2,20 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\LogsActivity;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class MessageTemplate extends Model
 {
-    use HasFactory;
+    use HasFactory, LogsActivity;
+
+    public const ACTIVITY_SUBJECT = 'message_template';
+
+    public function activityLabel(): ?string
+    {
+        return $this->title ?? $this->name ?? null;
+    }
 
     protected $guarded = [];
 

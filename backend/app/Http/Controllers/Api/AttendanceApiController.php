@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Attendance;
 use App\Models\Student;
+use App\Support\CenterStore;
+use App\Support\ShiftTime;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -37,7 +39,7 @@ class AttendanceApiController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $dateStr = $request->input('date', '2026-10-11');
+        $dateStr = $request->input('date', Carbon::today()->toDateString());
         $center = $request->input('center', 'all');
         $classFilter = $request->input('class', 'all');
         $roomFilter = $request->input('room', 'all');
@@ -71,35 +73,28 @@ class AttendanceApiController extends Controller
 
         // Lấy tất cả học viên có thể học trong ngày này (học bù, học lẻ, hoặc theo lịch)
         $singleLessons = $this->loadSingleLessons();
-        $singleStudentIds = array_map(fn ($l) => $l['student_id'], array_filter($singleLessons, fn ($l) => $l['date'] === $dateStr));
+        // Buổi học lẻ trong ngày, theo student_id (dùng phòng / giáo viên / giờ thật của buổi đó)
+        $todayLessons = collect($singleLessons)->where('date', $dateStr)->keyBy('student_id');
+        $singleStudentIds = $todayLessons->keys()->all();
 
-        // Học viên active có lịch khớp thứ này (hoặc có buổi học lẻ hôm nay)
-        $query = Student::with('course')->where(function ($q) use ($singleStudentIds, $dayOfWeekVi) {
-            $q->whereIn('id', $singleStudentIds);
+        // Từ khoá lịch kiểu cũ (schedule_info dạng chữ) để tương thích dữ liệu chưa nhập lịch theo thứ
+        $legacyKeywords = match ($carbonDate->dayOfWeek) {
+            0 => ['CN', 'Chủ nhật'],
+            default => ['T'.($carbonDate->dayOfWeek + 1), 'Thứ '.($carbonDate->dayOfWeek + 1)],
+        };
 
-            // Hoặc học viên có lịch khớp ngày hôm nay
-            if ($dayOfWeekVi === 'CN') {
-                $q->orWhere('schedule_info', 'like', '%CN%')
-                    ->orWhere('schedule_info', 'like', '%Chủ nhật%');
-            } elseif ($dayOfWeekVi === 'Thứ 2') {
-                $q->orWhere('schedule_info', 'like', '%T2%')
-                    ->orWhere('schedule_info', 'like', '%Thứ 2%');
-            } elseif ($dayOfWeekVi === 'Thứ 3') {
-                $q->orWhere('schedule_info', 'like', '%T3%')
-                    ->orWhere('schedule_info', 'like', '%Thứ 3%');
-            } elseif ($dayOfWeekVi === 'Thứ 4') {
-                $q->orWhere('schedule_info', 'like', '%T4%')
-                    ->orWhere('schedule_info', 'like', '%Thứ 4%');
-            } elseif ($dayOfWeekVi === 'Thứ 5') {
-                $q->orWhere('schedule_info', 'like', '%T5%')
-                    ->orWhere('schedule_info', 'like', '%Thứ 5%');
-            } elseif ($dayOfWeekVi === 'Thứ 6') {
-                $q->orWhere('schedule_info', 'like', '%T6%')
-                    ->orWhere('schedule_info', 'like', '%Thứ 6%');
-            } elseif ($dayOfWeekVi === 'Thứ 7') {
-                $q->orWhere('schedule_info', 'like', '%T7%')
-                    ->orWhere('schedule_info', 'like', '%Thứ 7%');
-            }
+        // Học viên có buổi học lẻ hôm nay, hoặc đang học / tạm dừng và có lịch cố định vào thứ này
+        $query = Student::with('course')->where(function ($q) use ($singleStudentIds, $carbonDate, $legacyKeywords) {
+            $q->whereIn('id', $singleStudentIds)
+                ->orWhere(function ($scheduled) use ($carbonDate, $legacyKeywords) {
+                    $scheduled->whereIn('status', ['active', 'paused'])
+                        ->where(function ($days) use ($carbonDate, $legacyKeywords) {
+                            $days->whereJsonContains('class_days', $carbonDate->dayOfWeek);
+                            foreach ($legacyKeywords as $keyword) {
+                                $days->orWhere(fn ($legacy) => $legacy->whereNull('class_days')->where('schedule_info', 'like', "%{$keyword}%"));
+                            }
+                        });
+                });
         });
 
         if ($center !== 'all' && ! empty($center)) {
@@ -116,8 +111,9 @@ class AttendanceApiController extends Controller
 
         $students = $query->get();
 
-        $studentsFormatted = $students->map(function ($st) use ($dayAttendances) {
+        $studentsFormatted = $students->map(function ($st) use ($dayAttendances, $todayLessons) {
             $att = $dayAttendances->get($st->id);
+            $lesson = $todayLessons->get($st->id);
             $status = 'not_checked';
             $checkinNote = '';
 
@@ -152,10 +148,15 @@ class AttendanceApiController extends Controller
                     'name' => $st->course->name,
                     'color' => $st->course->color,
                 ] : null,
-                'center' => $st->center ?: 'Khoa Anh Music Hóc Môn',
-                'room' => $st->course && str_contains($st->course->name, 'Piano') ? 'PIANO 01' : 'GUITAR 01',
-                'teacher' => 'Thầy Trương Bảo Đi',
-                'shift_time' => '17:30 - 18:30',
+                'center' => $st->center ?: CenterStore::defaultName(),
+                'assigned_class' => $st->assigned_class,
+                // Buổi học lẻ dùng phòng / giáo viên / giờ của buổi đó, còn lại theo lịch cố định của học viên
+                'room' => $lesson['room'] ?? $st->room,
+                'teacher' => $lesson['teacher'] ?? $st->teacher,
+                'shift_time' => $lesson['time'] ?? ($st->class_start_time
+                    ? $st->class_start_time.($st->class_end_time ? ' - '.$st->class_end_time : '')
+                    : null),
+                'is_single_lesson' => $lesson !== null,
                 'total_sessions' => (int) $st->total_sessions,
                 'remaining_sessions' => (int) $st->remaining_sessions,
                 'current_session' => $currentSessionNumber,
@@ -164,6 +165,18 @@ class AttendanceApiController extends Controller
                 'checkin_note' => $checkinNote,
             ];
         });
+
+        // Danh sách lựa chọn cho bộ lọc lấy từ dữ liệu thật (trước khi lọc) gộp với danh sách mặc định
+        $classOptions = $studentsFormatted->pluck('assigned_class')->filter()->unique()->sort()->values()->all();
+        $roomOptions = $studentsFormatted->pluck('room')->filter()->unique()->all();
+        $teacherOptions = $studentsFormatted->pluck('teacher')->filter()->unique()->all();
+
+        $studentsFormatted = $studentsFormatted
+            ->when($classFilter !== 'all', fn ($c) => $c->where('assigned_class', $classFilter))
+            ->when($roomFilter !== 'all', fn ($c) => $c->where('room', $roomFilter))
+            ->when($teacherFilter !== 'all', fn ($c) => $c->where('teacher', $teacherFilter))
+            ->when($shiftFilter !== 'all', fn ($c) => $c->filter(fn ($st) => ShiftTime::of($st['shift_time']) === $shiftFilter))
+            ->values();
 
         // 5 Thống kê Metric Pills (Khớp 100% hình tham khảo)
         $totalToday = $studentsFormatted->count();
@@ -180,41 +193,30 @@ class AttendanceApiController extends Controller
             'not_checked' => $notCheckedCount,
         ];
 
-        $centers = [
-            'Khoa Anh Music Hóc Môn',
-            'Khoa Anh Music Quận 12',
-            'Khoa Anh Music Gò Vấp',
-        ];
+        $centers = CenterStore::names();
 
-        $classes = [
-            'Lớp Piano Căn Bản',
-            'Lớp Guitar Đệm Hát',
-            'Lớp Thanh Nhạc',
-            'Lớp Trống Jazz',
-        ];
+        $classes = $classOptions;
 
-        $rooms = [
-            'PIANO 01',
-            'PIANO 02',
-            'GUITAR 01',
-            'VOCAL 01',
-            'DRUM 01',
-            'GROUP',
-        ];
+        // Phòng học theo màn Trung tâm (+ phòng đang có lịch trong ngày), giáo viên có lịch dạy trong ngày
+        $rooms = array_values(array_unique([...CenterStore::roomNames($center), ...$roomOptions]));
+        $teachers = array_values($teacherOptions);
 
-        $teachers = [
-            'Thầy Trương Bảo Đi',
-            'Thầy Minh',
-            'Cô Mai',
-            'Thầy Đức',
-        ];
+        // Phân trang sau khi đã tính metrics trên toàn bộ học viên trong ngày
+        $pagination = null;
+        $pageStudents = $studentsFormatted->values()->all();
+        if ($this->wantsPagination($request)) {
+            $paginator = $this->paginateArray($pageStudents, $request);
+            $pageStudents = $paginator->items();
+            $pagination = $this->paginationMeta($paginator);
+        }
 
         return response()->json([
             'date' => $dateStr,
             'day_of_week' => $dayOfWeekVi,
             'day_of_week_en' => $dayOfWeekEn,
             'metrics' => $metrics,
-            'students' => $studentsFormatted->values(),
+            'students' => $pageStudents,
+            'pagination' => $pagination,
             'centers' => $centers,
             'classes' => $classes,
             'rooms' => $rooms,
@@ -244,7 +246,7 @@ class AttendanceApiController extends Controller
             if ($existing) {
                 if ($existing->status === 'present') {
                     $student->increment('remaining_sessions');
-                } elseif (in_array($existing->status, ['absent_with_leave', 'absent_without_leave'])) {
+                } elseif (in_array($existing->status, ['absent_with_leave', 'absent_without_leave']) && $student->consecutive_absences > 0) {
                     $student->decrement('consecutive_absences');
                 }
                 $existing->delete();
@@ -263,6 +265,9 @@ class AttendanceApiController extends Controller
                 $student->increment('remaining_sessions');
                 $student->increment('consecutive_absences');
             } elseif ($existing->status !== 'present' && $newStatus === 'present') {
+                if ($student->remaining_sessions <= 0) {
+                    return response()->json(['message' => 'Học viên đã hết buổi học!'], 422);
+                }
                 $student->decrement('remaining_sessions');
                 $student->consecutive_absences = 0;
             }
@@ -319,7 +324,7 @@ class AttendanceApiController extends Controller
             'student_id' => (int) $validated['student_id'],
             'date' => $validated['date'],
             'room' => $validated['room'] ?? 'PIANO 01',
-            'teacher' => $validated['teacher'] ?? 'Thầy Trương Bảo Đi',
+            'teacher' => $validated['teacher'] ?? null,
             'time' => $validated['time'] ?? '18:00 - 19:00',
             'note' => $validated['note'] ?? 'Buổi học lẻ / học bù',
             'created_at' => Carbon::now()->toDateTimeString(),

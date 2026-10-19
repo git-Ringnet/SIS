@@ -1,9 +1,12 @@
 <script setup>
+import { confirmDialog } from '../services/useConfirm';
+import { notify } from '../services/notify';
 import { ref, onMounted } from 'vue';
 import { courseApi } from '../services/api';
 import Badge from '../components/Badge.vue';
 import Modal from '../components/Modal.vue';
 import { Plus, Users, Edit3, Trash2, X } from 'lucide-vue-next';
+import MoneyInput from '../components/MoneyInput.vue';
 
 const courses = ref([]);
 const showModal = ref(false);
@@ -67,19 +70,23 @@ const submit = async () => {
     showModal.value = false;
     fetchData();
   } catch (err) {
-    alert(err.response?.data?.message || 'Có lỗi xảy ra');
+    notify.apiError(err, 'Có lỗi xảy ra');
   } finally {
     isSubmitting.value = false;
   }
 };
 
 const deleteCourse = async (c) => {
-  if (confirm(`Bạn có chắc muốn xóa khóa học ${c.name}?`)) {
+  if (await confirmDialog({
+    title: 'Xoá khoá học?',
+    message: `Khoá học "${c.name}" sẽ bị xoá khỏi danh sách.`,
+    confirmText: 'Xoá khoá học',
+  })) {
     try {
       await courseApi.delete(c.id);
       fetchData();
     } catch (err) {
-      alert(err.response?.data?.error || err.response?.data?.message || 'Không thể xóa');
+      notify.apiError(err, 'Không thể xóa');
     }
   }
 };
@@ -185,7 +192,7 @@ const formatVND = (val) => {
             </div>
             <div>
               <label class="block text-xs font-semibold text-slate-700">Học phí (VNĐ)</label>
-              <input type="number" min="0" step="50000" v-model.number="form.price" required class="mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-emerald-700" />
+              <MoneyInput v-model="form.price" required class="mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-emerald-700" />
             </div>
           </div>
 

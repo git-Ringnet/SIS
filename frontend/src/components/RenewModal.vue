@@ -1,8 +1,10 @@
 <script setup>
+import { notify } from '../services/notify';
 import { ref, watch } from 'vue';
 import { retentionApi } from '../services/api';
 import Modal from './Modal.vue';
 import { CheckCircle2, DollarSign, PlusCircle, X } from 'lucide-vue-next';
+import MoneyInput from './MoneyInput.vue';
 
 const props = defineProps({
   show: {
@@ -29,7 +31,7 @@ watch(
     if (s) {
       renewSessions.value = s.course ? s.course.default_sessions : 12;
       renewAmount.value = s.course ? Number(s.course.price) : 3600000;
-      note.value = `Gia hạn khóa học ${s.course?.name || ''} cho học viên ${s.name}`;
+      note.value = `Thu học phí khóa học ${s.course?.name || ''} cho học viên ${s.name}`;
     }
   },
   { immediate: true }
@@ -50,7 +52,7 @@ const submit = async () => {
     emit('renewed', res.data.student);
     emit('close');
   } catch (err) {
-    alert(err.response?.data?.message || 'Có lỗi xảy ra khi gia hạn');
+    notify.apiError(err, 'Có lỗi xảy ra khi thu học phí');
   } finally {
     isSubmitting.value = false;
   }
@@ -67,7 +69,7 @@ const submit = async () => {
           </div>
           <div>
             <h3 class="text-base font-bold text-slate-900">
-              Xác Nhận Đã Đóng Phí & Tái Ký Khóa Học
+              Thu Học Phí & Cấp Buổi Học
             </h3>
             <p v-if="student" class="text-xs text-slate-500">
               Học viên: <span class="font-semibold text-slate-800">{{ student.name }}</span> (Hiện còn {{ student.remaining_sessions }} buổi)
@@ -105,11 +107,8 @@ const submit = async () => {
           </div>
           <div>
             <label class="block text-xs font-semibold text-slate-700">Số tiền thu (VNĐ)</label>
-            <input
-              type="number"
-              min="0"
-              step="50000"
-              v-model.number="renewAmount"
+            <MoneyInput
+              v-model="renewAmount"
               required
               class="mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-emerald-700 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
             />

@@ -36,15 +36,18 @@ export function useAuth() {
   };
 
   const logout = async () => {
-    try {
-      if (token.value) {
-        await authApi.logout();
+    const currentToken = token.value;
+    // 1. Immediately clear authentication and redirect to login (instant 0ms response)
+    clearAuth();
+    router.push('/login');
+
+    // 2. Notify backend in background to revoke token without blocking user
+    if (currentToken) {
+      try {
+        await authApi.logout(currentToken);
+      } catch (err) {
+        console.warn('Background logout notice: ', err);
       }
-    } catch (err) {
-      console.warn('Logout API error: ', err);
-    } finally {
-      clearAuth();
-      router.push('/login');
     }
   };
 

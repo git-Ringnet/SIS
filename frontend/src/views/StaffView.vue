@@ -1,31 +1,38 @@
 <script setup>
-import { ref, onMounted } from 'vue';
+import { notify } from '../services/notify';
+import { confirmDialog } from '../services/useConfirm';
+import { ref, computed, onMounted } from 'vue';
+import { useAuth } from '../services/useAuth';
 import { staffApi } from '../services/api';
 import {
-  Camera,
   Shield,
   Building2,
   Trash2,
-  CheckCircle2,
-  AlertCircle,
   Copy,
   X,
   UserCheck,
   Lock,
+  KeyRound,
 } from 'lucide-vue-next';
 
 const loading = ref(true);
-const toastMessage = ref('');
-const toastType = ref('success');
 
-const invites = ref([]);
 const members = ref([]);
 const centers = ref([]);
 const roles = ref(['Giáo viên', 'Quản lý / Lễ tân', 'Tư vấn viên']);
+const ownerRole = ref('Chủ trung tâm');
+const { user } = useAuth();
+const isOwner = computed(() => !!user.value?.is_owner);
+// Chỉ chủ trung tâm mới thấy (và gán được) vai trò có toàn quyền như chủ trung tâm
+const roleOptions = computed(() => (isOwner.value ? [...roles.value, ownerRole.value] : roles.value));
+// Chủ trung tâm gốc và chính mình không đổi vai trò / xoá được (tránh tự khoá quyền)
+const canEditMember = (m) => isOwner.value && !m.is_protected;
 
-// Form invite
+// Form invite / tạo tài khoản
 const newInvite = ref({
+  name: '',
   email: '',
+  password: 'password',
   role: 'Giáo viên',
   center: 'Tất cả trung tâm',
 });
@@ -48,20 +55,22 @@ const allPages = [
 ];
 
 const showToast = (msg, type = 'success') => {
-  toastMessage.value = msg;
-  toastType.value = type;
-  setTimeout(() => {
-    toastMessage.value = '';
-  }, 4000);
+  if (type === 'success') {
+    notify.success(msg);
+  } else if (msg.startsWith('Vui lòng')) {
+    notify.warning(msg);
+  } else {
+    notify.error(msg);
+  }
 };
 
 const fetchData = async () => {
   try {
     loading.value = true;
     const res = await staffApi.getStaff();
-    invites.value = res.data.invites || [];
     members.value = res.data.members || [];
     centers.value = res.data.centers || [];
+    if (res.data.owner_role) ownerRole.value = res.data.owner_role;
   } catch (err) {
     console.error('Error fetching staff data:', err);
   } finally {
@@ -71,7 +80,7 @@ const fetchData = async () => {
 
 onMounted(fetchData);
 
-// 1. Tạo lời mời
+// 1. Tạo tài khoản & Mời nhân sự
 const handleCreateInvite = async () => {
   if (!newInvite.value.email.trim()) {
     showToast('Vui lòng nhập email nhân sự', 'error');
@@ -81,32 +90,77 @@ const handleCreateInvite = async () => {
   try {
     creatingInvite.value = true;
     const res = await staffApi.createInvite(newInvite.value);
-    const link = res.data.invite_link || window.location.origin;
 
-    // Copy to clipboard
-    try {
-      await navigator.clipboard.writeText(link);
-    } catch {
-      // Fallback
-    }
-
+    const createdMsg = res.data.message || 'Đã tạo tài khoản nhân sự thành công!';
+    newInvite.value.name = '';
     newInvite.value.email = '';
-    showToast('Đã tạo lời mời! Link mời đã được tự động copy vào bộ nhớ tạm.');
+    newInvite.value.password = 'password';
+    showToast(createdMsg);
     fetchData();
   } catch (err) {
-    showToast(err.response?.data?.message || 'Có lỗi xảy ra khi tạo lời mời', 'error');
+    showToast(err.response?.data?.message || 'Có lỗi xảy ra khi tạo tài khoản nhân sự', 'error');
   } finally {
     creatingInvite.value = false;
   }
 };
 
 // 2. Đổi vai trò
+// Đặt lại mật khẩu khi nhân sự quên
+const resetTarget = ref(null);
+const resetPasswordValue = ref('');
+const resettingPassword = ref(false);
+
+const openResetPassword = (member) => {
+  resetTarget.value = member;
+  resetPasswordValue.value = '';
+};
+
+const handleResetPassword = async () => {
+  if (resetPasswordValue.value.length < 6) {
+    showToast('Mật khẩu phải có ít nhất 6 ký tự', 'error');
+    return;
+  }
+  try {
+    resettingPassword.value = true;
+    const res = await staffApi.resetPassword(resetTarget.value.id, { password: resetPasswordValue.value });
+    showToast(res.data.message || 'Đã đặt lại mật khẩu!');
+    resetTarget.value = null;
+  } catch (err) {
+    showToast(err.response?.data?.message || 'Có lỗi xảy ra khi đặt lại mật khẩu', 'error');
+  } finally {
+    resettingPassword.value = false;
+  }
+};
+
+// Đổi cơ sở làm việc
+const handleCenterChange = async (member, newCenter) => {
+  try {
+    await staffApi.updateCenter(member.id, { center: newCenter });
+    showToast(`Đã chuyển ${member.name || member.email} sang ${newCenter}`);
+  } catch (err) {
+    showToast(err.response?.data?.message || 'Có lỗi xảy ra khi đổi cơ sở', 'error');
+  } finally {
+    fetchData();
+  }
+};
+
 const handleRoleChange = async (member, newRole) => {
+  if (newRole === ownerRole.value && !(await confirmDialog({
+    title: 'Cấp quyền chủ trung tâm?',
+    message: `${member.name || member.email} sẽ có toàn quyền như chủ trung tâm: xem doanh thu, phân quyền nhân sự, sao lưu / khôi phục dữ liệu.`,
+    confirmText: 'Cấp toàn quyền',
+  }))) {
+    fetchData(); // trả dropdown về vai trò cũ
+    return;
+  }
   try {
     await staffApi.updateRole(member.id, { role: newRole });
     showToast(`Đã đổi vai trò của ${member.name || member.email} thành ${newRole}`);
   } catch (err) {
-    showToast('Có lỗi xảy ra khi đổi vai trò', 'error');
+    showToast(err.response?.data?.message || 'Có lỗi xảy ra khi đổi vai trò', 'error');
+  } finally {
+    // Đổi vai trò kéo theo đổi quyền mặc định, tải lại để cập nhật cột Quyền
+    fetchData();
   }
 };
 
@@ -136,19 +190,23 @@ const handleSavePermissions = async () => {
     showPermissionModal.value = false;
     fetchData();
   } catch (err) {
-    showToast('Có lỗi xảy ra khi lưu phân quyền', 'error');
+    showToast(err.response?.data?.message || 'Có lỗi xảy ra khi lưu phân quyền', 'error');
   }
 };
 
 // 4. Xóa thành viên
 const handleDeleteMember = async (member) => {
-  if (!confirm(`Bạn có chắc muốn xóa nhân sự ${member.name || member.email} khỏi trung tâm?`)) return;
+  if (!(await confirmDialog({
+    title: 'Xoá nhân sự khỏi trung tâm?',
+    message: `${member.name || member.email} sẽ không còn quyền truy cập trung tâm.`,
+    confirmText: 'Xoá nhân sự',
+  }))) return;
   try {
     await staffApi.deleteMember(member.id);
     showToast('Đã xóa thành viên thành công!');
     fetchData();
   } catch (err) {
-    showToast('Có lỗi xảy ra khi xóa thành viên', 'error');
+    showToast(err.response?.data?.message || 'Có lỗi xảy ra khi xóa thành viên', 'error');
   }
 };
 </script>
@@ -160,35 +218,45 @@ const handleDeleteMember = async (member) => {
       <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Nhân sự</h1>
     </div>
 
-    <!-- Toast Notification -->
-    <div
-      v-if="toastMessage"
-      :class="[
-        toastType === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800',
-        'rounded-xl border p-3.5 flex items-center gap-2.5 text-xs sm:text-sm font-medium shadow-xs transition-all'
-      ]"
-    >
-      <CheckCircle2 v-if="toastType === 'success'" class="h-4.5 w-4.5 text-emerald-600 shrink-0" />
-      <AlertCircle v-else class="h-4.5 w-4.5 text-rose-600 shrink-0" />
-      <span>{{ toastMessage }}</span>
-    </div>
 
-    <!-- 1. MỜI NHÂN SỰ -->
+    <!-- 1. TẠO TÀI KHOẢN & MỜI NHÂN SỰ -->
     <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
       <div>
-        <h2 class="text-sm sm:text-base font-bold text-slate-900">Mời nhân sự</h2>
-        <p class="text-xs text-slate-500 mt-0.5">Gửi link mời để thành viên tham gia thương hiệu.</p>
+        <h2 class="text-sm sm:text-base font-bold text-slate-900">Tạo tài khoản & Phân quyền nhân sự</h2>
+        <p class="text-xs text-slate-500 mt-0.5">Tạo tài khoản cho giáo viên, quản lý, lễ tân đăng nhập vào hệ thống và phân quyền truy cập theo vai trò.</p>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <!-- Họ tên -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1.5">Họ và tên</label>
+          <input
+            v-model="newInvite.name"
+            type="text"
+            placeholder="Cô Mai Hương"
+            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
+          />
+        </div>
+
         <!-- Email -->
         <div>
-          <label class="block text-xs font-semibold text-slate-700 mb-1.5">Email</label>
+          <label class="block text-xs font-semibold text-slate-700 mb-1.5">Email đăng nhập</label>
           <input
             v-model="newInvite.email"
             type="email"
-            placeholder="email@vidu.com"
+            placeholder="giaovien@khoaanhmusic.com"
             class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
+          />
+        </div>
+
+        <!-- Mật khẩu khởi tạo -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1.5">Mật khẩu ban đầu</label>
+          <input
+            v-model="newInvite.password"
+            type="text"
+            placeholder="123456"
+            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 font-mono"
           />
         </div>
 
@@ -199,13 +267,13 @@ const handleDeleteMember = async (member) => {
             v-model="newInvite.role"
             class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
           >
-            <option v-for="r in roles" :key="r" :value="r">{{ r }}</option>
+            <option v-for="r in roleOptions" :key="r" :value="r">{{ r }}</option>
           </select>
         </div>
 
         <!-- Trung tâm -->
         <div>
-          <label class="block text-xs font-semibold text-slate-700 mb-1.5">Trung tâm</label>
+          <label class="block text-xs font-semibold text-slate-700 mb-1.5">Cơ sở làm việc</label>
           <select
             v-model="newInvite.center"
             class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
@@ -215,65 +283,22 @@ const handleDeleteMember = async (member) => {
         </div>
       </div>
 
-      <div class="space-y-1.5 pt-1">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
         <button
           type="button"
           :disabled="creatingInvite"
           @click="handleCreateInvite"
-          class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 px-4 py-2 text-xs sm:text-sm font-bold text-white shadow-xs transition-all active:scale-[0.98]"
+          class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 px-5 py-2.5 text-xs sm:text-sm font-bold text-white shadow-xs transition-all active:scale-[0.98] inline-flex items-center gap-2 justify-center"
         >
-          {{ creatingInvite ? 'Đang tạo...' : 'Tạo lời mời' }}
+          <span>{{ creatingInvite ? 'Đang tạo...' : '+ Tạo tài khoản & Cấp quyền' }}</span>
         </button>
         <p class="text-[11px] sm:text-xs text-slate-400">
-          Link mời sẽ được copy vào clipboard. Gửi cho người được mời qua bất cứ kênh nào.
+          * Tài khoản sẽ được kích hoạt ngay. Nhân sự có thể dùng Email và Mật khẩu vừa cấp để đăng nhập vào hệ thống.
         </p>
       </div>
     </div>
 
-    <!-- 2. LỜI MỜI ĐANG CHỜ -->
-    <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
-      <div>
-        <h2 class="text-sm sm:text-base font-bold text-slate-900">Lời mời đang chờ</h2>
-      </div>
-
-      <div class="overflow-x-auto">
-        <table class="w-full text-left border-collapse text-xs sm:text-sm">
-          <thead>
-            <tr class="border-b border-slate-100 text-[11px] sm:text-xs font-semibold text-slate-500 pb-2">
-              <th class="py-2.5 px-3">Email</th>
-              <th class="py-2.5 px-3">Vai trò</th>
-              <th class="py-2.5 px-3">Trung tâm</th>
-              <th class="py-2.5 px-3 text-right">Trạng thái</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            <tr v-for="inv in invites" :key="inv.id" class="hover:bg-slate-50/60 transition-colors">
-              <td class="py-3 px-3 text-slate-800 font-medium">{{ inv.email }}</td>
-              <td class="py-3 px-3 text-slate-600">{{ inv.role }}</td>
-              <td class="py-3 px-3 text-slate-600">{{ inv.center }}</td>
-              <td class="py-3 px-3 text-right">
-                <span
-                  :class="[
-                    inv.status === 'accepted' ? 'bg-blue-600 text-white' : 'bg-amber-100 text-amber-800',
-                    'inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold'
-                  ]"
-                >
-                  {{ inv.status === 'accepted' ? 'Đã tham gia' : 'Đang chờ' }}
-                </span>
-              </td>
-            </tr>
-
-            <tr v-if="invites.length === 0">
-              <td colspan="4" class="py-6 text-center text-xs text-slate-400">
-                Hiện không có lời mời nào đang chờ.
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- 3. THÀNH VIÊN -->
+    <!-- 2. THÀNH VIÊN -->
     <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
       <div>
         <h2 class="text-sm sm:text-base font-bold text-slate-900">Thành viên</h2>
@@ -283,7 +308,6 @@ const handleDeleteMember = async (member) => {
         <table class="w-full text-left border-collapse text-xs sm:text-sm">
           <thead>
             <tr class="border-b border-slate-100 text-[11px] sm:text-xs font-semibold text-slate-500">
-              <th class="py-2.5 px-3 w-12 text-center">Ảnh</th>
               <th class="py-2.5 px-3">Email</th>
               <th class="py-2.5 px-3">Vai trò</th>
               <th class="py-2.5 px-3">Quyền</th>
@@ -294,30 +318,24 @@ const handleDeleteMember = async (member) => {
           </thead>
           <tbody class="divide-y divide-slate-100">
             <tr v-for="m in members" :key="m.id" class="hover:bg-slate-50/60 transition-colors">
-              <!-- Ảnh -->
-              <td class="py-3.5 px-3 text-center">
-                <div class="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-400 mx-auto">
-                  <Camera class="h-4 w-4" />
-                </div>
-              </td>
-
               <!-- Email -->
-              <td class="py-3.5 px-3 font-medium text-slate-900">
-                {{ m.email }}
+              <td class="py-3.5 px-3">
+                <div class="font-medium text-slate-900">{{ m.email }}</div>
+                <div v-if="m.name" class="text-xs text-slate-400">{{ m.name }}</div>
               </td>
 
               <!-- Vai trò -->
               <td class="py-3.5 px-3">
-                <span v-if="m.is_owner" class="text-slate-800 font-semibold">
-                  Chủ trung tâm
+                <span v-if="!canEditMember(m)" class="text-slate-800 font-semibold">
+                  {{ m.is_owner ? ownerRole : m.role }}
                 </span>
                 <select
                   v-else
-                  :value="m.role"
+                  :value="m.is_owner ? ownerRole : m.role"
                   @change="handleRoleChange(m, $event.target.value)"
                   class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-800 focus:border-rose-500 focus:outline-none"
                 >
-                  <option v-for="r in roles" :key="r" :value="r">{{ r }}</option>
+                  <option v-for="r in roleOptions" :key="r" :value="r">{{ r }}</option>
                 </select>
               </td>
 
@@ -339,7 +357,15 @@ const handleDeleteMember = async (member) => {
 
               <!-- Trung tâm -->
               <td class="py-3.5 px-3 text-slate-600">
-                <div class="flex items-center gap-1.5">
+                <select
+                  v-if="isOwner && !m.is_owner"
+                  :value="m.center === 'Tất cả' ? 'Tất cả trung tâm' : m.center"
+                  @change="handleCenterChange(m, $event.target.value)"
+                  class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-800 focus:border-rose-500 focus:outline-none"
+                >
+                  <option v-for="c in centers" :key="c" :value="c">{{ c }}</option>
+                </select>
+                <div v-else class="flex items-center gap-1.5">
                   <Building2 v-if="!m.is_owner" class="h-3.5 w-3.5 text-slate-400 shrink-0" />
                   <span>{{ m.center }}</span>
                 </div>
@@ -350,10 +376,19 @@ const handleDeleteMember = async (member) => {
                 {{ m.joined_at }}
               </td>
 
-              <!-- Xóa -->
-              <td class="py-3.5 px-3 text-right">
+              <!-- Đặt lại mật khẩu / Xóa -->
+              <td class="py-3.5 px-3 text-right whitespace-nowrap">
                 <button
-                  v-if="!m.is_owner"
+                  v-if="canEditMember(m)"
+                  type="button"
+                  @click="openResetPassword(m)"
+                  class="p-1 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
+                  title="Đặt lại mật khẩu"
+                >
+                  <KeyRound class="h-4 w-4" />
+                </button>
+                <button
+                  v-if="canEditMember(m)"
                   type="button"
                   @click="handleDeleteMember(m)"
                   class="p-1 rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors"
@@ -366,6 +401,64 @@ const handleDeleteMember = async (member) => {
           </tbody>
         </table>
       </div>
+    </div>
+
+    <!-- MODAL ĐẶT LẠI MẬT KHẨU -->
+    <div
+      v-if="resetTarget"
+      class="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
+    >
+      <form
+        @submit.prevent="handleResetPassword"
+        class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200"
+      >
+        <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/80">
+          <div class="flex items-center gap-2 text-slate-900 font-bold text-sm">
+            <KeyRound class="h-4.5 w-4.5 text-amber-600" />
+            <span>Đặt lại mật khẩu</span>
+          </div>
+          <button
+            type="button"
+            @click="resetTarget = null"
+            class="rounded-xl p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+          >
+            <X class="h-5 w-5" />
+          </button>
+        </div>
+
+        <div class="p-6 space-y-3">
+          <p class="text-xs text-slate-500">
+            Đặt mật khẩu mới cho <strong class="text-slate-800">{{ resetTarget.email }}</strong>.
+            Nhân sự sẽ bị đăng xuất khỏi mọi thiết bị và đăng nhập lại bằng mật khẩu này.
+          </p>
+          <input
+            v-model="resetPasswordValue"
+            type="text"
+            minlength="6"
+            required
+            autocomplete="off"
+            placeholder="Mật khẩu mới (ít nhất 6 ký tự)"
+            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-800 font-mono focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
+          />
+        </div>
+
+        <div class="px-6 py-3 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            @click="resetTarget = null"
+            class="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700"
+          >
+            Hủy
+          </button>
+          <button
+            type="submit"
+            :disabled="resettingPassword"
+            class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 px-4 py-2 text-xs font-bold text-white shadow-xs"
+          >
+            {{ resettingPassword ? 'Đang lưu...' : 'Đặt lại mật khẩu' }}
+          </button>
+        </div>
+      </form>
     </div>
 
     <!-- MODAL PHÂN QUYỀN TRANG -->

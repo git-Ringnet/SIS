@@ -1,6 +1,11 @@
 <script setup>
+import { useAuth } from '../services/useAuth';
+import { useCenters } from '../services/useCenters';
+import { toLocalDateString } from '../services/date';
+import { notify, errorMessage } from '../services/notify';
 import { ref, onMounted, computed } from 'vue';
 import { revenueApi } from '../services/api';
+import Pagination from '../components/Pagination.vue';
 import {
   Download,
   Plus,
@@ -16,14 +21,17 @@ import {
   CheckCircle2,
   Building,
 } from 'lucide-vue-next';
+import MoneyInput from '../components/MoneyInput.vue';
 
 // Tab hiện tại
 const activeTab = ref('revenue'); // 'revenue' | 'expenses' | 'profit' | 'allocation'
 
 // Bộ lọc
 const filterPeriod = ref('monthly'); // 'monthly', 'quarterly', 'yearly', 'all'
-const filterYear = ref('2026');
-const filterMonth = ref('10');
+const filterYear = ref(String(new Date().getFullYear()));
+const filterMonth = ref(String(new Date().getMonth() + 1));
+// Năm hiện tại và 4 năm trước
+const yearOptions = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i);
 const filterCenter = ref('all');
 const filterType = ref('all'); // 'all', 'course', 'inventory'
 
@@ -38,7 +46,35 @@ const metrics = ref({
 });
 const chartData = ref([]);
 const transactions = ref([]);
+// Phân trang bảng giao dịch (các chỉ số tổng và biểu đồ vẫn tính trên toàn bộ dữ liệu)
+const page = ref(1);
+const perPage = ref(20);
+const pagination = ref(null);
 const expenses = ref([]);
+// Chi phí chỉ lấy theo tháng (đã có đủ để tính tổng chi) nên chia trang ngay trên trình duyệt
+const expensePage = ref(1);
+const expensePerPage = ref(20);
+const expensePagination = computed(() => {
+  const total = expenses.value.length;
+  const lastPage = Math.max(1, Math.ceil(total / expensePerPage.value));
+  const current = Math.min(expensePage.value, lastPage);
+  return {
+    current_page: current,
+    last_page: lastPage,
+    per_page: expensePerPage.value,
+    total,
+    from: total ? (current - 1) * expensePerPage.value + 1 : null,
+    to: total ? Math.min(current * expensePerPage.value, total) : null,
+  };
+});
+const pagedExpenses = computed(() => {
+  const { current_page: current, per_page: size } = expensePagination.value;
+  return expenses.value.slice((current - 1) * size, current * size);
+});
+const changeExpensePerPage = (n) => {
+  expensePerPage.value = n;
+  expensePage.value = 1;
+};
 const profit = ref({
   total_revenue: 0,
   total_expense: 0,
@@ -52,34 +88,38 @@ const allocation = ref({
 const centers = ref([]);
 
 // Tooltip biểu đồ ngày tương tác
-const hoveredDay = ref(25); // Mặc định hiển thị ngày 25 giống ảnh tham khảo
+const hoveredDay = ref(new Date().getDate()); // Mặc định hiển thị ngày hôm nay
+
+// Người ghi nhận mặc định là tài khoản đang đăng nhập
+const { user } = useAuth();
+const currentUserName = user.value?.name || 'Admin';
 
 // Modal Thêm Doanh Thu
 const showRevenueModal = ref(false);
 const revForm = ref({
-  recorded_by: 'Khoa Anh (Admin)',
-  date: '2026-10-11',
+  recorded_by: currentUserName,
+  date: toLocalDateString(),
   student_name: '',
   course_name: '',
   inventory_name: '',
   payment_method: 'Chuyển khoản',
-  account_name: 'MB Bank - Khoa Anh Music',
+  account_name: '',
   tuition_fee: 0,
   inventory_fee: 0,
-  center: 'Khoa Anh Music Hóc Môn',
+  center: '',
   note: '',
 });
 
 // Modal Thêm Chi Phí
 const showExpenseModal = ref(false);
 const expForm = ref({
-  date: '2026-10-11',
+  date: toLocalDateString(),
   category: 'Lương giáo viên',
-  spender: 'Khoa Anh (Admin)',
+  spender: currentUserName,
   content: '',
-  account: 'MB Bank - Khoa Anh Music',
+  account: '',
   amount: 0,
-  center: 'Khoa Anh Music Hóc Môn',
+  center: '',
 });
 
 const formatCurrency = (val) => {
@@ -99,14 +139,21 @@ const fetchData = async () => {
       month: filterMonth.value,
       center: filterCenter.value,
       type: filterType.value,
+      page: page.value,
+      per_page: perPage.value,
     });
+    pagination.value = res.data.pagination || null;
     metrics.value = res.data.metrics || {};
     chartData.value = res.data.chart || [];
     transactions.value = res.data.transactions || [];
     expenses.value = res.data.expenses || [];
+    expensePage.value = 1;
     profit.value = res.data.profit || {};
     allocation.value = res.data.allocation || {};
     centers.value = res.data.centers || [];
+    // Form thêm thu / chi mặc định chọn trung tâm chính
+    revForm.value.center ||= defaultCenter.value || centers.value[0] || '';
+    expForm.value.center ||= defaultCenter.value || centers.value[0] || '';
   } catch (err) {
     console.error('Lỗi tải dữ liệu doanh thu:', err);
   } finally {
@@ -114,7 +161,26 @@ const fetchData = async () => {
   }
 };
 
-onMounted(() => {
+// Đổi bộ lọc thì quay về trang 1
+const applyFilters = () => {
+  page.value = 1;
+  fetchData();
+};
+
+const changePage = (p) => {
+  page.value = p;
+  fetchData();
+};
+
+const changePerPage = (n) => {
+  perPage.value = n;
+  applyFilters();
+};
+
+const { defaultCenter, loadCenters } = useCenters();
+
+onMounted(async () => {
+  await loadCenters();
   fetchData();
 });
 
@@ -132,19 +198,22 @@ const getHoveredData = computed(() => {
 });
 
 // Xuất CSV
-const downloadCsv = () => {
-  const url = revenueApi.getExportUrl({
-    year: filterYear.value,
-    month: filterMonth.value,
-    center: filterCenter.value,
-  });
-  window.open(url, '_blank');
+const downloadCsv = async () => {
+  try {
+    await revenueApi.exportCsv({
+      year: filterYear.value,
+      month: filterMonth.value,
+      center: filterCenter.value,
+    });
+  } catch (err) {
+    notify.apiError(err, 'Không thể xuất file doanh thu');
+  }
 };
 
 // Lưu doanh thu mới
 const submitRevenue = async () => {
   if (revForm.value.tuition_fee <= 0 && revForm.value.inventory_fee <= 0) {
-    alert('Vui lòng nhập Học phí hoặc Phí học cụ lớn hơn 0!');
+    notify.warning('Vui lòng nhập Học phí hoặc Phí học cụ lớn hơn 0!');
     return;
   }
   try {
@@ -152,14 +221,14 @@ const submitRevenue = async () => {
     showRevenueModal.value = false;
     await fetchData();
   } catch (err) {
-    alert('Lỗi thêm doanh thu: ' + (err.response?.data?.message || err.message));
+    notify.error('Lỗi thêm doanh thu', { description: errorMessage(err, err.message) });
   }
 };
 
 // Lưu chi phí mới
 const submitExpense = async () => {
   if (expForm.value.amount <= 0) {
-    alert('Vui lòng nhập số tiền chi lớn hơn 0!');
+    notify.warning('Vui lòng nhập số tiền chi lớn hơn 0!');
     return;
   }
   try {
@@ -167,7 +236,7 @@ const submitExpense = async () => {
     showExpenseModal.value = false;
     await fetchData();
   } catch (err) {
-    alert('Lỗi thêm chi phí: ' + (err.response?.data?.message || err.message));
+    notify.error('Lỗi thêm chi phí', { description: errorMessage(err, err.message) });
   }
 };
 </script>
@@ -237,7 +306,7 @@ const submitExpense = async () => {
           <label class="block text-[11px] text-slate-500 mb-1">Kỳ</label>
           <select
             v-model="filterPeriod"
-            @change="fetchData"
+            @change="applyFilters"
             class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="monthly">Theo tháng</option>
@@ -252,13 +321,11 @@ const submitExpense = async () => {
           <label class="block text-[11px] text-slate-500 mb-1">Năm</label>
           <select
             v-model="filterYear"
-            @change="fetchData"
+            @change="applyFilters"
             class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="all">Tất cả năm</option>
-            <option value="2026">2026</option>
-            <option value="2025">2025</option>
-            <option value="2024">2024</option>
+            <option v-for="y in yearOptions" :key="y" :value="String(y)">{{ y }}</option>
           </select>
         </div>
 
@@ -267,7 +334,7 @@ const submitExpense = async () => {
           <label class="block text-[11px] text-slate-500 mb-1">Tháng</label>
           <select
             v-model="filterMonth"
-            @change="fetchData"
+            @change="applyFilters"
             class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="all">Tất cả tháng</option>
@@ -280,7 +347,7 @@ const submitExpense = async () => {
           <label class="block text-[11px] text-slate-500 mb-1">Trung tâm</label>
           <select
             v-model="filterCenter"
-            @change="fetchData"
+            @change="applyFilters"
             class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="all">Tất cả trung tâm</option>
@@ -293,7 +360,7 @@ const submitExpense = async () => {
           <label class="block text-[11px] text-slate-500 mb-1">Loại</label>
           <select
             v-model="filterType"
-            @change="fetchData"
+            @change="applyFilters"
             class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="all">Cả hai</option>
@@ -561,6 +628,7 @@ const submitExpense = async () => {
             </tbody>
           </table>
         </div>
+        <Pagination :meta="pagination" @change-page="changePage" @change-per-page="changePerPage" />
       </div>
     </div>
 
@@ -601,7 +669,7 @@ const submitExpense = async () => {
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
-              <tr v-for="ex in expenses" :key="ex.id" class="hover:bg-slate-50/70">
+              <tr v-for="ex in pagedExpenses" :key="ex.id" class="hover:bg-slate-50/70">
                 <td class="py-3 pr-2 font-mono text-xs text-slate-500">{{ ex.date }}</td>
                 <td class="py-3 px-2 font-semibold text-slate-800">{{ ex.category }}</td>
                 <td class="py-3 px-2 text-slate-600">{{ ex.spender }}</td>
@@ -612,6 +680,11 @@ const submitExpense = async () => {
               </tr>
             </tbody>
           </table>
+          <Pagination
+            :meta="expensePagination"
+            @change-page="(p) => (expensePage = p)"
+            @change-per-page="changeExpensePerPage"
+          />
 
           <div class="pt-4 border-t border-slate-100 flex justify-between items-center text-xs font-medium text-slate-700">
             <span>Tổng cộng {{ expenses.length }} khoản chi</span>
@@ -761,21 +834,15 @@ const submitExpense = async () => {
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="block font-medium text-slate-700 mb-1">Tiền học phí (VNĐ)</label>
-              <input
-                v-model.number="revForm.tuition_fee"
-                type="number"
-                min="0"
-                step="1000"
+              <MoneyInput
+                v-model="revForm.tuition_fee"
                 class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none font-bold text-amber-600"
               />
             </div>
             <div>
               <label class="block font-medium text-slate-700 mb-1">Tiền học cụ (VNĐ)</label>
-              <input
-                v-model.number="revForm.inventory_fee"
-                type="number"
-                min="0"
-                step="1000"
+              <MoneyInput
+                v-model="revForm.inventory_fee"
                 class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none font-bold text-blue-600"
               />
             </div>
@@ -799,7 +866,7 @@ const submitExpense = async () => {
               <input
                 v-model="revForm.account_name"
                 type="text"
-                placeholder="VD: MB Bank - Khoa Anh Music"
+                placeholder="VD: Vietcombank - Tài khoản trung tâm"
                 class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none"
               />
             </div>
@@ -907,7 +974,7 @@ const submitExpense = async () => {
               v-model="expForm.content"
               type="text"
               required
-              placeholder="VD: Trả tiền thuê nhà tháng 10 cơ sở Hóc Môn"
+              placeholder="VD: Trả tiền thuê mặt bằng tháng này"
               class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none"
             />
           </div>
@@ -918,17 +985,14 @@ const submitExpense = async () => {
               <input
                 v-model="expForm.account"
                 type="text"
-                placeholder="VD: MB Bank - Khoa Anh Music"
+                placeholder="VD: Vietcombank - Tài khoản trung tâm"
                 class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none"
               />
             </div>
             <div>
               <label class="block font-medium text-slate-700 mb-1">Số tiền chi (VNĐ) (*)</label>
-              <input
-                v-model.number="expForm.amount"
-                type="number"
-                min="0"
-                step="1000"
+              <MoneyInput
+                v-model="expForm.amount"
                 required
                 class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none font-bold text-rose-600"
               />

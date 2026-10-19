@@ -7,6 +7,7 @@ import MessageTemplateModal from '../components/MessageTemplateModal.vue';
 import RetentionNoteModal from '../components/RetentionNoteModal.vue';
 import RenewModal from '../components/RenewModal.vue';
 import AttendanceButton from '../components/AttendanceButton.vue';
+import Pagination from '../components/Pagination.vue';
 import {
   Flame,
   Receipt,
@@ -31,6 +32,9 @@ const counts = ref({
 
 const currentStatus = ref('all');
 const currentThreshold = ref(5);
+const page = ref(1);
+const perPage = ref(20);
+const pagination = ref(null);
 const expandedLogsStudentId = ref(null);
 
 const showTemplateModal = ref(false);
@@ -43,7 +47,15 @@ const fetchData = async () => {
     const res = await retentionApi.getChecklist({
       status: currentStatus.value,
       threshold: currentThreshold.value,
+      page: page.value,
+      per_page: perPage.value,
     });
+    pagination.value = res.data.pagination || null;
+    // Trang hiện tại không còn dữ liệu (ví dụ học viên vừa gia hạn rời danh sách) thì lùi về trang cuối
+    if (pagination.value && page.value > pagination.value.last_page && pagination.value.last_page >= 1) {
+      page.value = pagination.value.last_page;
+      return fetchData();
+    }
     students.value = res.data.students || [];
     templates.value = res.data.templates || [];
     courses.value = res.data.courses || [];
@@ -57,11 +69,24 @@ onMounted(fetchData);
 
 const filterByStatus = (status) => {
   currentStatus.value = status;
+  page.value = 1;
   fetchData();
 };
 
 const filterByThreshold = (threshold) => {
   currentThreshold.value = threshold;
+  page.value = 1;
+  fetchData();
+};
+
+const changePage = (p) => {
+  page.value = p;
+  fetchData();
+};
+
+const changePerPage = (n) => {
+  perPage.value = n;
+  page.value = 1;
   fetchData();
 };
 
@@ -94,10 +119,6 @@ const formatDate = (val) => {
   return d.toLocaleDateString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
 };
 
-const getZaloLink = (phone) => {
-  if (!phone) return '#';
-  return `https://zalo.me/${phone.replace(/[^0-9]/g, '')}`;
-};
 </script>
 
 <template>
@@ -239,16 +260,13 @@ const getZaloLink = (phone) => {
                 <!-- Student & Parent info -->
                 <td class="py-3 px-3.5">
                   <div class="flex items-center gap-2.5">
-                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-50 font-bold text-indigo-700 text-xs shrink-0">
-                      {{ student.name.charAt(0) }}
-                    </div>
                     <div class="min-w-0">
                       <router-link :to="`/students/${student.id}`" class="font-bold text-slate-900 hover:text-indigo-600 block truncate">
                         {{ student.name }}
                       </router-link>
                       <div class="text-[11px] text-slate-500 truncate mt-0.5">
                         <span>PH: {{ student.parent_name }}</span> &bull;
-                        <a :href="getZaloLink(student.parent_phone)" target="_blank" class="text-blue-600 font-semibold hover:underline">
+                        <a :href="`tel:${student.parent_phone}`" class="text-blue-600 font-semibold hover:underline">
                           {{ student.parent_phone }}
                         </a>
                       </div>
@@ -358,6 +376,7 @@ const getZaloLink = (phone) => {
           </tbody>
         </table>
       </div>
+      <Pagination :meta="pagination" @change-page="changePage" @change-per-page="changePerPage" />
     </div>
 
     <!-- Modals -->

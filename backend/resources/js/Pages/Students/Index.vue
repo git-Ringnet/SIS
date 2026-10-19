@@ -41,6 +41,7 @@ const search = ref(props.filters.search || '');
 const courseId = ref(props.filters.course_id || 'all');
 const status = ref(props.filters.status || 'all');
 const alertFilter = ref(props.filters.alert || '');
+const attendanceStatus = ref(props.filters.attendance_status || 'all');
 
 // Create / Edit student modal
 const showCreateModal = ref(false);
@@ -73,6 +74,7 @@ const applyFilters = () => {
             course_id: courseId.value,
             status: status.value,
             alert: alertFilter.value,
+            attendance_status: attendanceStatus.value,
         },
         { preserveState: true, preserveScroll: true }
     );
@@ -221,6 +223,22 @@ const getZaloLink = (phone) => {
                     </select>
                 </div>
 
+                <!-- Attendance Status (SenyApp Streak) -->
+                <div>
+                    <select
+                        v-model="attendanceStatus"
+                        @change="applyFilters"
+                        class="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                    >
+                        <option value="all">Tất cả chuyên cần</option>
+                        <option value="excellent">🔥 Chuyên cần xuất sắc</option>
+                        <option value="good">😊 Chuyên cần tốt</option>
+                        <option value="attention">⚠️ Cần quan tâm</option>
+                        <option value="at_risk">🚨 Nguy cơ nghỉ học</option>
+                        <option value="returned">💪 Đã quay lại học đều</option>
+                    </select>
+                </div>
+
                 <!-- Alert Fast Filter -->
                 <div class="flex items-center gap-1.5">
                     <button
@@ -274,6 +292,28 @@ const getZaloLink = (phone) => {
                                                 {{ student.name }}
                                             </Link>
                                             <span class="block text-[10px] font-mono text-slate-400">{{ student.code }}</span>
+
+                                            <!-- Dãy 5 chấm điểm danh gần nhất & Biểu tượng Chuyên cần (Kích thước lớn rõ ràng theo chuẩn) -->
+                                            <div class="flex items-center gap-2 mt-1">
+                                                <div class="flex items-center gap-1.5 bg-slate-100/90 px-2.5 py-1 rounded-full border border-slate-200/80 shadow-2xs">
+                                                    <span
+                                                        v-for="(dot, idx) in (student.attendance_dots || [])"
+                                                        :key="idx"
+                                                        class="inline-block h-3.5 w-3.5 rounded-full transition-all hover:scale-125 cursor-help"
+                                                        :class="[
+                                                            dot.status === 'present' ? 'bg-emerald-500 shadow-2xs shadow-emerald-500/50' :
+                                                            dot.status === 'absent' ? 'bg-rose-500 shadow-2xs shadow-rose-500/50' :
+                                                            dot.status === 'excused' ? 'bg-amber-400 shadow-2xs shadow-amber-400/50' :
+                                                            'bg-white border-2 border-slate-300'
+                                                        ]"
+                                                    ></span>
+                                                </div>
+                                                <span v-if="student.attendance_status === 'excellent'" class="text-lg select-none cursor-help inline-block leading-none" title="Chuyên cần xuất sắc">🔥</span>
+                                                <span v-else-if="student.attendance_status === 'good'" class="text-base select-none cursor-help inline-block leading-none" title="Chuyên cần tốt">😊</span>
+                                                <span v-else-if="student.attendance_status === 'attention'" class="text-base select-none cursor-help inline-block leading-none" title="Cần quan tâm">⚠️</span>
+                                                <span v-else-if="student.attendance_status === 'at_risk'" class="text-base select-none cursor-help inline-block leading-none" title="Nguy cơ nghỉ học">🚨</span>
+                                                <span v-else-if="student.attendance_status === 'returned'" class="text-base select-none cursor-help inline-block leading-none" title="Đã quay lại học đều">💪</span>
+                                            </div>
                                         </div>
                                     </div>
                                 </td>

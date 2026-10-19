@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\MessageTemplate;
 use App\Models\RetentionLog;
 use App\Models\Student;
+use App\Support\CenterStore;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -44,7 +45,7 @@ class AbsenceApiController extends Controller
                 'consecutive_absences' => (int) $s->consecutive_absences,
                 'remaining_sessions' => (int) $s->remaining_sessions,
                 'total_sessions' => (int) $s->total_sessions,
-                'center' => $s->center ?: 'Khoa Anh Music Hóc Môn',
+                'center' => $s->center ?: CenterStore::defaultName(),
                 'course' => $s->course ? [
                     'id' => $s->course->id,
                     'name' => $s->course->name,
@@ -76,11 +77,7 @@ class AbsenceApiController extends Controller
             ]);
         }
 
-        $centers = [
-            'Khoa Anh Music Hóc Môn',
-            'Khoa Anh Music Quận 12',
-            'Khoa Anh Music Gò Vấp',
-        ];
+        $centers = CenterStore::names();
 
         return response()->json([
             'threshold' => $threshold,

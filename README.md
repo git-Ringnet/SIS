@@ -70,3 +70,13 @@ npm run dev
 
 4. **Doanh Thu & Khóa Học:**
    - Báo cáo tài chính theo ngày/tháng, quản lý phiếu thu học phí và bảng giá khóa học.
+
+---
+
+## 🌐 Triển Khai Chạy 24/7 Trên Laptop Linux & Cloudflare Tunnel
+
+Để biến một laptop Linux thành server lưu trữ cho toàn trung tâm truy cập từ xa qua Internet (miễn phí, có SSL HTTPS và không cần mở port modem):
+- Xem hướng dẫn chi tiết từng bước: [CLOUDFLARE_TUNNEL_GUIDE.md](CLOUDFLARE_TUNNEL_GUIDE.md)
+- Script cài đặt tự động 1 lệnh: [scripts/setup_linux.sh](scripts/setup_linux.sh)
+- File cấu hình Nginx gộp 1 port: [scripts/nginx_sis.conf](scripts/nginx_sis.conf)
+

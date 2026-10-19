@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Course;
 use App\Models\Invoice;
 use App\Models\Student;
+use App\Support\BrandSettings;
+use App\Support\CenterStore;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -34,45 +36,7 @@ class RevenueApiController extends Controller
             }
         }
 
-        // Mẫu giao dịch học cụ kèm theo
-        $default = [
-            [
-                'id' => 'rev_supplies_1',
-                'recorded_by' => 'Khoa Anh (Admin)',
-                'date' => '2026-10-05',
-                'student_name' => 'Nguyễn Minh Khang',
-                'course_name' => 'Piano Căn Bản & Cổ Điển',
-                'inventory_name' => 'Giáo trình Piano Alfred Tập 1',
-                'payment_method' => 'Chuyển khoản',
-                'account_name' => 'MB Bank - Khoa Anh Music',
-                'tuition_fee' => 0,
-                'inventory_fee' => 120000,
-                'total_amount' => 120000,
-                'center' => 'Khoa Anh Music Hóc Môn',
-                'type' => 'inventory',
-                'note' => 'Mua thêm giáo trình luyện ngón',
-            ],
-            [
-                'id' => 'rev_supplies_2',
-                'recorded_by' => 'Lan Hương',
-                'date' => '2026-10-08',
-                'student_name' => 'Trần Bảo Ngọc',
-                'course_name' => 'Guitar Đệm Hát Cấp Tốc',
-                'inventory_name' => 'Capo Guitar Musedo MC-1',
-                'payment_method' => 'Tiền mặt',
-                'account_name' => 'Tiền mặt tại quầy',
-                'tuition_fee' => 0,
-                'inventory_fee' => 85000,
-                'total_amount' => 85000,
-                'center' => 'Khoa Anh Music Hóc Môn',
-                'type' => 'inventory',
-                'note' => 'Học viên mua trực tiếp tại quầy',
-            ],
-        ];
-
-        Storage::put($path, json_encode($default, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-
-        return $default;
+        return [];
     }
 
     private function loadExpenses(): array
@@ -85,59 +49,14 @@ class RevenueApiController extends Controller
             }
         }
 
-        $default = [
-            [
-                'id' => 1,
-                'date' => '2026-10-01',
-                'category' => 'Thuê mặt bằng',
-                'spender' => 'Khoa Anh (Admin)',
-                'content' => 'Tiền thuê mặt bằng cơ sở Hóc Môn tháng 10/2026',
-                'account' => 'MB Bank - Khoa Anh Music',
-                'amount' => 15000000,
-                'center' => 'Khoa Anh Music Hóc Môn',
-            ],
-            [
-                'id' => 2,
-                'date' => '2026-10-03',
-                'category' => 'Điện nước & Internet',
-                'spender' => 'Khoa Anh (Admin)',
-                'content' => 'Hóa đơn tiền điện máy lạnh và wifi cáp quang',
-                'account' => 'Chuyển khoản VNPAY',
-                'amount' => 2450000,
-                'center' => 'Khoa Anh Music Hóc Môn',
-            ],
-            [
-                'id' => 3,
-                'date' => '2026-10-06',
-                'category' => 'Mua học cụ & Nhạc cụ',
-                'spender' => 'Lan Hương',
-                'content' => 'Nhập 50 cuốn giáo trình và 20 phụ kiện Capo',
-                'account' => 'MB Bank - Khoa Anh Music',
-                'amount' => 3200000,
-                'center' => 'Khoa Anh Music Hóc Môn',
-            ],
-            [
-                'id' => 4,
-                'date' => '2026-10-10',
-                'category' => 'Marketing & Quảng cáo',
-                'spender' => 'Khoa Anh (Admin)',
-                'content' => 'Chi phí chạy chiến dịch Facebook Ads tuyển sinh khóa mới',
-                'account' => 'Thẻ Visa Doanh Nghiệp',
-                'amount' => 4500000,
-                'center' => 'Tất cả trung tâm',
-            ],
-        ];
-
-        Storage::put($path, json_encode($default, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-
-        return $default;
+        return [];
     }
 
     public function index(Request $request): JsonResponse
     {
         $period = $request->input('period', 'monthly'); // monthly, quarterly, yearly, all
-        $year = $request->input('year', '2026');
-        $month = $request->input('month', '10'); // tháng 10 năm 2026
+        $year = $request->input('year', (string) Carbon::now()->year);
+        $month = $request->input('month', (string) Carbon::now()->month);
         $center = $request->input('center', 'all');
         $type = $request->input('type', 'all'); // all, course, inventory
 
@@ -149,11 +68,14 @@ class RevenueApiController extends Controller
 
         $transactions = [];
 
+        $brand = BrandSettings::brand();
+        $bankAccountName = trim(($brand['bank_name'] ?: 'Chuyển khoản').' - '.$brand['brand_name'], ' -');
+
         foreach ($invoices as $inv) {
             $paidDate = $inv->paid_at ? Carbon::parse($inv->paid_at) : Carbon::parse($inv->created_at);
             $studentName = $inv->student ? $inv->student->name : 'Khách vãng lai';
             $courseName = $inv->course ? $inv->course->name : ($inv->student && $inv->student->course ? $inv->student->course->name : 'Học phí khóa học');
-            $invCenter = $inv->student && $inv->student->center ? $inv->student->center : 'Khoa Anh Music Hóc Môn';
+            $invCenter = $inv->student && $inv->student->center ? $inv->student->center : CenterStore::defaultName();
 
             $methodName = match ($inv->payment_method) {
                 'bank_transfer' => 'Chuyển khoản',
@@ -164,7 +86,7 @@ class RevenueApiController extends Controller
             };
 
             $accountName = match ($inv->payment_method) {
-                'bank_transfer' => 'MB Bank - Khoa Anh Music',
+                'bank_transfer' => $bankAccountName,
                 'cash' => 'Tiền mặt tại quầy',
                 'pos' => 'Máy POS quẹt thẻ',
                 'momo' => 'Ví MoMo Doanh Nghiệp',
@@ -213,7 +135,7 @@ class RevenueApiController extends Controller
                 'tuition_fee' => (float) ($cr['tuition_fee'] ?? 0),
                 'inventory_fee' => (float) ($cr['inventory_fee'] ?? 0),
                 'total_amount' => (float) ($cr['total_amount'] ?? 0),
-                'center' => $cr['center'] ?? 'Khoa Anh Music Hóc Môn',
+                'center' => $cr['center'] ?? CenterStore::defaultName(),
                 'type' => $cr['type'] ?? 'inventory',
                 'note' => $cr['note'] ?? '',
             ];
@@ -245,7 +167,7 @@ class RevenueApiController extends Controller
 
         // 4. Tính toán Metrics tháng này
         $activeMonth = $month !== 'all' ? (int) $month : (int) Carbon::now()->month;
-        $activeYear = $year !== 'all' ? (int) $year : 2026;
+        $activeYear = $year !== 'all' ? (int) $year : (int) Carbon::now()->year;
 
         $monthTransactions = array_filter($transactions, function ($tx) use ($activeMonth, $activeYear, $center) {
             if ($tx['year'] !== $activeYear || $tx['month'] !== $activeMonth) {
@@ -324,11 +246,15 @@ class RevenueApiController extends Controller
             $deferredRevenue += ($remSess * $pricePerSession);
         }
 
-        $centers = [
-            'Khoa Anh Music Hóc Môn',
-            'Khoa Anh Music Quận 12',
-            'Khoa Anh Music Gò Vấp',
-        ];
+        $centers = CenterStore::names();
+
+        $pagination = null;
+        $pageTransactions = $filteredTransactions;
+        if ($this->wantsPagination($request)) {
+            $paginator = $this->paginateArray($filteredTransactions, $request);
+            $pageTransactions = $paginator->items();
+            $pagination = $this->paginationMeta($paginator);
+        }
 
         return response()->json([
             'metrics' => [
@@ -339,7 +265,8 @@ class RevenueApiController extends Controller
                 'total_transactions_count' => $totalTransactionsCount,
             ],
             'chart' => array_values($chartDays),
-            'transactions' => $filteredTransactions,
+            'transactions' => $pageTransactions,
+            'pagination' => $pagination,
             'expenses' => $filteredExpenses,
             'profit' => [
                 'total_revenue' => $revenueMonthTotal,
@@ -387,9 +314,9 @@ class RevenueApiController extends Controller
             'id' => 'rev_custom_'.uniqid(),
             'recorded_by' => $validated['recorded_by'],
             'date' => $validated['date'],
-            'student_name' => $validated['student_name'] ?: 'Khách hàng',
-            'course_name' => $validated['course_name'] ?: '-',
-            'inventory_name' => $validated['inventory_name'] ?: '-',
+            'student_name' => ($validated['student_name'] ?? null) ?: 'Khách hàng',
+            'course_name' => ($validated['course_name'] ?? null) ?: '-',
+            'inventory_name' => ($validated['inventory_name'] ?? null) ?: '-',
             'payment_method' => $validated['payment_method'],
             'account_name' => $validated['account_name'],
             'tuition_fee' => $tuition,
@@ -468,7 +395,7 @@ class RevenueApiController extends Controller
                 'tuition_fee' => (float) $inv->amount,
                 'inventory_fee' => 0,
                 'total_amount' => (float) $inv->amount,
-                'center' => $inv->student ? $inv->student->center : 'Khoa Anh Music Hóc Môn',
+                'center' => $inv->student?->center ?: CenterStore::defaultName(),
             ];
         }
 
@@ -488,7 +415,7 @@ class RevenueApiController extends Controller
                 'tuition_fee' => (float) ($cr['tuition_fee'] ?? 0),
                 'inventory_fee' => (float) ($cr['inventory_fee'] ?? 0),
                 'total_amount' => (float) ($cr['total_amount'] ?? 0),
-                'center' => $cr['center'] ?? 'Khoa Anh Music Hóc Môn',
+                'center' => $cr['center'] ?? CenterStore::defaultName(),
             ];
         }
 

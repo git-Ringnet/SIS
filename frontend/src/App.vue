@@ -1,7 +1,13 @@
 <script setup>
-import { ref, computed } from 'vue';
+import { useBrand } from './services/useBrand';
+import BrandLogo from './components/BrandLogo.vue';
+import { ref, computed, watch, watchEffect, onMounted, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuth } from './services/useAuth';
+import { isPathBlocked } from './services/permissions';
+import { Toaster } from 'vue-sonner';
+import 'vue-sonner/style.css';
+import ConfirmDialog from './components/ConfirmDialog.vue';
 import {
   LayoutDashboard,
   Users,
@@ -25,14 +31,48 @@ import {
   X,
   Plus,
   Flame,
-  Music,
 } from 'lucide-vue-next';
+
+// Thương hiệu: tải một lần (API công khai, dùng được cả ở màn đăng nhập) và gắn vào tiêu đề tab
+const { brandName, nameParts, loadBrand } = useBrand();
+loadBrand();
 
 const route = useRoute();
 const router = useRouter();
-const { user, isAuthenticated, logout } = useAuth();
+const { user, isAuthenticated, logout, checkAuth } = useAuth();
 const showMobileMenu = ref(false);
 const isSidebarCollapsed = ref(localStorage.getItem('sis_sidebar_collapsed') === 'true');
+
+// Auto close mobile drawer on route change
+watch(() => route.path, () => {
+  showMobileMenu.value = false;
+});
+
+// Prevent body scroll when mobile menu is open
+watch(showMobileMenu, (isOpen) => {
+  if (isOpen) {
+    document.body.style.overflow = 'hidden';
+  } else {
+    document.body.style.overflow = '';
+  }
+});
+
+const handleKeyDown = (e) => {
+  if (e.key === 'Escape' && showMobileMenu.value) {
+    showMobileMenu.value = false;
+  }
+};
+
+onMounted(() => {
+  window.addEventListener('keydown', handleKeyDown);
+  // Lấy lại quyền mới nhất từ server (chủ trung tâm có thể vừa đổi phân quyền)
+  if (isAuthenticated.value) checkAuth();
+});
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeyDown);
+  document.body.style.overflow = '';
+});
 
 const toggleSidebar = () => {
   if (window.innerWidth < 1024) {
@@ -47,7 +87,7 @@ const isStandalonePage = computed(() => {
   return route.meta?.public === true || route.meta?.standalone === true || ['login', 'register', 'student-detail'].includes(route.name);
 });
 
-const mainNavigation = [
+const allMainNavigation = [
   { name: 'Bảng điều khiển', href: '/', icon: LayoutDashboard },
   { name: 'Học viên', href: '/students', icon: Users },
   { name: 'Điểm danh', href: '/attendance', icon: CheckSquare },
@@ -55,7 +95,7 @@ const mainNavigation = [
   { name: 'Vắng liên tiếp', href: '/absences', icon: UserX },
 ];
 
-const operationNavigation = [
+const allOperationNavigation = [
   { name: 'Khách hàng tiềm năng', href: '/leads', icon: UserPlus },
   { name: 'Doanh thu', href: '/revenue', icon: DollarSign },
   { name: 'Hóa đơn', href: '/invoices', icon: FileText },
@@ -64,7 +104,7 @@ const operationNavigation = [
   { name: 'HV Tạm dừng - Nghỉ', href: '/inactive-students', icon: UserMinus },
 ];
 
-const configNavigation = [
+const allConfigNavigation = [
   { name: 'Khóa học', href: '/courses', icon: GraduationCap },
   { name: 'Trung tâm', href: '/centers', icon: Building2 },
   { name: 'Nhân sự', href: '/staff', icon: Briefcase },
@@ -72,6 +112,12 @@ const configNavigation = [
   { name: 'Dữ liệu', href: '/data', icon: Database },
   { name: 'Báo cáo', href: '/reports', icon: BarChart3 },
 ];
+
+// Ẩn các mục mà nhân sự bị chặn quyền
+const visibleNav = (items) => computed(() => items.filter((item) => !isPathBlocked(user.value, item.href)));
+const mainNavigation = visibleNav(allMainNavigation);
+const operationNavigation = visibleNav(allOperationNavigation);
+const configNavigation = visibleNav(allConfigNavigation);
 
 const isCurrentUrl = (path) => {
   if (path === '/') return route.path === '/';
@@ -82,10 +128,12 @@ const currentPageTitle = computed(() => {
   return route.meta?.title || 'Bảng điều khiển';
 });
 
-const handleLogout = async () => {
-  if (confirm('Bạn có chắc chắn muốn đăng xuất khỏi hệ thống?')) {
-    await logout();
-  }
+watchEffect(() => {
+  document.title = `${currentPageTitle.value} - ${brandName.value}`;
+});
+
+const handleLogout = () => {
+  logout();
 };
 </script>
 
@@ -102,18 +150,16 @@ const handleLogout = async () => {
       class="hidden lg:flex lg:flex-col lg:fixed lg:inset-y-0 z-30 bg-white border-r border-slate-200/90 shadow-2xs transition-all duration-300"
       :class="isSidebarCollapsed ? 'lg:w-16' : 'lg:w-60 xl:w-64'"
     >
-      <!-- Brand Logo - Khoa Anh Music & Art -->
+      <!-- Brand Logo (lấy từ Cài đặt > Thương hiệu) -->
       <div
         class="flex h-16 shrink-0 items-center border-b border-slate-100 bg-white transition-all duration-300"
         :class="isSidebarCollapsed ? 'justify-center px-2' : 'justify-between px-4'"
       >
-        <router-link to="/" class="flex items-center gap-2.5" :title="isSidebarCollapsed ? 'Khoa Anh Music' : ''">
-          <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-rose-500 via-rose-600 to-red-600 text-white shadow-sm shadow-rose-600/20 shrink-0">
-            <Music class="h-5 w-5" />
-          </div>
+        <router-link to="/" class="flex items-center gap-2.5" :title="isSidebarCollapsed ? brandName : ''">
+          <BrandLogo box-class="h-9 w-9 rounded-xl" icon-class="h-5 w-5" />
           <div v-if="!isSidebarCollapsed" class="overflow-hidden whitespace-nowrap">
             <span class="text-sm font-black tracking-tight text-slate-900 block leading-tight">
-              Khoa Anh <span class="text-rose-600">Music</span>
+              {{ nameParts.head }} <span class="text-rose-600">{{ nameParts.tail }}</span>
             </span>
             <span class="text-[10px] font-semibold text-rose-900/40 block tracking-wider uppercase">
               EduCRM &bull; SIS
@@ -248,47 +294,137 @@ const handleLogout = async () => {
       </div>
     </aside>
 
-    <!-- Mobile Navigation Drawer -->
-    <div v-if="showMobileMenu" class="fixed inset-0 z-50 flex lg:hidden">
-      <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs" @click="showMobileMenu = false"></div>
-      <div class="relative flex w-64 max-w-xs flex-1 flex-col bg-white p-4 overflow-y-auto">
-        <div class="flex items-center justify-between pb-3 border-b border-slate-100">
-          <div class="flex items-center gap-2">
-            <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-tr from-rose-500 to-red-600 text-white">
-              <Music class="h-4 w-4" />
-            </div>
-            <span class="text-sm font-black text-slate-900">Khoa Anh Music</span>
-          </div>
-          <button @click="showMobileMenu = false" class="text-slate-500 hover:text-slate-800 p-1">
-            <X class="h-5 w-5" />
-          </button>
-        </div>
-
-        <nav class="mt-3 space-y-1">
-          <router-link
-            v-for="item in [...mainNavigation, ...operationNavigation, ...configNavigation]"
-            :key="item.name"
-            :to="item.href"
+    <!-- Mobile Navigation Drawer with Smooth Slide Transition -->
+    <teleport to="body">
+      <div
+        class="fixed inset-0 z-50 flex lg:hidden"
+        :class="showMobileMenu ? 'pointer-events-auto' : 'pointer-events-none'"
+        role="dialog"
+        aria-modal="true"
+      >
+        <!-- Backdrop Fade Transition -->
+        <transition
+          enter-active-class="transition-opacity ease-linear duration-300"
+          enter-from-class="opacity-0"
+          enter-to-class="opacity-100"
+          leave-active-class="transition-opacity ease-linear duration-200"
+          leave-from-class="opacity-100"
+          leave-to-class="opacity-0"
+        >
+          <div
+            v-show="showMobileMenu"
+            class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs pointer-events-auto"
             @click="showMobileMenu = false"
-            class="flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-normal"
-            :class="isCurrentUrl(item.href) ? 'bg-rose-600 text-white font-semibold' : 'text-slate-700 hover:bg-rose-50/70 hover:text-rose-900'"
-          >
-            <component :is="item.icon" class="h-4 w-4" />
-            <span>{{ item.name }}</span>
-          </router-link>
-        </nav>
+          />
+        </transition>
 
-        <div class="mt-4 pt-3 border-t border-slate-100">
-          <button
-            @click="handleLogout"
-            class="flex items-center gap-2 w-full rounded-xl px-3 py-2 text-sm font-normal text-rose-600 hover:bg-rose-50"
+        <!-- Sidebar Slide In/Out Transition -->
+        <transition
+          enter-active-class="transition ease-out duration-300 transform"
+          enter-from-class="-translate-x-full"
+          enter-to-class="translate-x-0"
+          leave-active-class="transition ease-in duration-200 transform"
+          leave-from-class="translate-x-0"
+          leave-to-class="-translate-x-full"
+        >
+          <div
+            v-show="showMobileMenu"
+            class="relative flex w-72 max-w-[80vw] flex-1 flex-col bg-white p-4 shadow-2xl overflow-y-auto pointer-events-auto overscroll-contain"
           >
-            <LogOut class="h-4 w-4" />
-            <span>Đăng xuất</span>
-          </button>
-        </div>
+            <!-- Drawer Brand & Close Button -->
+            <div class="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
+              <router-link to="/" @click="showMobileMenu = false" class="flex items-center gap-2">
+                <BrandLogo box-class="h-8 w-8 rounded-xl" icon-class="h-4 w-4" />
+                <div>
+                  <span class="text-sm font-black tracking-tight text-slate-900 block leading-tight">
+                    {{ nameParts.head }} <span class="text-rose-600">{{ nameParts.tail }}</span>
+                  </span>
+                  <span class="text-[9px] font-semibold text-rose-900/50 block tracking-wider uppercase">
+                    EduCRM &bull; SIS
+                  </span>
+                </div>
+              </router-link>
+              <button
+                @click="showMobileMenu = false"
+                class="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
+                title="Đóng menu"
+              >
+                <X class="h-5 w-5" />
+              </button>
+            </div>
+
+            <!-- Navigation Links -->
+            <div class="flex-1 overflow-y-auto py-2 space-y-3">
+              <!-- 1. Main Navigation -->
+              <nav class="space-y-1">
+                <router-link
+                  v-for="item in mainNavigation"
+                  :key="item.name"
+                  :to="item.href"
+                  @click="showMobileMenu = false"
+                  class="flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors"
+                  :class="isCurrentUrl(item.href) ? 'bg-rose-600 text-white font-semibold shadow-xs' : 'text-slate-700 hover:bg-rose-50/70 hover:text-rose-900'"
+                >
+                  <component :is="item.icon" class="h-4 w-4 shrink-0" />
+                  <span class="truncate">{{ item.name }}</span>
+                </router-link>
+              </nav>
+
+              <!-- 2. Vận hành -->
+              <div>
+                <p class="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Vận hành
+                </p>
+                <nav class="mt-1 space-y-1">
+                  <router-link
+                    v-for="item in operationNavigation"
+                    :key="item.name"
+                    :to="item.href"
+                    @click="showMobileMenu = false"
+                    class="flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors"
+                    :class="isCurrentUrl(item.href) ? 'bg-rose-600 text-white font-semibold shadow-xs' : 'text-slate-700 hover:bg-rose-50/70 hover:text-rose-900'"
+                  >
+                    <component :is="item.icon" class="h-4 w-4 shrink-0" />
+                    <span class="truncate">{{ item.name }}</span>
+                  </router-link>
+                </nav>
+              </div>
+
+              <!-- 3. Cấu hình -->
+              <div>
+                <p class="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Cấu hình
+                </p>
+                <nav class="mt-1 space-y-1">
+                  <router-link
+                    v-for="item in configNavigation"
+                    :key="item.name"
+                    :to="item.href"
+                    @click="showMobileMenu = false"
+                    class="flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors"
+                    :class="isCurrentUrl(item.href) ? 'bg-rose-600 text-white font-semibold shadow-xs' : 'text-slate-700 hover:bg-rose-50/70 hover:text-rose-900'"
+                  >
+                    <component :is="item.icon" class="h-4 w-4 shrink-0" />
+                    <span class="truncate">{{ item.name }}</span>
+                  </router-link>
+                </nav>
+              </div>
+            </div>
+
+            <!-- Logout Footer -->
+            <div class="pt-3 border-t border-slate-100 shrink-0">
+              <button
+                @click="handleLogout"
+                class="flex items-center gap-2.5 w-full rounded-xl px-3 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50 transition-colors"
+              >
+                <LogOut class="h-4 w-4 shrink-0 text-rose-500" />
+                <span class="truncate">Đăng xuất ({{ user?.name || 'Admin' }})</span>
+              </button>
+            </div>
+          </div>
+        </transition>
       </div>
-    </div>
+    </teleport>
 
     <!-- Main Content Full Width Area -->
     <div
@@ -327,7 +463,7 @@ const handleLogout = async () => {
           <!-- User Profile -->
           <div class="pl-3 border-l border-slate-200 text-left">
             <span class="text-sm font-bold text-slate-800 block leading-tight">
-              {{ user?.name || 'Khoa Anh Music' }}
+              {{ user?.name || brandName }}
             </span>
             <span class="text-xs text-slate-400 font-medium block truncate max-w-[180px]">
               {{ user?.email || 'admin@khoaanhmusic.com' }}
@@ -342,4 +478,7 @@ const handleLogout = async () => {
       </main>
     </div>
   </div>
+
+  <Toaster position="top-right" rich-colors close-button :duration="4000" />
+  <ConfirmDialog />
 </template>

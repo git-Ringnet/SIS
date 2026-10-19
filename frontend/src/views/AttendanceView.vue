@@ -1,8 +1,11 @@
 <script setup>
+import { toLocalDateString } from '../services/date';
+import { notify, errorMessage } from '../services/notify';
 import { ref, onMounted, computed } from 'vue';
 import { dailyAttendanceApi, studentApi } from '../services/api';
 import SearchableSelect from '../components/SearchableSelect.vue';
 import MessageTemplateModal from '../components/MessageTemplateModal.vue';
+import Pagination from '../components/Pagination.vue';
 import {
   Calendar,
   CheckCircle2,
@@ -20,7 +23,7 @@ import {
 } from 'lucide-vue-next';
 
 // Bộ lọc
-const selectedDate = ref('2026-10-11');
+const selectedDate = ref(toLocalDateString());
 const selectedCenter = ref('all');
 const selectedClass = ref('all');
 const selectedRoom = ref('all');
@@ -40,6 +43,10 @@ const metrics = ref({
   not_checked: 0,
 });
 const students = ref([]);
+// Phân trang danh sách điểm danh (metrics vẫn tính trên toàn bộ học viên trong ngày)
+const page = ref(1);
+const perPage = ref(20);
+const pagination = ref(null);
 const centers = ref([]);
 const classes = ref([]);
 const rooms = ref([]);
@@ -55,9 +62,9 @@ const selectedStudent = ref(null);
 // Form đặt buổi học lẻ
 const singleLessonForm = ref({
   student_id: '',
-  date: '2026-10-11',
+  date: toLocalDateString(),
   room: 'PIANO 01',
-  teacher: 'Thầy Trương Bảo Đi',
+  teacher: '',
   time: '18:00 - 19:00',
   note: 'Buổi học bù / tăng cường',
 });
@@ -92,7 +99,10 @@ const fetchData = async () => {
       teacher: selectedTeacher.value,
       shift: selectedShift.value,
       search: searchQuery.value,
+      page: page.value,
+      per_page: perPage.value,
     });
+    pagination.value = res.data.pagination || null;
     dayOfWeek.value = res.data.day_of_week || 'CN';
     dayOfWeekEn.value = res.data.day_of_week_en || 'Sunday';
     metrics.value = res.data.metrics || {};
@@ -110,14 +120,30 @@ const fetchData = async () => {
 
 const loadAllStudents = async () => {
   try {
-    const res = await studentApi.getAll({ per_page: 200 });
-    allStudentsList.value = (res.data.data || []).map((s) => ({
+    const res = await studentApi.getAll({ status: 'active' });
+    allStudentsList.value = (res.data.students || []).map((s) => ({
       id: s.id,
       name: `${s.name} (${s.code}) - ${s.course?.name || 'Khóa học'}`,
     }));
   } catch (err) {
     console.error('Lỗi tải danh sách học viên:', err);
   }
+};
+
+// Đổi bộ lọc thì quay về trang 1
+const applyFilters = () => {
+  page.value = 1;
+  fetchData();
+};
+
+const changePage = (p) => {
+  page.value = p;
+  fetchData();
+};
+
+const changePerPage = (n) => {
+  perPage.value = n;
+  applyFilters();
 };
 
 onMounted(() => {
@@ -135,7 +161,7 @@ const markStudent = async (student, status, note = '') => {
     });
     await fetchData();
   } catch (err) {
-    alert('Lỗi điểm danh: ' + (err.response?.data?.message || err.message));
+    notify.error('Lỗi điểm danh', { description: errorMessage(err, err.message) });
   }
 };
 
@@ -145,7 +171,7 @@ const openSingleLessonModal = () => {
     student_id: allStudentsList.value[0]?.id || '',
     date: selectedDate.value,
     room: rooms.value[0] || 'PIANO 01',
-    teacher: teachers.value[0] || 'Thầy Trương Bảo Đi',
+    teacher: teachers.value[0] || '',
     time: '18:00 - 19:00',
     note: 'Buổi học bù / tăng cường',
   };
@@ -154,16 +180,16 @@ const openSingleLessonModal = () => {
 
 const submitSingleLesson = async () => {
   if (!singleLessonForm.value.student_id) {
-    alert('Vui lòng chọn học viên!');
+    notify.warning('Vui lòng chọn học viên!');
     return;
   }
   try {
     await dailyAttendanceApi.scheduleSingleLesson(singleLessonForm.value);
     showSingleLessonModal.value = false;
-    alert('Đã đặt buổi học lẻ thành công!');
+    notify.success('Đã đặt buổi học lẻ thành công!');
     await fetchData();
   } catch (err) {
-    alert('Lỗi: ' + (err.response?.data?.message || err.message));
+    notify.apiError(err, err.message);
   }
 };
 
@@ -180,16 +206,12 @@ const submitNote = async () => {
   showNoteModal.value = false;
 };
 
-// Mở modal nhắn Zalo
+// Mở modal mẫu tin nhắn
 const openMessageModal = (student) => {
   selectedStudent.value = student;
   showMessageModal.value = true;
 };
 
-const getZaloLink = (phone) => {
-  if (!phone) return '#';
-  return `https://zalo.me/${phone.replace(/[^0-9]/g, '')}`;
-};
 </script>
 
 <template>
@@ -217,7 +239,7 @@ const getZaloLink = (phone) => {
           <div class="relative w-full sm:w-56">
             <input
               v-model="searchQuery"
-              @keyup.enter="fetchData"
+              @keyup.enter="applyFilters"
               type="text"
               placeholder="Tìm học viên..."
               class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 placeholder:text-slate-400 focus:border-rose-500 focus:outline-none"
@@ -243,7 +265,7 @@ const getZaloLink = (phone) => {
           <input
             v-model="selectedDate"
             type="date"
-            @change="fetchData"
+            @change="applyFilters"
             class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           />
         </div>
@@ -252,7 +274,7 @@ const getZaloLink = (phone) => {
         <div>
           <select
             v-model="selectedCenter"
-            @change="fetchData"
+            @change="applyFilters"
             class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="all">Tất cả trung tâm</option>
@@ -264,7 +286,7 @@ const getZaloLink = (phone) => {
         <div>
           <select
             v-model="selectedClass"
-            @change="fetchData"
+            @change="applyFilters"
             class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="all">Tất cả lớp học</option>
@@ -276,7 +298,7 @@ const getZaloLink = (phone) => {
         <div>
           <select
             v-model="selectedRoom"
-            @change="fetchData"
+            @change="applyFilters"
             class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="all">Tất cả phòng học</option>
@@ -288,7 +310,7 @@ const getZaloLink = (phone) => {
         <div>
           <select
             v-model="selectedTeacher"
-            @change="fetchData"
+            @change="applyFilters"
             class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="all">Tất cả giáo viên</option>
@@ -300,7 +322,7 @@ const getZaloLink = (phone) => {
         <div>
           <select
             v-model="selectedShift"
-            @change="fetchData"
+            @change="applyFilters"
             class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="all">Tất cả ca học</option>
@@ -512,11 +534,11 @@ const getZaloLink = (phone) => {
                 <FileEdit class="h-3.5 w-3.5" />
               </button>
 
-              <!-- Nút [ Zalo ] -->
+              <!-- Nút [ Mẫu tin nhắn ] -->
               <button
                 type="button"
                 @click="openMessageModal(st)"
-                title="Gửi báo cáo qua Zalo"
+                title="Mẫu tin nhắn báo cáo buổi học"
                 class="rounded-xl border border-blue-200 bg-blue-50/50 p-1.5 text-blue-600 hover:bg-blue-100 cursor-pointer"
               >
                 <MessageSquare class="h-3.5 w-3.5" />
@@ -525,6 +547,7 @@ const getZaloLink = (phone) => {
           </div>
         </div>
       </div>
+      <Pagination :meta="pagination" class="mt-4" @change-page="changePage" @change-per-page="changePerPage" />
     </div>
 
     <!-- MODAL 1: ĐẶT BUỔI HỌC LẺ (Buổi bù / Tăng cường) -->
@@ -676,7 +699,7 @@ const getZaloLink = (phone) => {
       </div>
     </div>
 
-    <!-- MODAL 3: MẪU TIN NHẮN ZALO -->
+    <!-- MODAL 3: MẪU TIN NHẮN -->
     <MessageTemplateModal
       :show="showMessageModal"
       :student="selectedStudent"

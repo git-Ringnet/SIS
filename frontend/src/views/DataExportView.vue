@@ -1,5 +1,7 @@
 <script setup>
-import { ref } from 'vue';
+import { useCenters } from '../services/useCenters';
+import { notify } from '../services/notify';
+import { ref, onMounted } from 'vue';
 import { exportApi } from '../services/api';
 import {
   ArrowLeft,
@@ -49,26 +51,22 @@ const exportCards = [
   },
 ];
 
-const handleExport = (type, title) => {
+const { centerNames, loadCenters } = useCenters();
+onMounted(() => loadCenters());
+
+const handleExport = async (type, title) => {
   downloadingType.value = type;
-  const url = exportApi.getExportUrl(type, selectedCenter.value);
-
-  // Trigger download
-  const link = document.createElement('a');
-  link.href = url;
-  link.setAttribute('download', '');
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-
-  successMessage.value = `Đã xuất ${title} thành công! File CSV chuẩn tiếng Việt đã được tải xuống máy tính.`;
-  setTimeout(() => {
+  try {
+    await exportApi.exportCsv(type, selectedCenter.value);
+    successMessage.value = `Đã xuất ${title} thành công! File CSV chuẩn tiếng Việt đã được tải xuống máy tính.`;
+    setTimeout(() => {
+      successMessage.value = '';
+    }, 4000);
+  } catch (err) {
+    notify.apiError(err, `Không thể xuất ${title}`);
+  } finally {
     downloadingType.value = null;
-  }, 1000);
-
-  setTimeout(() => {
-    successMessage.value = '';
-  }, 4000);
+  }
 };
 </script>
 
@@ -119,9 +117,7 @@ const handleExport = (type, title) => {
           class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
         >
           <option value="all">Tất cả trung tâm</option>
-          <option value="Khoa Anh Music Hóc Môn">Khoa Anh Music Hóc Môn</option>
-          <option value="Khoa Anh Music Quận 12">Khoa Anh Music Quận 12</option>
-          <option value="Khoa Anh Music Gò Vấp">Khoa Anh Music Gò Vấp</option>
+          <option v-for="c in centerNames" :key="c" :value="c">{{ c }}</option>
         </select>
       </div>
     </div>

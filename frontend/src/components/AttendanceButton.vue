@@ -1,4 +1,5 @@
 <script setup>
+import { notify } from '../services/notify';
 import { ref, watch } from 'vue';
 import { studentApi } from '../services/api';
 import { CheckCircle2, RotateCcw, UserCheck } from 'lucide-vue-next';
@@ -29,7 +30,7 @@ watch(
 
 const markAttendance = async () => {
   if (remainingSessions.value <= 0) {
-    alert('Học viên đã hết số buổi học! Vui lòng gia hạn thêm khóa học.');
+    notify.warning('Học viên đã hết số buổi học! Vui lòng gia hạn thêm khóa học.');
     return;
   }
 
@@ -47,7 +48,7 @@ const markAttendance = async () => {
   } catch (err) {
     remainingSessions.value = prev;
     justAttended.value = false;
-    alert(err.response?.data?.error || err.response?.data?.message || 'Lỗi khi điểm danh');
+    notify.apiError(err, 'Lỗi khi điểm danh');
   } finally {
     isMarking.value = false;
   }
@@ -61,7 +62,7 @@ const undoAttendance = async () => {
     justAttended.value = false;
     emit('undone', res.data.student);
   } catch (err) {
-    alert(err.response?.data?.error || 'Không thể hoàn tác');
+    notify.apiError(err, 'Không thể hoàn tác');
   } finally {
     isMarking.value = false;
   }

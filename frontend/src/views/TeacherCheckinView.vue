@@ -1,4 +1,6 @@
 <script setup>
+import { toLocalDateString, toLocalMonthString } from '../services/date';
+import { notify, errorMessage } from '../services/notify';
 import { ref, onMounted, computed } from 'vue';
 import { teacherCheckinApi } from '../services/api';
 import {
@@ -18,14 +20,14 @@ import {
 } from 'lucide-vue-next';
 
 // Bộ lọc ngày hôm nay
-const selectedDate = ref('2026-10-11');
+const selectedDate = ref(toLocalDateString());
 const selectedCenter = ref('all');
 const selectedShiftType = ref('all');
 const selectedShiftTime = ref('all');
 const selectedTeacher = ref('all');
 
 // Bộ lọc tháng
-const selectedMonth = ref('2026-10');
+const selectedMonth = ref(toLocalMonthString());
 
 // Dữ liệu API
 const loading = ref(true);
@@ -126,7 +128,7 @@ const performCheckin = async (shift, isLate = false) => {
     });
     await fetchData();
   } catch (err) {
-    alert('Lỗi check-in: ' + (err.response?.data?.message || err.message));
+    notify.error('Lỗi check-in', { description: errorMessage(err, err.message) });
   }
 };
 
@@ -136,7 +138,7 @@ const openAbsenceModal = (shift) => {
   absenceForm.value = {
     shift_id: shift.id,
     status: 'excused_absence',
-    substitute_teacher: teachers.value[0] || 'Thầy Minh',
+    substitute_teacher: teachers.value[0] || '',
     reason: '',
   };
   showAbsenceModal.value = true;
@@ -148,7 +150,7 @@ const submitAbsence = async () => {
     showAbsenceModal.value = false;
     await fetchData();
   } catch (err) {
-    alert('Lỗi ghi nhận: ' + (err.response?.data?.message || err.message));
+    notify.error('Lỗi ghi nhận', { description: errorMessage(err, err.message) });
   }
 };
 
@@ -163,17 +165,20 @@ const submitRates = async () => {
     await teacherCheckinApi.updateRates(ratesForm.value);
     rates.value = { ...ratesForm.value };
     showRatesModal.value = false;
-    alert('Đã cập nhật đơn giá ca dạy thành công!');
+    notify.success('Đã cập nhật đơn giá ca dạy thành công!');
     await fetchData();
   } catch (err) {
-    alert('Lỗi cập nhật: ' + (err.response?.data?.message || err.message));
+    notify.error('Lỗi cập nhật', { description: errorMessage(err, err.message) });
   }
 };
 
 // Xuất file Excel tháng
-const exportMonthly = () => {
-  const url = teacherCheckinApi.getExportUrl(selectedMonth.value);
-  window.open(url, '_blank');
+const exportMonthly = async () => {
+  try {
+    await teacherCheckinApi.exportMonthly(selectedMonth.value);
+  } catch (err) {
+    notify.apiError(err, 'Không thể xuất file ca dạy');
+  }
 };
 
 // Copy link QR

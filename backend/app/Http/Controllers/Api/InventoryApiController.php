@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Support\CenterStore;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -25,78 +26,8 @@ class InventoryApiController extends Controller
             }
         }
 
-        // Dữ liệu mẫu chuẩn cho trung tâm âm nhạc Khoa Anh Music
-        $defaultData = [
-            [
-                'id' => 1,
-                'name' => 'Giáo trình Piano Alfred Tập 1',
-                'code' => 'HC-ALFRED-01',
-                'category' => 'Giáo trình',
-                'unit' => 'Cuốn',
-                'center' => 'Khoa Anh Music Hóc Môn',
-                'cost_price' => 60000,
-                'sell_price' => 120000,
-                'quantity' => 24,
-                'min_threshold' => 5,
-                'note' => 'Giáo trình nhập khẩu bản quyền, kèm sticker nốt nhạc',
-            ],
-            [
-                'id' => 2,
-                'name' => 'Capo Guitar Musedo MC-1',
-                'code' => 'HC-CAPO-01',
-                'category' => 'Phụ kiện',
-                'unit' => 'Cái',
-                'center' => 'Khoa Anh Music Hóc Môn',
-                'cost_price' => 45000,
-                'sell_price' => 85000,
-                'quantity' => 15,
-                'min_threshold' => 3,
-                'note' => 'Hợp kim nhôm bền, đệm cao su bảo vệ cần đàn',
-            ],
-            [
-                'id' => 3,
-                'name' => 'Bộ dây đàn Guitar Acoustic D\'Addario EJ10',
-                'code' => 'HC-STR-EJ10',
-                'category' => 'Phụ kiện',
-                'unit' => 'Bộ',
-                'center' => 'Khoa Anh Music Hóc Môn',
-                'cost_price' => 95000,
-                'sell_price' => 160000,
-                'quantity' => 2,
-                'min_threshold' => 5,
-                'note' => 'Dây bấm êm tay cho học viên mới bắt đầu',
-            ],
-            [
-                'id' => 4,
-                'name' => 'Dùi trống Jazz Zildjian 5A Gỗ Hickory',
-                'code' => 'HC-DRUM-5A',
-                'category' => 'Nhạc cụ',
-                'unit' => 'Cặp',
-                'center' => 'Khoa Anh Music Quận 12',
-                'cost_price' => 120000,
-                'sell_price' => 220000,
-                'quantity' => 8,
-                'min_threshold' => 4,
-                'note' => 'Gỗ chống rung tốt, thích hợp tập luyện phòng học',
-            ],
-            [
-                'id' => 5,
-                'name' => 'Tập vở chép nhạc 5 dòng kẻ 48 trang',
-                'code' => 'HC-VO-NHAC',
-                'category' => 'Giáo trình',
-                'unit' => 'Cuốn',
-                'center' => 'Khoa Anh Music Gò Vấp',
-                'cost_price' => 12000,
-                'sell_price' => 25000,
-                'quantity' => 45,
-                'min_threshold' => 10,
-                'note' => 'Giấy dày không lem mực',
-            ],
-        ];
-
-        Storage::put($path, json_encode($defaultData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-
-        return $defaultData;
+        // Chưa có dữ liệu thì bắt đầu với kho trống
+        return [];
     }
 
     private function saveInventoryData(array $items): void
@@ -127,11 +58,7 @@ class InventoryApiController extends Controller
             }));
         }
 
-        $centers = [
-            'Khoa Anh Music Hóc Môn',
-            'Khoa Anh Music Quận 12',
-            'Khoa Anh Music Gò Vấp',
-        ];
+        $centers = CenterStore::names();
 
         $totalStockValue = array_reduce($items, function ($acc, $it) {
             return $acc + (($it['quantity'] ?? 0) * ($it['cost_price'] ?? 0));
@@ -359,7 +286,7 @@ class InventoryApiController extends Controller
                 'Giáo trình Piano Alfred Tập 1',
                 'Giáo trình',
                 'Cuốn',
-                'Khoa Anh Music Hóc Môn',
+                CenterStore::defaultName(),
                 60000,
                 120000,
                 20,
@@ -371,7 +298,7 @@ class InventoryApiController extends Controller
                 'Capo Guitar Alice A007',
                 'Phụ kiện',
                 'Cái',
-                'Khoa Anh Music Hóc Môn',
+                CenterStore::defaultName(),
                 35000,
                 70000,
                 15,
@@ -433,7 +360,7 @@ class InventoryApiController extends Controller
 
             $category = trim($row[2] ?? '') ?: 'Học cụ';
             $unit = trim($row[3] ?? '') ?: 'Cái';
-            $center = trim($row[4] ?? '') ?: 'Khoa Anh Music Hóc Môn';
+            $center = trim($row[4] ?? '') ?: CenterStore::defaultName();
             $costPrice = isset($row[5]) ? (float) str_replace([',', '.'], '', $row[5]) : 0;
             $sellPrice = isset($row[6]) ? (float) str_replace([',', '.'], '', $row[6]) : 0;
             $quantity = isset($row[7]) ? (int) $row[7] : 0;

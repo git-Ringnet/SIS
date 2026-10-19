@@ -22,7 +22,7 @@ return new class extends Migration
             $table->integer('total_sessions')->default(12);
             $table->integer('remaining_sessions')->default(12);
             $table->string('status', 20)->default('active'); // active, paused, dropped, completed
-            $table->string('retention_status', 30)->default('normal'); // normal, invoice_sent, following_up, renewed
+            $table->string('retention_status', 100)->default('normal'); // normal, invoice_sent, following_up, renewed
             $table->timestamp('last_retention_contact_at')->nullable();
             $table->integer('consecutive_absences')->default(0);
             $table->date('join_date')->nullable();

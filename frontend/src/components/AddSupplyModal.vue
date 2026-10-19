@@ -1,7 +1,10 @@
 <script setup>
+import { useCenters } from '../services/useCenters';
+import { toLocalDateString } from '../services/date';
+import { notify } from '../services/notify';
 import { ref, watch, computed } from 'vue';
 import Modal from './Modal.vue';
-import { studentApi } from '../services/api';
+import { studentApi, inventoryApi } from '../services/api';
 import { Package, X, Calendar, Building2, Search, Check, Plus, Minus, Trash2 } from 'lucide-vue-next';
 
 const props = defineProps({
@@ -11,20 +14,28 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'added']);
 
-const deliveryDate = ref(new Date().toISOString().split('T')[0]);
-const selectedCenter = ref('Khoa Anh Music Hóc Môn');
+const deliveryDate = ref(toLocalDateString());
+const { centerNames, defaultCenter, loadCenters } = useCenters();
+const selectedCenter = ref('');
 const searchQuery = ref('');
 const isSubmitting = ref(false);
 
-const availableSupplies = [
-  { id: 1, name: 'Sách giáo trình Piano Căn Bản (Tập 1)', price: 150000, category: 'Giáo trình' },
-  { id: 2, name: 'Bộ màu vẽ Acrylic & 6 cọ vẽ chuyên dụng', price: 220000, category: 'Học cụ mỹ thuật' },
-  { id: 3, name: 'Đàn Ukulele 21 inch Soprano', price: 450000, category: 'Nhạc cụ' },
-  { id: 4, name: 'Bộ 3 phím gảy (Pick) & Dây đàn Guitar Acoustic', price: 80000, category: 'Phụ kiện' },
-  { id: 5, name: 'Áo thun đồng phục Khoa Anh Music & Art', price: 120000, category: 'Đồng phục' },
-  { id: 6, name: 'Sổ tay chép nhạc lý & bút kẻ khuôn nhạc', price: 45000, category: 'Văn phòng phẩm' },
-  { id: 7, name: 'Túi vải Canvas Khoa Anh Music', price: 90000, category: 'Quà tặng' },
-];
+// Danh mục học cụ lấy từ màn Học cụ, theo trung tâm đang chọn
+const inventoryItems = ref([]);
+const availableSupplies = computed(() =>
+  inventoryItems.value
+    .filter((it) => !selectedCenter.value || it.center === selectedCenter.value)
+    .map((it) => ({ id: it.id, name: it.name, price: it.sell_price ?? 0, category: it.category })),
+);
+
+const loadInventory = async () => {
+  try {
+    const res = await inventoryApi.getAll();
+    inventoryItems.value = res.data?.items || [];
+  } catch (err) {
+    console.error('Lỗi tải danh mục học cụ:', err);
+  }
+};
 
 const selectedItems = ref([]);
 
@@ -32,7 +43,11 @@ watch(
   () => props.show,
   (val) => {
     if (val) {
-      deliveryDate.value = new Date().toISOString().split('T')[0];
+      loadInventory();
+      loadCenters().then(() => {
+        selectedCenter.value = props.student?.center || defaultCenter.value;
+      });
+      deliveryDate.value = toLocalDateString();
       searchQuery.value = '';
       selectedItems.value = [];
     }
@@ -40,8 +55,8 @@ watch(
 );
 
 const filteredCatalog = computed(() => {
-  if (!searchQuery.value.trim()) return availableSupplies;
-  return availableSupplies.filter((item) =>
+  if (!searchQuery.value.trim()) return availableSupplies.value;
+  return availableSupplies.value.filter((item) =>
     item.name.toLowerCase().includes(searchQuery.value.toLowerCase().trim())
   );
 });
@@ -76,7 +91,7 @@ const formatVND = (val) => {
 
 const submitAddSupplies = async () => {
   if (!props.student || selectedItems.value.length === 0) {
-    alert('Vui lòng chọn ít nhất 1 học cụ để giao');
+    notify.warning('Vui lòng chọn ít nhất 1 học cụ để giao');
     return;
   }
 
@@ -90,7 +105,7 @@ const submitAddSupplies = async () => {
     emit('added');
     emit('close');
   } catch (err) {
-    alert(err.response?.data?.message || 'Có lỗi xảy ra khi thêm học cụ');
+    notify.apiError(err, 'Có lỗi xảy ra khi thêm học cụ');
   } finally {
     isSubmitting.value = false;
   }
@@ -133,9 +148,7 @@ const submitAddSupplies = async () => {
               v-model="selectedCenter"
               class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2 text-xs font-medium focus:border-red-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-red-500 transition-all"
             >
-              <option value="Khoa Anh Music Hóc Môn">Khoa Anh Music Hóc Môn</option>
-              <option value="Khoa Anh Art Quận 12">Khoa Anh Art Quận 12</option>
-              <option value="Cơ sở Gò Vấp">Cơ sở Gò Vấp</option>
+              <option v-for="c in centerNames" :key="c" :value="c">{{ c }}</option>
             </select>
           </div>
 

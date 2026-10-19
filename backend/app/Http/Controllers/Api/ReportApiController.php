@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Attendance;
 use App\Models\Student;
+use App\Support\CenterStore;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -13,7 +14,7 @@ class ReportApiController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $year = (int) ($request->input('year', 2026));
+        $year = (int) $request->input('year', now()->year);
         $month = $request->input('month', 'current');
         $center = $request->input('center', 'all');
         $roomFilter = $request->input('room', 'all');
@@ -67,11 +68,6 @@ class ReportApiController extends Controller
                 return $s->status === 'inactive' && $s->updated_at->between($monthStart, $monthEnd);
             })->count();
 
-            // Đảm bảo số liệu tháng 9 có cột như ảnh mẫu nếu database ít dữ liệu mẫu
-            if ($m === 9 && $newCount === 0) {
-                $newCount = 2;
-            }
-
             $newVsDrop[] = [
                 'month' => "Th{$m}",
                 'month_num' => $m,
@@ -88,9 +84,6 @@ class ReportApiController extends Controller
             $totalExpected = $attendedSessions + ($allStudents->sum('absences_used') > 0 ? 1 : 0);
 
             $rate = $totalExpected > 0 ? round(($attendedSessions / max(1, $totalExpected)) * 100) : 0;
-            if ($m === 9 && $rate === 0) {
-                $rate = 75;
-            }
 
             $attendanceRates[] = [
                 'month' => "Th{$m}",
@@ -100,97 +93,62 @@ class ReportApiController extends Controller
             ];
         }
 
-        // 2. Danh sách phòng học & công suất khung giờ (Room Capacity Report)
-        $roomSlots = [
-            [
-                'id' => 1,
-                'room' => 'GROUP',
-                'day' => 'Thứ 4',
-                'time' => '10:00',
-                'schedule_label' => 'Thứ 4 - 10:00',
-                'current_students' => 1,
-                'capacity' => 6,
-                'available' => 5,
-                'status' => 'high', // còn nhiều chỗ
-            ],
-            [
-                'id' => 2,
-                'room' => 'PIANO 01',
-                'day' => 'Thứ 2',
-                'time' => '17:30',
-                'schedule_label' => 'Thứ 2 - 17:30',
-                'current_students' => 1,
-                'capacity' => 1,
-                'available' => 0,
-                'status' => 'full', // đã đầy
-            ],
-            [
-                'id' => 3,
-                'room' => 'PIANO 02',
-                'day' => 'Thứ 5',
-                'time' => '18:00',
-                'schedule_label' => 'Thứ 5 - 18:00',
-                'current_students' => 0,
-                'capacity' => 1,
-                'available' => 1,
-                'status' => 'high',
-            ],
-            [
-                'id' => 4,
-                'room' => 'GUITAR 01',
-                'day' => 'Thứ 7',
-                'time' => '09:00',
-                'schedule_label' => 'Thứ 7 - 09:00',
-                'current_students' => 3,
-                'capacity' => 4,
-                'available' => 1,
-                'status' => 'medium', // gần đầy
-            ],
-            [
-                'id' => 5,
-                'room' => 'GUITAR 01',
-                'day' => 'Chủ nhật',
-                'time' => '15:00',
-                'schedule_label' => 'Chủ nhật - 15:00',
-                'current_students' => 4,
-                'capacity' => 4,
-                'available' => 0,
-                'status' => 'full',
-            ],
-            [
-                'id' => 6,
-                'room' => 'VOCAL 01',
-                'day' => 'Thứ 3',
-                'time' => '19:00',
-                'schedule_label' => 'Thứ 3 - 19:00',
-                'current_students' => 2,
-                'capacity' => 5,
-                'available' => 3,
-                'status' => 'high',
-            ],
-            [
-                'id' => 7,
-                'room' => 'DRUM 01',
-                'day' => 'Thứ 6',
-                'time' => '18:30',
-                'schedule_label' => 'Thứ 6 - 18:30',
-                'current_students' => 1,
-                'capacity' => 2,
-                'available' => 1,
-                'status' => 'medium',
-            ],
-            [
-                'id' => 8,
-                'room' => 'GROUP',
-                'day' => 'Thứ 7',
-                'time' => '14:00',
-                'schedule_label' => 'Thứ 7 - 14:00',
-                'current_students' => 5,
-                'capacity' => 6,
-                'available' => 1,
-                'status' => 'medium',
-            ],
-        ];
+        // 2. Công suất phòng học theo khung giờ, tính từ lịch học cố định của học viên đang học
+        $roomCenter = $request->input('room_center', 'all');
+        $dayLabels = [1 => 'Thứ 2', 2 => 'Thứ 3', 3 => 'Thứ 4', 4 => 'Thứ 5', 5 => 'Thứ 6', 6 => 'Thứ 7', 0 => 'Chủ nhật'];
+
+        // Sức chứa theo tên phòng (ưu tiên phòng thuộc đúng trung tâm của học viên)
+        $capacities = [];
+        foreach (CenterStore::all() as $c) {
+            foreach ($c['rooms'] ?? [] as $r) {
+                $capacities[$c['name'].'|'.$r['name']] = (int) ($r['capacity'] ?? 1);
+                $capacities['*|'.$r['name']] ??= (int) ($r['capacity'] ?? 1);
+            }
+        }
+
+        $scheduledStudents = Student::where('status', 'active')
+            ->whereNotNull('class_days')
+            ->whereNotNull('room')
+            ->whereNotNull('class_start_time')
+            ->when($roomCenter !== 'all', fn ($q) => $q->where('center', $roomCenter))
+            ->get(['id', 'center', 'room', 'class_days', 'class_start_time']);
+
+        $slots = [];
+        foreach ($scheduledStudents as $st) {
+            foreach ($st->class_days ?? [] as $day) {
+                $day = (int) $day;
+                $key = "{$st->room}|{$day}|{$st->class_start_time}";
+                $slots[$key] ??= [
+                    'room' => $st->room,
+                    'day_number' => $day,
+                    'day' => $dayLabels[$day] ?? '',
+                    'time' => $st->class_start_time,
+                    'capacity' => $capacities[$st->center.'|'.$st->room] ?? $capacities['*|'.$st->room] ?? 1,
+                    'current_students' => 0,
+                ];
+                $slots[$key]['current_students']++;
+            }
+        }
+
+        $roomSlots = collect($slots)
+            ->sortBy(fn ($s) => sprintf('%d %s %s', $s['day_number'] === 0 ? 7 : $s['day_number'], $s['time'], $s['room']))
+            ->values()
+            ->map(function ($s, $i) {
+                $available = max(0, $s['capacity'] - $s['current_students']);
+
+                return [
+                    'id' => $i + 1,
+                    'room' => $s['room'],
+                    'day' => $s['day'],
+                    'time' => $s['time'],
+                    'schedule_label' => "{$s['day']} - {$s['time']}",
+                    'current_students' => $s['current_students'],
+                    'capacity' => $s['capacity'],
+                    'available' => $available,
+                    'status' => $available === 0 ? 'full' : ($available <= max(1, intdiv($s['capacity'], 4)) ? 'medium' : 'high'),
+                ];
+            })
+            ->all();
 
         // Lọc dữ liệu phòng học
         $filteredSlots = collect($roomSlots);
@@ -216,20 +174,8 @@ class ReportApiController extends Controller
                 'day' => $dayFilter,
                 'only_available' => $onlyAvailable,
             ],
-            'centers' => [
-                'Khoa Anh Music Hóc Môn',
-                'Khoa Anh Music Quận 12',
-                'Khoa Anh Music Gò Vấp',
-            ],
-            'rooms' => [
-                'Tất cả phòng',
-                'GROUP',
-                'PIANO 01',
-                'PIANO 02',
-                'GUITAR 01',
-                'VOCAL 01',
-                'DRUM 01',
-            ],
+            'centers' => CenterStore::names(),
+            'rooms' => CenterStore::roomNames($roomCenter),
             'days' => [
                 'Tất cả các ngày',
                 'Thứ 2',

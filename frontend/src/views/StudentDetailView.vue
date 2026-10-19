@@ -1,4 +1,6 @@
 <script setup>
+import { toLocalDateString } from '../services/date';
+import { notify } from '../services/notify';
 import { ref, onMounted, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { studentApi } from '../services/api';
@@ -95,7 +97,7 @@ const handleQuickAttendance = async () => {
     });
     fetchData();
   } catch (err) {
-    alert(err.response?.data?.error || err.response?.data?.message || 'Có lỗi xảy ra khi điểm danh');
+    notify.apiError(err, 'Có lỗi xảy ra khi điểm danh');
   } finally {
     isSubmitting.value = false;
   }
@@ -112,9 +114,9 @@ const saveAttendedSessions = async () => {
       remaining_sessions: newRemaining,
     });
     fetchData();
-    alert('Đã lưu số buổi điểm danh!');
+    notify.success('Đã lưu số buổi điểm danh!');
   } catch (err) {
-    alert(err.response?.data?.message || 'Lỗi khi cập nhật');
+    notify.apiError(err, 'Lỗi khi cập nhật');
   } finally {
     isSubmitting.value = false;
   }
@@ -132,9 +134,9 @@ const saveTotalSessions = async () => {
       remaining_sessions: newRemaining,
     });
     fetchData();
-    alert('Đã lưu tổng số buổi học!');
+    notify.success('Đã lưu tổng số buổi học!');
   } catch (err) {
-    alert(err.response?.data?.message || 'Lỗi khi cập nhật');
+    notify.apiError(err, 'Lỗi khi cập nhật');
   } finally {
     isSubmitting.value = false;
   }
@@ -147,9 +149,9 @@ const saveAllowedAbsences = async () => {
       allowed_absences: Number(allowedAbsencesInput.value),
     });
     fetchData();
-    alert('Đã lưu giới hạn vắng có phép!');
+    notify.success('Đã lưu giới hạn vắng có phép!');
   } catch (err) {
-    alert(err.response?.data?.message || 'Lỗi khi cập nhật');
+    notify.apiError(err, 'Lỗi khi cập nhật');
   } finally {
     isSubmitting.value = false;
   }
@@ -181,7 +183,7 @@ const submitAbsence = async () => {
     absenceNote.value = '';
     fetchData();
   } catch (err) {
-    alert(err.response?.data?.message || 'Có lỗi xảy ra');
+    notify.apiError(err, 'Có lỗi xảy ra');
   } finally {
     isSubmitting.value = false;
   }
@@ -190,7 +192,7 @@ const submitAbsence = async () => {
 const formatDate = (val) => {
   if (!val) return '—';
   const d = new Date(val);
-  return d.toISOString().split('T')[0];
+  return toLocalDateString(d);
 };
 
 const formatDateDMY = (val) => {
@@ -201,7 +203,7 @@ const formatDateDMY = (val) => {
 
 const copyPlaceholder = () => {
   navigator.clipboard?.writeText(student.value?.name || '');
-  alert('Đã sao chép tên học viên: ' + student.value?.name);
+  notify.success('Đã sao chép tên học viên: ' + student.value?.name);
 };
 
 const parentPortalUrl = computed(() => {
@@ -252,7 +254,7 @@ const openParentPortalInNewTab = () => {
               Ngày nhập học: <span class="font-medium text-slate-700">{{ formatDate(student.join_date) }}</span>
             </p>
             <p class="text-xs text-slate-500 mt-0.5">
-              Trung tâm: <span class="font-medium text-slate-700">{{ student.center || 'Khoa Anh Music Hóc Môn' }}</span>
+              Trung tâm: <span class="font-medium text-slate-700">{{ student.center || '—' }}</span>
             </p>
           </div>
         </div>
@@ -373,7 +375,7 @@ const openParentPortalInNewTab = () => {
             <div class="flex items-center gap-1">
               <CalendarDays class="h-3.5 w-3.5 text-slate-400" />
               <span>
-                Bắt đầu {{ formatDateDMY(student.join_date) }} &bull; Kết thúc dự kiến {{ student.end_date ? formatDateDMY(student.end_date) : '9/12/2026' }} &bull; {{ student.schedule_info || '1 buổi/tuần' }}
+                Bắt đầu {{ formatDateDMY(student.join_date) }} &bull; Kết thúc dự kiến {{ student.end_date ? formatDateDMY(student.end_date) : '—' }} &bull; {{ student.schedule_info || '1 buổi/tuần' }}
               </span>
             </div>
             <button @click="copyPlaceholder" class="text-slate-400 hover:text-slate-600 font-medium">

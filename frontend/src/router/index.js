@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
+import { isPathBlocked } from '../services/permissions';
 import DashboardView from '../views/DashboardView.vue';
 import RetentionView from '../views/RetentionView.vue';
 import StudentsView from '../views/StudentsView.vue';
@@ -10,6 +11,8 @@ import CentersView from '../views/CentersView.vue';
 import ReportsView from '../views/ReportsView.vue';
 import DataExportView from '../views/DataExportView.vue';
 import SettingsView from '../views/SettingsView.vue';
+import ActivityLogsView from '../views/ActivityLogsView.vue';
+import BackupsView from '../views/BackupsView.vue';
 import StaffView from '../views/StaffView.vue';
 import InactiveStudentsView from '../views/InactiveStudentsView.vue';
 import BirthdaysView from '../views/BirthdaysView.vue';
@@ -49,6 +52,8 @@ const routes = [
   { path: '/centers', name: 'centers', component: CentersView, meta: { title: 'Trung tâm' } },
   { path: '/staff', name: 'staff', component: StaffView, meta: { title: 'Nhân sự' } },
   { path: '/settings', name: 'settings', component: SettingsView, meta: { title: 'Cài đặt' } },
+  { path: '/settings/activity-logs', name: 'activity-logs', component: ActivityLogsView, meta: { title: 'Nhật ký hoạt động' } },
+  { path: '/settings/backups', name: 'backups', component: BackupsView, meta: { title: 'Sao lưu dữ liệu' } },
   { path: '/data', name: 'data', component: DataExportView, meta: { title: 'Dữ liệu' } },
   { path: '/reports', name: 'reports', component: ReportsView, meta: { title: 'Báo cáo' } },
 ];
@@ -70,6 +75,17 @@ router.beforeEach((to, from, next) => {
   }
 
   if (token && isPublic) {
+    return next('/');
+  }
+
+  // Nhân sự bị chặn trang này (cấu hình ở màn Nhân sự) thì quay về Bảng điều khiển
+  let user = null;
+  try {
+    user = JSON.parse(localStorage.getItem('auth_user') || 'null');
+  } catch {
+    user = null;
+  }
+  if (token && to.path !== '/' && isPathBlocked(user, to.path)) {
     return next('/');
   }
 

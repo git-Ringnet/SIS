@@ -1,20 +1,21 @@
 <script setup>
-import { ref, onMounted } from 'vue';
+import { useBrand } from '../services/useBrand';
+import { notify } from '../services/notify';
+import { ref, computed, onMounted } from 'vue';
+import { useAuth } from '../services/useAuth';
+import { isPageBlocked } from '../services/permissions';
 import { settingsApi } from '../services/api';
 import {
   ShieldCheck,
+  DatabaseBackup,
   Upload,
   Edit2,
-  CheckCircle2,
-  AlertCircle,
-  X,
-  Clock,
-  UserCheck,
 } from 'lucide-vue-next';
 
+const { setBrand } = useBrand();
+const { user: authUser } = useAuth();
+const canManageSettings = computed(() => !isPageBlocked(authUser.value, 'Cài đặt'));
 const loading = ref(true);
-const toastMessage = ref('');
-const toastType = ref('success');
 
 // Profile form
 const user = ref({
@@ -40,6 +41,9 @@ const brand = ref({
   category: 'Âm nhạc',
   scale: '100 – 300',
   logo_url: '',
+  bank_name: '',
+  bank_account: '',
+  bank_holder: '',
 });
 const savingBrand = ref(false);
 
@@ -53,16 +57,15 @@ const vat = ref({
 const editingVat = ref(false);
 const savingVat = ref(false);
 
-// Activity Logs Modal
-const showActivityModal = ref(false);
-const activityLogs = ref([]);
 
 const showToast = (msg, type = 'success') => {
-  toastMessage.value = msg;
-  toastType.value = type;
-  setTimeout(() => {
-    toastMessage.value = '';
-  }, 4000);
+  if (type === 'success') {
+    notify.success(msg);
+  } else if (msg.startsWith('Vui lòng')) {
+    notify.warning(msg);
+  } else {
+    notify.error(msg);
+  }
 };
 
 const fetchData = async () => {
@@ -77,9 +80,6 @@ const fetchData = async () => {
     }
     if (res.data?.vat) {
       vat.value = { ...vat.value, ...res.data.vat };
-    }
-    if (res.data?.activity_logs) {
-      activityLogs.value = res.data.activity_logs;
     }
   } catch (err) {
     console.error('Error fetching settings:', err);
@@ -135,6 +135,8 @@ const handleSaveBrand = async () => {
   try {
     savingBrand.value = true;
     const res = await settingsApi.updateBrand(brand.value);
+    // Cập nhật ngay tên + logo ở sidebar / tiêu đề tab
+    setBrand(res.data?.brand || brand.value);
     showToast(res.data?.message || 'Lưu thông tin thương hiệu thành công!');
   } catch (err) {
     showToast(err.response?.data?.message || 'Có lỗi xảy ra khi lưu thương hiệu', 'error');
@@ -172,12 +174,6 @@ const handleLogoUpload = (e) => {
     reader.readAsDataURL(file);
   }
 };
-
-const formatTime = (iso) => {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return d.toLocaleDateString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
-};
 </script>
 
 <template>
@@ -187,18 +183,6 @@ const formatTime = (iso) => {
       <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Cài đặt</h1>
     </div>
 
-    <!-- Toast Notification -->
-    <div
-      v-if="toastMessage"
-      :class="[
-        toastType === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800',
-        'rounded-xl border p-3.5 flex items-center gap-2.5 text-xs sm:text-sm font-medium shadow-xs transition-all'
-      ]"
-    >
-      <CheckCircle2 v-if="toastType === 'success'" class="h-4.5 w-4.5 text-emerald-600 shrink-0" />
-      <AlertCircle v-else class="h-4.5 w-4.5 text-rose-600 shrink-0" />
-      <span>{{ toastMessage }}</span>
-    </div>
 
     <!-- 1. TÀI KHOẢN -->
     <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
@@ -297,6 +281,7 @@ const formatTime = (iso) => {
       </div>
     </div>
 
+    <template v-if="canManageSettings">
     <!-- 3. NHẬT KÝ HOẠT ĐỘNG -->
     <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
       <div>
@@ -307,14 +292,33 @@ const formatTime = (iso) => {
       </div>
 
       <div>
-        <button
-          type="button"
-          @click="showActivityModal = true"
+        <router-link
+          to="/settings/activity-logs"
           class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-4 py-2 text-xs sm:text-sm font-semibold text-slate-700 shadow-2xs transition-all active:scale-[0.98]"
         >
           <ShieldCheck class="h-4 w-4 text-emerald-600" />
           <span>Theo dõi hoạt động của admins</span>
-        </button>
+        </router-link>
+      </div>
+    </div>
+
+    <!-- SAO LƯU DỮ LIỆU -->
+    <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
+      <div>
+        <h2 class="text-sm sm:text-base font-bold text-slate-900">Sao lưu dữ liệu</h2>
+        <p class="text-xs text-slate-500 mt-0.5">
+          Sao lưu toàn bộ dữ liệu hệ thống trên máy chủ và Google Drive, tải về hoặc khôi phục khi cần. Chỉ chủ trung tâm dùng được.
+        </p>
+      </div>
+
+      <div>
+        <router-link
+          to="/settings/backups"
+          class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-4 py-2 text-xs sm:text-sm font-semibold text-slate-700 shadow-2xs transition-all active:scale-[0.98]"
+        >
+          <DatabaseBackup class="h-4 w-4 text-rose-600" />
+          <span>Quản lý sao lưu</span>
+        </router-link>
       </div>
     </div>
 
@@ -332,8 +336,8 @@ const formatTime = (iso) => {
           <input
             v-model="brand.owner_email"
             type="email"
-            placeholder="kfreestyle15@gmail.com"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
+            disabled
+            class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs sm:text-sm text-slate-500 cursor-not-allowed"
           />
         </div>
 
@@ -343,7 +347,7 @@ const formatTime = (iso) => {
           <input
             v-model="brand.brand_name"
             type="text"
-            placeholder="Khoa Anh Music"
+            placeholder="Tên trung tâm của bạn"
             class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
           />
         </div>
@@ -383,7 +387,7 @@ const formatTime = (iso) => {
             <input
               v-model="brand.address"
               type="text"
-              placeholder="123 Tô Ký, Hóc Môn, TP.HCM"
+              placeholder="Số nhà, đường, quận / huyện, tỉnh / thành phố"
               class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
             />
           </div>
@@ -415,6 +419,26 @@ const formatTime = (iso) => {
               <option value="100 – 300">100 – 300</option>
               <option value="Trên 300">Trên 300</option>
             </select>
+          </div>
+        </div>
+
+        <!-- Thông tin chuyển khoản: in trên phiếu báo học phí PDF -->
+        <div>
+          <p class="text-xs font-bold text-slate-800">Thông tin chuyển khoản</p>
+          <p class="text-[11px] text-slate-500 mt-0.5">Hiển thị trên phiếu báo học phí PDF gửi phụ huynh.</p>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1.5">Ngân hàng</label>
+            <input v-model="brand.bank_name" type="text" placeholder="VD: MB Bank (Quân Đội)" class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500" />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1.5">Số tài khoản</label>
+            <input v-model="brand.bank_account" type="text" placeholder="VD: 0123456789" class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500" />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1.5">Chủ tài khoản</label>
+            <input v-model="brand.bank_holder" type="text" placeholder="VD: NGUYEN VAN A" class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500" />
           </div>
         </div>
       </div>
@@ -477,7 +501,7 @@ const formatTime = (iso) => {
             <input
               v-model="vat.company_name"
               type="text"
-              placeholder="Công ty TNHH Đào Tạo Âm Nhạc Khoa Anh"
+              placeholder="Tên công ty trên hoá đơn VAT"
               class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
             />
           </div>
@@ -507,7 +531,7 @@ const formatTime = (iso) => {
             <input
               v-model="vat.vat_address"
               type="text"
-              placeholder="123 Tô Ký, Hóc Môn, TP.HCM"
+              placeholder="Số nhà, đường, quận / huyện, tỉnh / thành phố"
               class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
             />
           </div>
@@ -532,59 +556,7 @@ const formatTime = (iso) => {
         </div>
       </div>
     </div>
+    </template>
 
-    <!-- ACTIVITY LOGS MODAL -->
-    <div
-      v-if="showActivityModal"
-      class="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
-    >
-      <div class="relative w-full max-w-xl bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
-        <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/80">
-          <div class="flex items-center gap-2 text-slate-900 font-bold text-sm">
-            <ShieldCheck class="h-4.5 w-4.5 text-emerald-600" />
-            <span>Nhật Ký Hoạt Động Của Quản Trị Viên</span>
-          </div>
-          <button
-            type="button"
-            @click="showActivityModal = false"
-            class="rounded-xl p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100"
-          >
-            <X class="h-5 w-5" />
-          </button>
-        </div>
-
-        <div class="p-6 space-y-3 max-h-96 overflow-y-auto">
-          <div
-            v-for="log in activityLogs"
-            :key="log.id"
-            class="rounded-xl border border-slate-200/80 p-3 bg-white space-y-1 shadow-2xs"
-          >
-            <div class="flex items-center justify-between text-xs">
-              <span class="font-bold text-slate-900 flex items-center gap-1.5">
-                <UserCheck class="h-3.5 w-3.5 text-indigo-600" />
-                {{ log.admin_name }}
-              </span>
-              <span class="text-slate-400 font-mono text-[11px] flex items-center gap-1">
-                <Clock class="h-3 w-3" />
-                {{ formatTime(log.created_at) }}
-              </span>
-            </div>
-            <p class="text-xs text-slate-700 font-medium">
-              {{ log.action }}
-            </p>
-          </div>
-        </div>
-
-        <div class="px-6 py-3 border-t border-slate-100 bg-slate-50 flex justify-end">
-          <button
-            type="button"
-            @click="showActivityModal = false"
-            class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-          >
-            Đóng
-          </button>
-        </div>
-      </div>
-    </div>
   </div>
 </template>

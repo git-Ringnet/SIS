@@ -17,6 +17,7 @@ const variantClasses = computed(() => {
     case 'blue':
       return 'bg-blue-50 text-blue-700 border-blue-200 ring-blue-600/10';
     case 'orange':
+    case 'amber':
       return 'bg-amber-50 text-amber-800 border-amber-200 ring-amber-600/10';
     case 'green':
       return 'bg-emerald-50 text-emerald-700 border-emerald-200 ring-emerald-600/10';

@@ -5,7 +5,6 @@ import MessageTemplateModal from '../components/MessageTemplateModal.vue';
 import {
   Cake,
   Gift,
-  MessageSquare,
   Calendar,
   Users,
   Sparkles,
@@ -14,7 +13,7 @@ import {
 const loading = ref(true);
 const selectedMonth = ref(10); // Tháng 10
 const selectedCenter = ref('all');
-const selectedYear = ref(2026);
+const selectedYear = ref(new Date().getFullYear());
 const students = ref([]);
 const centers = ref([]);
 const templates = ref([]);
@@ -52,10 +51,6 @@ const openGreetingModal = (student) => {
   showTemplateModal.value = true;
 };
 
-const getZaloLink = (phone) => {
-  if (!phone) return '#';
-  return `https://zalo.me/${phone.replace(/[^0-9]/g, '')}`;
-};
 </script>
 
 <template>
@@ -143,15 +138,6 @@ const getZaloLink = (phone) => {
 
           <!-- Right: Action Buttons -->
           <div class="flex items-center gap-2 shrink-0">
-            <a
-              :href="getZaloLink(s.parent_phone)"
-              target="_blank"
-              class="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50/70 hover:bg-blue-100 px-3 py-1.5 text-xs font-semibold text-blue-700 transition-all"
-            >
-              <MessageSquare class="h-3.5 w-3.5" />
-              <span>Zalo</span>
-            </a>
-
             <button
               type="button"
               @click="openGreetingModal(s)"

@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api',
+  baseURL: import.meta.env.VITE_API_URL || '/api',
   headers: {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
@@ -18,15 +18,54 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Token hết hạn / bị thu hồi: xoá phiên đăng nhập và đưa về trang đăng nhập
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const isAuthRequest = error.config?.url?.startsWith('/auth/');
+    if (error.response?.status === 401 && !isAuthRequest && localStorage.getItem('auth_token')) {
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('auth_user');
+      window.location.href = '/login';
+    }
+    return Promise.reject(error);
+  },
+);
+
+/**
+ * Tải file (CSV, Excel...) qua axios để request có kèm token đăng nhập,
+ * thay cho việc mở thẳng URL (không gửi được header Authorization).
+ */
+export const downloadFile = async (url, params = {}, fallbackName = 'download') => {
+  const res = await api.get(url, { params, responseType: 'blob', timeout: 60000 });
+  const disposition = res.headers['content-disposition'] || '';
+  const match = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  const fileName = match ? decodeURIComponent(match[1]) : fallbackName;
+
+  const href = URL.createObjectURL(res.data);
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 1000);
+};
+
+export const brandApi = {
+  get: () => api.get('/brand'),
+};
+
 export const authApi = {
   login: (data) => api.post('/auth/login', data),
   register: (data) => api.post('/auth/register', data),
-  logout: () => api.post('/auth/logout'),
+  // Token truyền vào trực tiếp vì lúc gọi, phiên đăng nhập đã được xoá khỏi localStorage
+  logout: (token) => api.post('/auth/logout', {}, { headers: { Authorization: `Bearer ${token}` } }),
   me: () => api.get('/auth/me'),
 };
 
 export const dashboardApi = {
-  getStats: () => api.get('/dashboard'),
+  getStats: (params) => api.get('/dashboard', { params }),
 };
 
 export const studentApi = {
@@ -38,8 +77,13 @@ export const studentApi = {
   recordAttendance: (id, data) => api.post(`/students/${id}/attendance`, data),
   undoAttendance: (id) => api.post(`/students/${id}/attendance/undo`),
   recordAbsence: (id, data) => api.post(`/students/${id}/absence`, data),
+  tuitionInvoicePdf: (id) => api.get(`/students/${id}/tuition-invoice.pdf`, { responseType: 'blob', timeout: 30000 }),
   addSupplies: (id, data) => api.post(`/students/${id}/supplies`, data),
   updateProgress: (id, data) => api.put(`/students/${id}/progress`, data),
+  downloadTemplate: () => api.get('/students/template', { responseType: 'blob' }),
+  importCsv: (formData) => api.post('/students/import', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
 };
 
 export const retentionApi = {
@@ -48,13 +92,20 @@ export const retentionApi = {
   addLog: (id, data) => api.post(`/retention/${id}/logs`, data),
 };
 
+export const messageTemplateApi = {
+  getAll: (params) => api.get('/message-templates', { params }),
+  create: (data) => api.post('/message-templates', data),
+  update: (id, data) => api.put(`/message-templates/${id}`, data),
+  reset: (id) => api.post(`/message-templates/${id}/reset`),
+};
+
 export const leadApi = {
   getAll: (params) => api.get('/leads', { params }),
   create: (data) => api.post('/leads', data),
   updateStatus: (id, data) => api.post(`/leads/${id}/status`, data),
   convertToStudent: (id, data) => api.post(`/leads/${id}/convert`, data),
   delete: (id) => api.delete(`/leads/${id}`),
-  getExportUrl: () => '/api/leads/export',
+  exportCsv: () => downloadFile('/leads/export', {}, 'khach-hang-tiem-nang.csv'),
 };
 
 export const courseApi = {
@@ -67,6 +118,9 @@ export const courseApi = {
 export const invoiceApi = {
   getAll: (params) => api.get('/invoices', { params }),
   create: (data) => api.post('/invoices', data),
+  update: (id, data) => api.put(`/invoices/${id}`, data),
+  delete: (id) => api.delete(`/invoices/${id}`),
+  downloadPdf: (inv) => downloadFile(`/invoices/${inv.id}/pdf`, {}, `${inv.invoice_code}.pdf`),
 };
 
 export const reportApi = {
@@ -74,10 +128,7 @@ export const reportApi = {
 };
 
 export const exportApi = {
-  getExportUrl: (type, center = 'all') => {
-    const base = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
-    return `${base}/export/${type}?center=${encodeURIComponent(center)}`;
-  },
+  exportCsv: (type, center = 'all') => downloadFile(`/export/${type}`, { center }, `${type}.csv`),
 };
 
 export const settingsApi = {
@@ -86,12 +137,29 @@ export const settingsApi = {
   updatePassword: (data) => api.put('/settings/password', data),
   updateBrand: (data) => api.put('/settings/brand', data),
   updateVat: (data) => api.put('/settings/vat', data),
+  getActivityLogs: (params) => api.get('/settings/activity-logs', { params }),
+};
+
+// Sao lưu & khôi phục dữ liệu (chỉ chủ trung tâm). Các thao tác có thể chạy lâu nên tăng timeout
+export const backupApi = {
+  getAll: () => api.get('/settings/backups'),
+  create: () => api.post('/settings/backups', {}, { timeout: 0 }),
+  upload: (file) => api.post(`/settings/backups/${file}/upload`, {}, { timeout: 0 }),
+  restore: (file, password) => api.post(`/settings/backups/${file}/restore`, { password }, { timeout: 0 }),
+  delete: (file) => api.delete(`/settings/backups/${file}`),
+  download: (file) => downloadFile(`/settings/backups/${file}/download`, {}, file),
+  import: (formData) => api.post('/settings/backups/import', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 0,
+  }),
 };
 
 export const staffApi = {
   getStaff: () => api.get('/staff'),
   createInvite: (data) => api.post('/staff/invites', data),
   updateRole: (id, data) => api.put(`/staff/members/${id}/role`, data),
+  updateCenter: (id, data) => api.put(`/staff/members/${id}/center`, data),
+  resetPassword: (id, data) => api.put(`/staff/members/${id}/password`, data),
   updatePermissions: (id, data) => api.put(`/staff/members/${id}/permissions`, data),
   deleteMember: (id) => api.delete(`/staff/members/${id}`),
 };
@@ -125,18 +193,15 @@ export const inventoryApi = {
   importCsv: (formData) => api.post('/inventory/import', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }),
-  getExportUrl: (center = 'all') => `/api/inventory/export?center=${encodeURIComponent(center)}`,
-  getTemplateUrl: () => '/api/inventory/template',
+  exportCsv: (center = 'all') => downloadFile('/inventory/export', { center }, 'hoc-cu.csv'),
+  downloadTemplate: () => downloadFile('/inventory/template', {}, 'mau-nhap-hoc-cu.csv'),
 };
 
 export const revenueApi = {
   getRevenue: (params) => api.get('/revenue', { params }),
   createRevenue: (data) => api.post('/revenue', data),
   createExpense: (data) => api.post('/revenue/expenses', data),
-  getExportUrl: (params = {}) => {
-    const q = new URLSearchParams(params).toString();
-    return `/api/revenue/export?${q}`;
-  },
+  exportCsv: (params = {}) => downloadFile('/revenue/export', params, 'doanh-thu.csv'),
 };
 
 export const absenceApi = {
@@ -151,7 +216,7 @@ export const teacherCheckinApi = {
   checkin: (data) => api.post('/teacher-checkin/checkin', data),
   recordAbsence: (data) => api.post('/teacher-checkin/absence', data),
   updateRates: (data) => api.post('/teacher-checkin/rates', data),
-  getExportUrl: (month = '2026-10') => `/api/teacher-checkin/export?month=${encodeURIComponent(month)}`,
+  exportMonthly: (month) => downloadFile('/teacher-checkin/export', { month }, `ca-day-${month}.csv`),
 };
 
 export const dailyAttendanceApi = {

@@ -1,11 +1,13 @@
 <script setup>
+import { toLocalDateString, addDays } from '../services/date';
+import { confirmDialog } from '../services/useConfirm';
+import { notify } from '../services/notify';
 import { ref, onMounted } from 'vue';
 import { absenceApi } from '../services/api';
 import MessageTemplateModal from '../components/MessageTemplateModal.vue';
 import {
   CalendarX,
   Phone,
-  MessageSquare,
   CalendarCheck,
   RotateCcw,
   Info,
@@ -82,25 +84,23 @@ const openCareModal = (st) => {
 
 const submitCare = async () => {
   if (!careForm.value.content.trim() || !selectedStudent.value) {
-    alert('Vui lòng nhập nội dung chăm sóc!');
+    notify.warning('Vui lòng nhập nội dung chăm sóc!');
     return;
   }
   try {
     await absenceApi.recordCare(selectedStudent.value.id, careForm.value);
     showCareModal.value = false;
-    alert(`Đã ghi nhận chăm sóc học viên ${selectedStudent.value.name}!`);
+    notify.success(`Đã ghi nhận chăm sóc học viên ${selectedStudent.value.name}!`);
     await fetchData();
   } catch (err) {
-    alert('Lỗi: ' + (err.response?.data?.message || err.message));
+    notify.apiError(err, err.message);
   }
 };
 
 // Mở modal Xếp lịch học bù
 const openMakeupModal = (st) => {
   selectedStudent.value = st;
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const dateStr = tomorrow.toISOString().split('T')[0];
+  const dateStr = toLocalDateString(addDays(1));
   makeupForm.value = {
     date: dateStr,
     time: '18:00',
@@ -116,34 +116,35 @@ const submitMakeup = async () => {
   try {
     await absenceApi.scheduleMakeup(selectedStudent.value.id, makeupForm.value);
     showMakeupModal.value = false;
-    alert(`Đã lên lịch học bù cho học viên ${selectedStudent.value.name}!`);
+    notify.success(`Đã lên lịch học bù cho học viên ${selectedStudent.value.name}!`);
     await fetchData();
   } catch (err) {
-    alert('Lỗi: ' + (err.response?.data?.message || err.message));
+    notify.apiError(err, err.message);
   }
 };
 
 // Xác nhận học viên đã đi học lại (Reset vắng liên tiếp về 0)
 const confirmReturned = async (st) => {
-  if (!confirm(`Xác nhận học viên "${st.name}" đã quay lại lớp và đặt lại số buổi vắng liên tiếp về 0?`)) return;
+  if (!(await confirmDialog({
+    title: 'Xác nhận học viên đã đi học lại?',
+    message: `Số buổi vắng liên tiếp của "${st.name}" sẽ được đặt lại về 0.`,
+    confirmText: 'Xác nhận',
+    variant: 'primary',
+  }))) return;
   try {
     await absenceApi.resetAbsences(st.id);
     await fetchData();
   } catch (err) {
-    alert('Lỗi: ' + (err.response?.data?.message || err.message));
+    notify.apiError(err, err.message);
   }
 };
 
-// Mở modal tin nhắn Zalo
+// Mở modal mẫu tin nhắn
 const openMessageModal = (st) => {
   selectedStudent.value = st;
   showMessageModal.value = true;
 };
 
-const getZaloLink = (phone) => {
-  if (!phone) return '#';
-  return `https://zalo.me/${phone.replace(/[^0-9]/g, '')}`;
-};
 </script>
 
 <template>
@@ -281,16 +282,6 @@ const getZaloLink = (phone) => {
               <Phone class="h-3.5 w-3.5 text-amber-600" />
               <span>Chăm sóc</span>
             </button>
-
-            <!-- Nút Nhắn Zalo -->
-            <a
-              :href="getZaloLink(st.parent_phone)"
-              target="_blank"
-              class="inline-flex items-center gap-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer"
-            >
-              <MessageSquare class="h-3.5 w-3.5" />
-              <span>Nhắn Zalo</span>
-            </a>
 
             <!-- Nút Mẫu tin nhắn -->
             <button
@@ -489,7 +480,7 @@ const getZaloLink = (phone) => {
       </div>
     </div>
 
-    <!-- MODAL 3: MẪU TIN NHẮN ZALO -->
+    <!-- MODAL 3: MẪU TIN NHẮN -->
     <MessageTemplateModal
       :show="showMessageModal"
       :student="selectedStudent"

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, X } from 'lucide-vue-next';
 
 const props = defineProps({
@@ -28,7 +28,42 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'change']);
 
 const containerRef = ref(null);
+const popupRef = ref(null);
 const isOpen = ref(false);
+// Lịch được Teleport ra <body> với vị trí fixed để không bị cắt bởi Modal (overflow-hidden)
+const popupStyle = ref({});
+
+const POPUP_WIDTH = 288; // w-72
+const GAP = 6;
+const VIEWPORT_MARGIN = 8;
+
+const updatePosition = () => {
+  const anchor = containerRef.value;
+  if (!anchor || !isOpen.value) return;
+  const rect = anchor.getBoundingClientRect();
+  const popupHeight = popupRef.value?.offsetHeight || 360;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  // Mặc định mở xuống dưới; thiếu chỗ thì mở lên trên
+  let top = rect.bottom + GAP;
+  if (top + popupHeight > vh - VIEWPORT_MARGIN && rect.top - GAP - popupHeight >= VIEWPORT_MARGIN) {
+    top = rect.top - GAP - popupHeight;
+  }
+
+  // Căn trái theo ô nhập, nhưng không tràn khỏi mép phải màn hình
+  const left = Math.max(VIEWPORT_MARGIN, Math.min(rect.left, vw - POPUP_WIDTH - VIEWPORT_MARGIN));
+
+  popupStyle.value = { top: `${top}px`, left: `${left}px` };
+};
+
+watch(isOpen, async (open) => {
+  if (open) {
+    updatePosition();
+    await nextTick();
+    updatePosition(); // đo lại khi đã biết chiều cao thật của lịch
+  }
+});
 const inputText = ref('');
 
 // Calendar internal state
@@ -258,18 +293,21 @@ const togglePopup = () => {
 };
 
 const handleClickOutside = (e) => {
-  if (containerRef.value && !containerRef.value.contains(e.target)) {
-    isOpen.value = false;
-  }
+  if (containerRef.value?.contains(e.target) || popupRef.value?.contains(e.target)) return;
+  isOpen.value = false;
 };
 
 onMounted(() => {
   syncFromModel();
   document.addEventListener('click', handleClickOutside);
+  window.addEventListener('resize', updatePosition);
+  window.addEventListener('scroll', updatePosition, true);
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', handleClickOutside);
+  window.removeEventListener('resize', updatePosition);
+  window.removeEventListener('scroll', updatePosition, true);
 });
 </script>
 
@@ -307,6 +345,7 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Calendar Popup -->
+    <Teleport to="body">
     <transition
       enter-active-class="transition duration-150 ease-out"
       enter-from-class="transform scale-95 opacity-0"
@@ -317,7 +356,9 @@ onBeforeUnmount(() => {
     >
       <div
         v-if="isOpen"
-        class="absolute z-50 mt-1.5 w-72 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl shadow-slate-900/10"
+        ref="popupRef"
+        :style="popupStyle"
+        class="fixed z-[100] w-72 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl shadow-slate-900/10"
       >
         <!-- Month Navigation Header -->
         <div class="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -394,5 +435,6 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </transition>
+    </Teleport>
   </div>
 </template>

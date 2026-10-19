@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\MessageTemplate;
 use App\Models\Student;
+use App\Support\CenterStore;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -14,24 +15,23 @@ class BirthdayApiController extends Controller
     public function index(Request $request): JsonResponse
     {
         $month = (int) $request->input('month', Carbon::now()->month);
-        $year = (int) $request->input('year', 2026);
+        $year = (int) $request->input('year', now()->year);
         $center = $request->input('center', 'all');
 
         $query = Student::with('course')->whereNotNull('dob');
-
-        if ($month > 0) {
-            $query->whereRaw('MONTH(dob) = ?', [$month]);
-        }
 
         if ($center !== 'all') {
             $query->where('center', $center);
         }
 
-        $students = $query->orderByRaw('DAY(dob) ASC')->get();
+        // Lọc tháng & sắp xếp theo ngày bằng PHP để chạy được trên cả SQLite lẫn MySQL
+        $students = $query->get()
+            ->filter(fn ($s) => $month <= 0 || Carbon::parse($s->dob)->month === $month)
+            ->sortBy(fn ($s) => Carbon::parse($s->dob)->day)
+            ->values();
 
         $studentsFormatted = $students->map(function ($s) use ($year) {
             $dob = Carbon::parse($s->dob);
-            $birthdayThisYear = Carbon::createFromDate($year, $dob->month, $dob->day);
             $age = $year - $dob->year;
 
             return [
@@ -51,7 +51,7 @@ class BirthdayApiController extends Controller
                     'id' => $s->course->id,
                     'name' => $s->course->name,
                 ] : null,
-                'center' => $s->center ?: 'Khoa Anh Music Hóc Môn',
+                'center' => $s->center ?: CenterStore::defaultName(),
                 'status' => $s->status,
             ];
         });
@@ -72,12 +72,7 @@ class BirthdayApiController extends Controller
             ]);
         }
 
-        $centers = [
-            'Tất cả trung tâm',
-            'Khoa Anh Music Hóc Môn',
-            'Khoa Anh Music Quận 12',
-            'Khoa Anh Music Gò Vấp',
-        ];
+        $centers = CenterStore::names();
 
         return response()->json([
             'month' => $month,

@@ -27,9 +27,17 @@ class RetentionApiController extends Controller
             $query->where('retention_status', $statusFilter);
         }
 
-        $students = $query->orderBy('remaining_sessions', 'asc')
+        $query->orderBy('remaining_sessions', 'asc')
             ->orderBy('last_retention_contact_at', 'desc')
-            ->get();
+            ->orderBy('id', 'asc');
+        $pagination = null;
+        if ($this->wantsPagination($request)) {
+            $paginator = $query->paginate($this->perPage($request));
+            $students = $paginator->items();
+            $pagination = $this->paginationMeta($paginator);
+        } else {
+            $students = $query->get();
+        }
 
         $templates = MessageTemplate::all();
         $courses = Course::where('is_active', true)->get();
@@ -44,6 +52,7 @@ class RetentionApiController extends Controller
 
         return response()->json([
             'students' => $students,
+            'pagination' => $pagination,
             'templates' => $templates,
             'courses' => $courses,
             'counts' => $counts,
@@ -53,35 +62,46 @@ class RetentionApiController extends Controller
     public function updateStatus(Request $request, Student $student): JsonResponse
     {
         $validated = $request->validate([
-            'status' => 'required|string|in:normal,invoice_sent,following_up,renewed',
+            'status' => 'required|string',
             'note' => 'nullable|string',
             'renew_sessions' => 'nullable|integer|min:1',
             'renew_amount' => 'nullable|numeric|min:0',
             'payment_method' => 'nullable|string|in:bank_transfer,cash,pos,momo',
+            'add_sessions' => 'nullable|boolean',
         ]);
 
         $newStatus = $validated['status'];
         $student->retention_status = $newStatus;
         $student->last_retention_contact_at = Carbon::now();
 
-        $actionType = match ($newStatus) {
-            'invoice_sent' => 'invoice_sent',
-            'following_up' => 'call_care',
-            'renewed' => 'renewed_payment',
-            default => 'note_added',
-        };
+        $actionType = 'note_added';
+        if (str_contains($newStatus, 'renewed')) {
+            $actionType = 'renewed_payment';
+        } elseif (str_contains($newStatus, 'following_up')) {
+            $actionType = 'call_care';
+        } elseif (str_contains($newStatus, 'invoice_sent')) {
+            $actionType = 'invoice_sent';
+        }
 
         $content = $validated['note'] ?? null;
         if (! $content) {
-            $content = match ($newStatus) {
-                'invoice_sent' => 'Đã gửi thông báo học phí và thông tin thanh toán cho phụ huynh.',
-                'following_up' => 'Đang trong quá trình follow-up, tư vấn lộ trình và nhắc học phí.',
-                'renewed' => 'Phụ huynh đã xác nhận đóng phí thành công, gia hạn gói học mới.',
-                default => 'Chuyển về trạng thái chờ chăm sóc.',
-            };
+            $parts = [];
+            if (str_contains($newStatus, 'invoice_sent')) {
+                $parts[] = 'Đã gửi thông báo học phí';
+            }
+            if (str_contains($newStatus, 'following_up')) {
+                $parts[] = 'Đang gọi điện chăm sóc/tư vấn';
+            }
+            if (str_contains($newStatus, 'renewed')) {
+                $parts[] = 'Đã đóng học phí';
+            }
+            $content = ! empty($parts) ? implode(' & ', $parts) : 'Chuyển về trạng thái chờ chăm sóc.';
         }
 
-        if ($newStatus === 'renewed') {
+        // Chỉ cộng buổi và tạo hóa đơn khi người dùng thực sự chọn Gia hạn (từ modal hoặc truyền add_sessions / renew_sessions)
+        $shouldAddSessions = $request->boolean('add_sessions') || $request->filled('renew_sessions');
+
+        if ($shouldAddSessions && str_contains($newStatus, 'renewed')) {
             $sessionsToAdd = $validated['renew_sessions'] ?? ($student->course ? $student->course->default_sessions : 12);
             $amount = $validated['renew_amount'] ?? ($student->course ? $student->course->price : 0);
             $payMethod = $validated['payment_method'] ?? 'bank_transfer';
@@ -90,7 +110,7 @@ class RetentionApiController extends Controller
             $student->total_sessions += $sessionsToAdd;
 
             Invoice::create([
-                'invoice_code' => 'HD-RENEW-'.date('Ymd').'-'.str_pad($student->id, 3, '0', STR_PAD_LEFT).'-'.rand(10, 99),
+                'invoice_code' => Invoice::uniqueCode('HD-RENEW-'.date('Ymd').'-'.str_pad($student->id, 3, '0', STR_PAD_LEFT)),
                 'student_id' => $student->id,
                 'course_id' => $student->course_id,
                 'amount' => $amount,
@@ -119,7 +139,7 @@ class RetentionApiController extends Controller
         $student->load(['course', 'latestRetentionLog', 'retentionLogs']);
 
         return response()->json([
-            'message' => "Cập nhật học viên {$student->name} sang trạng thái mới thành công!",
+            'message' => "Cập nhật học viên {$student->name} thành công!",
             'student' => $student,
         ]);
     }

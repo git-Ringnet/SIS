@@ -1,8 +1,12 @@
 <script setup>
+import { useBrand } from '../services/useBrand';
+import BrandLogo from '../components/BrandLogo.vue';
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuth } from '../services/useAuth';
-import { Music, Lock, Mail, Eye, EyeOff, LogIn, ArrowRight, CheckCircle } from 'lucide-vue-next';
+import { Lock, Mail, Eye, EyeOff, LogIn } from 'lucide-vue-next';
+
+const { nameParts } = useBrand();
 
 const router = useRouter();
 const { login } = useAuth();
@@ -33,12 +37,6 @@ const handleLogin = async () => {
     isLoading.value = false;
   }
 };
-
-const fillDemoAccount = () => {
-  email.value = 'admin@khoaanhmusic.com';
-  password.value = 'password';
-  handleLogin();
-};
 </script>
 
 <template>
@@ -46,12 +44,10 @@ const fillDemoAccount = () => {
     <div class="sm:mx-auto sm:w-full sm:max-w-md">
       <!-- Brand Logo -->
       <div class="flex justify-center">
-        <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-red-600 text-white shadow-md shadow-red-500/20">
-          <Music class="h-6 w-6" />
-        </div>
+        <BrandLogo box-class="h-12 w-12 rounded-2xl" icon-class="h-6 w-6" />
       </div>
       <h2 class="mt-4 text-center text-2xl sm:text-3xl font-black tracking-tight text-slate-900">
-        Khoa Anh <span class="text-red-600">Music</span>
+        {{ nameParts.head }} <span class="text-red-600">{{ nameParts.tail }}</span>
       </h2>
       <p class="mt-1 text-center text-xs sm:text-sm font-semibold text-slate-500">
         Hệ Thống Quản Trị & Giữ Chân Học Viên (EduCRM • SIS)
@@ -130,30 +126,6 @@ const fillDemoAccount = () => {
             <span>{{ isLoading ? 'Đang đăng nhập...' : 'Đăng nhập hệ thống' }}</span>
           </button>
         </form>
-
-        <!-- Quick Demo Login Option -->
-        <div class="mt-6 pt-5 border-t border-slate-100">
-          <button
-            @click="fillDemoAccount"
-            class="w-full flex items-center justify-between rounded-xl bg-slate-50 border border-slate-200/80 p-3 hover:bg-red-50/50 hover:border-red-200 transition-all group text-left"
-          >
-            <div>
-              <p class="text-xs font-bold text-slate-800 group-hover:text-red-600">Đăng nhập nhanh Admin Demo</p>
-              <p class="text-[11px] text-slate-400 font-mono">admin@khoaanhmusic.com</p>
-            </div>
-            <ArrowRight class="h-4 w-4 text-slate-400 group-hover:text-red-600 transition-transform group-hover:translate-x-0.5" />
-          </button>
-        </div>
-
-        <!-- Link to Register -->
-        <div class="mt-6 text-center">
-          <p class="text-xs text-slate-500">
-            Chưa có tài khoản?
-            <router-link to="/register" class="font-bold text-red-600 hover:text-red-700 underline ml-1">
-              Đăng ký tài khoản mới
-            </router-link>
-          </p>
-        </div>
       </div>
     </div>
   </div>

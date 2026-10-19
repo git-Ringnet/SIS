@@ -7,6 +7,7 @@ use App\Models\Course;
 use App\Models\Invoice;
 use App\Models\Lead;
 use App\Models\Student;
+use App\Support\CenterStore;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -54,7 +55,15 @@ class LeadApiController extends Controller
             });
         }
 
-        $leads = $query->orderBy('created_at', 'desc')->get();
+        $query->orderBy('created_at', 'desc')->orderBy('id', 'desc');
+        $pagination = null;
+        if ($this->wantsPagination($request)) {
+            $paginator = $query->paginate($this->perPage($request));
+            $leads = $paginator->items();
+            $pagination = $this->paginationMeta($paginator);
+        } else {
+            $leads = $query->get();
+        }
         $courses = Course::where('is_active', true)->get();
 
         $stages = [
@@ -66,14 +75,11 @@ class LeadApiController extends Controller
             'lost' => Lead::where('status', 'lost')->count(),
         ];
 
-        $centers = [
-            'Khoa Anh Music Hóc Môn',
-            'Khoa Anh Music Quận 12',
-            'Khoa Anh Music Gò Vấp',
-        ];
+        $centers = CenterStore::names();
 
         return response()->json([
             'leads' => $leads,
+            'pagination' => $pagination,
             'courses' => $courses,
             'stages' => $stages,
             'centers' => $centers,
@@ -110,7 +116,7 @@ class LeadApiController extends Controller
             'expected_revenue' => $validated['expected_revenue'] ?? 0,
             'notes' => $validated['notes'] ?? null,
             'assigned_to' => $validated['assigned_to'] ?? 'Tư vấn viên',
-            'center' => $validated['center'] ?? 'Khoa Anh Music Hóc Môn',
+            'center' => $validated['center'] ?? CenterStore::defaultName(),
             'image_url' => $validated['image_url'] ?? null,
         ]);
 
@@ -158,8 +164,7 @@ class LeadApiController extends Controller
         ]);
 
         $course = Course::find($validated['course_id']);
-        $latestId = Student::max('id') ?? 0;
-        $code = 'HV-'.str_pad($latestId + 1, 3, '0', STR_PAD_LEFT);
+        $code = Student::nextCode();
 
         $student = Student::create([
             'code' => $code,
@@ -177,12 +182,12 @@ class LeadApiController extends Controller
             'retention_status' => 'normal',
             'join_date' => Carbon::today(),
             'notes' => "Chuyển đổi từ Lead CRM: {$lead->source} - ".($lead->notes ?? ''),
-            'center' => $lead->center ?: 'Khoa Anh Music Hóc Môn',
+            'center' => $lead->center ?: CenterStore::defaultName(),
         ]);
 
         $amount = $validated['price'] ?? $course->price;
         Invoice::create([
-            'invoice_code' => 'HD-'.date('Ym').'-'.str_pad($student->id, 3, '0', STR_PAD_LEFT),
+            'invoice_code' => Invoice::uniqueCode('HD-'.date('Ym').'-'.str_pad($student->id, 3, '0', STR_PAD_LEFT)),
             'student_id' => $student->id,
             'course_id' => $student->course_id,
             'amount' => $amount,
@@ -255,7 +260,7 @@ class LeadApiController extends Controller
                     $l->course ? $l->course->name : '',
                     $l->source,
                     $statusText,
-                    $l->center ?? 'Khoa Anh Music Hóc Môn',
+                    $l->center ?? CenterStore::defaultName(),
                     $l->notes ?? '',
                 ]);
             }

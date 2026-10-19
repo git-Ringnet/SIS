@@ -1,8 +1,12 @@
 <script setup>
+import { useBrand } from '../services/useBrand';
+import BrandLogo from '../components/BrandLogo.vue';
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuth } from '../services/useAuth';
-import { Music, Lock, Mail, User, Eye, EyeOff, UserPlus, ArrowRight } from 'lucide-vue-next';
+import { Lock, Mail, User, Eye, EyeOff, UserPlus, ArrowRight } from 'lucide-vue-next';
+
+const { nameParts } = useBrand();
 
 const router = useRouter();
 const { register } = useAuth();
@@ -49,12 +53,10 @@ const handleRegister = async () => {
     <div class="sm:mx-auto sm:w-full sm:max-w-md">
       <!-- Brand Logo -->
       <div class="flex justify-center">
-        <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-red-600 text-white shadow-md shadow-red-500/20">
-          <Music class="h-6 w-6" />
-        </div>
+        <BrandLogo box-class="h-12 w-12 rounded-2xl" icon-class="h-6 w-6" />
       </div>
       <h2 class="mt-4 text-center text-2xl sm:text-3xl font-black tracking-tight text-slate-900">
-        Khoa Anh <span class="text-red-600">Music</span>
+        {{ nameParts.head }} <span class="text-red-600">{{ nameParts.tail }}</span>
       </h2>
       <p class="mt-1 text-center text-xs sm:text-sm font-semibold text-slate-500">
         Tạo tài khoản quản trị viên trung tâm mới

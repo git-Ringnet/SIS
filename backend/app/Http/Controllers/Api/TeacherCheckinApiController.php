@@ -3,6 +3,9 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Student;
+use App\Support\CenterStore;
+use App\Support\ShiftTime;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,6 +22,91 @@ class TeacherCheckinApiController extends Controller
     private function getRatesPath(): string
     {
         return 'shift_rates.json';
+    }
+
+    /**
+     * Sinh ca dạy của ngày từ lịch học cố định của học viên (giáo viên + giờ + phòng + trung tâm).
+     * Ca chưa check-in được cập nhật lại theo danh sách học viên hiện tại (thêm / bớt học viên,
+     * đổi loại ca, đơn giá), ca không còn học viên thì bỏ. Ca đã check-in / báo vắng giữ nguyên làm lịch sử.
+     */
+    private function syncScheduledShifts(string $date, array $shifts, array $rates): array
+    {
+        $carbonDate = Carbon::parse($date);
+        $students = Student::with('course')
+            ->where('status', 'active')
+            ->whereNotNull('teacher')
+            ->whereNotNull('class_start_time')
+            ->whereJsonContains('class_days', $carbonDate->dayOfWeek)
+            ->orderBy('name')
+            ->get();
+
+        // Ca cần có trong ngày, theo schedule_key
+        $planned = [];
+        foreach ($students->groupBy(fn ($st) => implode('|', [$st->teacher, $st->class_start_time, $st->room, $st->center])) as $group) {
+            $first = $group->first();
+            $isOneOnOne = $group->count() === 1;
+            $time = $first->class_start_time.($first->class_end_time ? ' - '.$first->class_end_time : '');
+            $courseName = $first->course?->name ?? 'Lớp học';
+
+            $planned[$date.'|'.implode('|', [$first->teacher, $first->class_start_time, $first->room, $first->center])] = [
+                'date' => $date,
+                'day_of_week' => $carbonDate->dayOfWeek === 0 ? 'CN' : 'Thứ '.($carbonDate->dayOfWeek + 1),
+                'teacher_name' => $first->teacher,
+                'shift_name' => ShiftTime::label($first->class_start_time).' '.$time,
+                'start_time' => $first->class_start_time,
+                'end_time' => $first->class_end_time,
+                'class_name' => $isOneOnOne
+                    ? "{$courseName} 1:1 - {$first->name}"
+                    : "{$courseName} nhóm ({$group->count()} bạn)",
+                'room' => $first->room,
+                'type' => $isOneOnOne ? 'Ca 1-1' : 'Ca nhóm',
+                'center' => $first->center ?: CenterStore::defaultName(),
+                'rate' => $isOneOnOne ? ($rates['one_on_one'] ?? 0) : ($rates['group'] ?? 0),
+            ];
+        }
+
+        $changed = false;
+        $seen = [];
+        $result = [];
+        foreach ($shifts as $shift) {
+            $key = $shift['schedule_key'] ?? null;
+            if (! $key || ($shift['date'] ?? null) !== $date) {
+                $result[] = $shift;
+
+                continue;
+            }
+
+            $seen[$key] = true;
+            $pending = ($shift['status'] ?? 'not_checked_in') === 'not_checked_in';
+
+            if ($pending && ! isset($planned[$key])) {
+                $changed = true; // không còn học viên trong khung giờ này
+
+                continue;
+            }
+
+            if ($pending && array_intersect_key($shift, $planned[$key]) != $planned[$key]) {
+                $shift = array_merge($shift, $planned[$key]);
+                $changed = true;
+            }
+            $result[] = $shift;
+        }
+
+        $nextId = (int) (collect($shifts)->max('id') ?? 0) + 1;
+        foreach ($planned as $key => $data) {
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $result[] = ['id' => $nextId++, 'schedule_key' => $key, ...$data, 'status' => 'not_checked_in',
+                'checkin_time' => null, 'minutes_late' => 0, 'substitute_teacher' => null];
+            $changed = true;
+        }
+
+        if ($changed) {
+            $this->saveCheckins($result);
+        }
+
+        return $result;
     }
 
     private function loadRates(): array
@@ -51,85 +139,7 @@ class TeacherCheckinApiController extends Controller
             }
         }
 
-        // Tạo dữ liệu ca dạy mẫu cho tuần hiện tại
-        $defaultShifts = [
-            [
-                'id' => 1,
-                'date' => '2026-10-12', // Thứ 2
-                'day_of_week' => 'Thứ 2',
-                'teacher_name' => 'Thầy Trương Bảo Đi',
-                'shift_name' => 'Ca chiều 17:30 - 18:30',
-                'start_time' => '17:30',
-                'end_time' => '18:30',
-                'class_name' => 'Piano 1:1 - Nguyễn Minh Khang',
-                'room' => 'PIANO 01',
-                'type' => 'Ca 1-1',
-                'center' => 'Khoa Anh Music Hóc Môn',
-                'status' => 'not_checked_in', // not_checked_in, checked_in, late, skipped, excused_absence, substitute
-                'checkin_time' => null,
-                'minutes_late' => 0,
-                'rate' => 150000,
-                'substitute_teacher' => null,
-            ],
-            [
-                'id' => 2,
-                'date' => '2026-10-12',
-                'day_of_week' => 'Thứ 2',
-                'teacher_name' => 'Thầy Minh',
-                'shift_name' => 'Ca tối 18:30 - 20:00',
-                'start_time' => '18:30',
-                'end_time' => '20:00',
-                'class_name' => 'Guitar Nhóm Cơ Bản (4 bạn)',
-                'room' => 'GUITAR 01',
-                'type' => 'Ca nhóm',
-                'center' => 'Khoa Anh Music Hóc Môn',
-                'status' => 'not_checked_in',
-                'checkin_time' => null,
-                'minutes_late' => 0,
-                'rate' => 220000,
-                'substitute_teacher' => null,
-            ],
-            [
-                'id' => 3,
-                'date' => '2026-10-10', // Thứ 7 vừa qua
-                'day_of_week' => 'Thứ 7',
-                'teacher_name' => 'Thầy Trương Bảo Đi',
-                'shift_name' => 'Ca sáng 09:00 - 10:00',
-                'start_time' => '09:00',
-                'end_time' => '10:00',
-                'class_name' => 'Piano 1:1 - Trần Bảo Ngọc',
-                'room' => 'PIANO 01',
-                'type' => 'Ca 1-1',
-                'center' => 'Khoa Anh Music Hóc Môn',
-                'status' => 'checked_in',
-                'checkin_time' => '08:55',
-                'minutes_late' => 0,
-                'rate' => 150000,
-                'substitute_teacher' => null,
-            ],
-            [
-                'id' => 4,
-                'date' => '2026-10-09', // Thứ 6
-                'day_of_week' => 'Thứ 6',
-                'teacher_name' => 'Cô Mai',
-                'shift_name' => 'Ca chiều 17:30 - 19:00',
-                'start_time' => '17:30',
-                'end_time' => '19:00',
-                'class_name' => 'Thanh Nhạc Thiếu Nhi Nhóm 01',
-                'room' => 'VOCAL 01',
-                'type' => 'Ca nhóm',
-                'center' => 'Khoa Anh Music Quận 12',
-                'status' => 'checked_in',
-                'checkin_time' => '17:40',
-                'minutes_late' => 10,
-                'rate' => 220000,
-                'substitute_teacher' => null,
-            ],
-        ];
-
-        Storage::put($path, json_encode($defaultShifts, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-
-        return $defaultShifts;
+        return [];
     }
 
     private function saveCheckins(array $shifts): void
@@ -139,15 +149,15 @@ class TeacherCheckinApiController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $date = $request->input('date', '2026-10-11'); // Ngày xem (mặc định 11/10/2026 như ảnh)
-        $month = $request->input('month', '2026-10');
+        $date = $request->input('date', Carbon::today()->toDateString());
+        $month = $request->input('month', Carbon::now()->format('Y-m'));
         $center = $request->input('center', 'all');
         $shiftType = $request->input('shift_type', 'all');
         $shiftTime = $request->input('shift_time', 'all');
         $teacherName = $request->input('teacher_name', 'all');
 
-        $shifts = $this->loadCheckins();
         $rates = $this->loadRates();
+        $shifts = $this->syncScheduledShifts($date, $this->loadCheckins(), $rates);
 
         // Tên thứ theo ngày
         $carbonDate = Carbon::parse($date);
@@ -162,7 +172,7 @@ class TeacherCheckinApiController extends Controller
         };
 
         // Lọc các ca dạy trong ngày được chọn
-        $todayShifts = array_filter($shifts, function ($s) use ($date, $center, $shiftType, $teacherName) {
+        $todayShifts = array_filter($shifts, function ($s) use ($date, $center, $shiftType, $shiftTime, $teacherName) {
             if ($s['date'] !== $date) {
                 return false;
             }
@@ -173,6 +183,9 @@ class TeacherCheckinApiController extends Controller
                 return false;
             }
             if ($teacherName !== 'all' && $s['teacher_name'] !== $teacherName) {
+                return false;
+            }
+            if ($shiftTime !== 'all' && ShiftTime::of($s['start_time'] ?? null) !== $shiftTime) {
                 return false;
             }
 
@@ -208,18 +221,10 @@ class TeacherCheckinApiController extends Controller
             return $carry + ($s['rate'] ?? 0);
         }, 0);
 
-        $teachers = [
-            'Thầy Trương Bảo Đi',
-            'Thầy Minh',
-            'Cô Mai',
-            'Thầy Đức',
-        ];
+        // Giáo viên có ca dạy (kể cả ca sinh từ lịch học viên)
+        $teachers = collect($shifts)->pluck('teacher_name')->filter()->unique()->sort()->values()->all();
 
-        $centers = [
-            'Khoa Anh Music Hóc Môn',
-            'Khoa Anh Music Quận 12',
-            'Khoa Anh Music Gò Vấp',
-        ];
+        $centers = CenterStore::names();
 
         return response()->json([
             'date' => $date,
@@ -252,7 +257,7 @@ class TeacherCheckinApiController extends Controller
 
         foreach ($shifts as &$s) {
             if ($s['id'] === $validated['shift_id']) {
-                $checkTime = $validated['checkin_time'] ?: Carbon::now()->format('H:i');
+                $checkTime = ($validated['checkin_time'] ?? null) ?: Carbon::now()->format('H:i');
                 $isLate = $validated['is_late'] ?? false;
                 $mins = $validated['minutes_late'] ?? ($isLate ? 15 : 0);
 
@@ -327,7 +332,7 @@ class TeacherCheckinApiController extends Controller
 
     public function exportMonthly(Request $request): StreamedResponse
     {
-        $month = $request->input('month', '2026-10');
+        $month = $request->input('month', Carbon::now()->format('Y-m'));
         $shifts = $this->loadCheckins();
 
         $monthlyShifts = array_filter($shifts, function ($s) use ($month) {

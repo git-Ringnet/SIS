@@ -3,101 +3,48 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\User;
-use Carbon\Carbon;
+use App\Support\ActivityLogger;
+use App\Support\BrandSettings;
+use App\Support\OwnerGuard;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 
 class SettingsApiController extends Controller
 {
-    private function getSettingsPath(): string
-    {
-        return 'settings.json';
-    }
-
     private function loadBrandSettings(): array
     {
-        $path = $this->getSettingsPath();
-        if (Storage::exists($path)) {
-            $data = json_decode(Storage::get($path), true);
-            if (is_array($data)) {
-                return $data;
-            }
-        }
-
-        return [
-            'brand' => [
-                'owner_email' => 'kfreestyle15@gmail.com',
-                'brand_name' => 'Khoa Anh Music',
-                'phone' => '0792324514',
-                'address' => '123 Tô Ký, Hóc Môn, TP.HCM',
-                'category' => 'Âm nhạc',
-                'scale' => '100 – 300',
-                'logo_url' => '',
-            ],
-            'vat' => [
-                'company_name' => '',
-                'tax_code' => '',
-                'vat_email' => '',
-                'vat_address' => '',
-            ],
-        ];
+        return BrandSettings::all();
     }
 
     private function saveBrandSettings(array $settings): void
     {
-        Storage::put($this->getSettingsPath(), json_encode($settings, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        BrandSettings::save($settings);
+    }
+
+    /**
+     * Tên + logo thương hiệu cho màn đăng nhập (không cần đăng nhập).
+     */
+    public function publicBrand(): JsonResponse
+    {
+        return response()->json(BrandSettings::publicBrand());
     }
 
     public function index(Request $request): JsonResponse
     {
-        $user = $request->user() ?? User::first();
+        $user = $request->user();
         $stored = $this->loadBrandSettings();
-
-        $activityLogs = [
-            [
-                'id' => 1,
-                'admin_name' => $user ? $user->name : 'Khoa Anh Music Admin',
-                'action' => 'Cập nhật trạng thái tái ký học viên MIN THÚI sang [Đã đóng]',
-                'created_at' => Carbon::now()->subMinutes(12)->toIso8601String(),
-                'ip' => '127.0.0.1',
-            ],
-            [
-                'id' => 2,
-                'admin_name' => 'Khoa Anh Music Admin',
-                'action' => 'Gửi thông báo học phí qua Zalo cho phụ huynh bé Trần Bảo Ngọc',
-                'created_at' => Carbon::now()->subHours(2)->toIso8601String(),
-                'ip' => '127.0.0.1',
-            ],
-            [
-                'id' => 3,
-                'admin_name' => 'Khoa Anh Music Admin',
-                'action' => 'Điểm danh 1-click cho học viên Nguyễn Minh Khang (+ 1 buổi)',
-                'created_at' => Carbon::now()->subHours(5)->toIso8601String(),
-                'ip' => '127.0.0.1',
-            ],
-            [
-                'id' => 4,
-                'admin_name' => 'Khoa Anh Music Admin',
-                'action' => 'Tạo mới khóa học Piano Căn Bản & Cổ Điển',
-                'created_at' => Carbon::now()->subDays(1)->toIso8601String(),
-                'ip' => '127.0.0.1',
-            ],
-        ];
 
         return response()->json([
             'user' => [
-                'id' => $user ? $user->id : 1,
-                'name' => $user ? $user->name : 'Khoa Anh Music Admin',
-                'email' => $user ? $user->email : 'kfreestyle15@gmail.com',
-                'role' => 'Chủ trung tâm',
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'role' => OwnerGuard::isOwner($user) ? 'Chủ trung tâm' : 'Nhân sự',
             ],
             'brand' => $stored['brand'],
             'vat' => $stored['vat'],
-            'activity_logs' => $activityLogs,
         ]);
     }
 
@@ -107,18 +54,23 @@ class SettingsApiController extends Controller
             'name' => 'required|string|max:255',
         ]);
 
-        $user = $request->user() ?? User::first();
+        $user = $request->user();
         if ($user) {
+            $changes = ActivityLogger::diff(['name' => $user->name], ['name' => $request->input('name')]);
             $user->name = $request->input('name');
             $user->save();
+
+            if ($changes) {
+                ActivityLogger::log('updated', 'account', $user->email, $user->id, $changes);
+            }
         }
 
         return response()->json([
             'message' => 'Cập nhật họ và tên thành công!',
             'user' => [
-                'id' => $user ? $user->id : 1,
-                'name' => $user ? $user->name : $request->input('name'),
-                'email' => $user ? $user->email : 'kfreestyle15@gmail.com',
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
                 'role' => 'Chủ trung tâm',
             ],
         ]);
@@ -142,7 +94,7 @@ class SettingsApiController extends Controller
             ], 422);
         }
 
-        $user = $request->user() ?? User::first();
+        $user = $request->user();
         if ($user) {
             $user->password = Hash::make($request->password);
             $user->save();
@@ -163,11 +115,24 @@ class SettingsApiController extends Controller
             'category' => 'nullable|string|max:100',
             'scale' => 'nullable|string|max:100',
             'logo_url' => 'nullable|string',
+            'bank_name' => 'nullable|string|max:255',
+            'bank_account' => 'nullable|string|max:50',
+            'bank_holder' => 'nullable|string|max:255',
         ]);
 
         $stored = $this->loadBrandSettings();
+        // Email chủ sở hữu không được sửa từ màn Cài đặt
+        unset($validated['owner_email']);
+        $changes = ActivityLogger::diff(
+            array_intersect_key($stored['brand'], $validated),
+            $validated,
+        );
         $stored['brand'] = array_merge($stored['brand'], $validated);
         $this->saveBrandSettings($stored);
+
+        if ($changes) {
+            ActivityLogger::log('updated', 'settings', 'Thương hiệu', null, $changes);
+        }
 
         return response()->json([
             'message' => 'Lưu thông tin thương hiệu thành công!',
@@ -185,8 +150,13 @@ class SettingsApiController extends Controller
         ]);
 
         $stored = $this->loadBrandSettings();
+        $changes = ActivityLogger::diff(array_intersect_key($stored['vat'], $validated), $validated);
         $stored['vat'] = array_merge($stored['vat'], $validated);
         $this->saveBrandSettings($stored);
+
+        if ($changes) {
+            ActivityLogger::log('updated', 'settings', 'Thông tin xuất hoá đơn', null, $changes);
+        }
 
         return response()->json([
             'message' => 'Lưu thông tin xuất hóa đơn VAT thành công!',

@@ -1,4 +1,5 @@
 <script setup>
+import { notify } from '../services/notify';
 import { ref } from 'vue';
 import { retentionApi } from '../services/api';
 import Modal from './Modal.vue';
@@ -47,7 +48,7 @@ const submit = async () => {
     emit('saved', res.data.student);
     emit('close');
   } catch (err) {
-    alert(err.response?.data?.message || 'Có lỗi xảy ra khi lưu ghi chú');
+    notify.apiError(err, 'Có lỗi xảy ra khi lưu ghi chú');
   } finally {
     isSubmitting.value = false;
   }

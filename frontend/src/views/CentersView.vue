@@ -1,6 +1,9 @@
 <script setup>
+import { notify } from '../services/notify';
+import { confirmDialog } from '../services/useConfirm';
 import { ref, onMounted } from 'vue';
 import { centerApi } from '../services/api';
+import { useCenters } from '../services/useCenters';
 import {
   Plus,
   Building2,
@@ -8,16 +11,14 @@ import {
   Edit2,
   Trash2,
   X,
-  CheckCircle2,
-  AlertCircle,
   DoorOpen,
   Users,
 } from 'lucide-vue-next';
 
+const { loadCenters } = useCenters();
+
 const loading = ref(true);
 const centers = ref([]);
-const toastMessage = ref('');
-const toastType = ref('success');
 
 // Center Create/Edit Modal
 const showCenterModal = ref(false);
@@ -41,11 +42,13 @@ const newRoomForm = ref({
 const savingRoom = ref(false);
 
 const showToast = (msg, type = 'success') => {
-  toastMessage.value = msg;
-  toastType.value = type;
-  setTimeout(() => {
-    toastMessage.value = '';
-  }, 4000);
+  if (type === 'success') {
+    notify.success(msg);
+  } else if (msg.startsWith('Vui lòng')) {
+    notify.warning(msg);
+  } else {
+    notify.error(msg);
+  }
 };
 
 const fetchData = async () => {
@@ -53,6 +56,8 @@ const fetchData = async () => {
     loading.value = true;
     const res = await centerApi.getCenters();
     centers.value = res.data.centers || [];
+    // Cập nhật danh sách trung tâm dùng chung cho các màn khác
+    loadCenters(true);
   } catch (err) {
     console.error('Error fetching centers:', err);
   } finally {
@@ -113,7 +118,11 @@ const handleSaveCenter = async () => {
 
 // 4. Xóa trung tâm
 const handleDeleteCenter = async (c) => {
-  if (!confirm(`Bạn có chắc muốn xóa cơ sở "${c.name}"?`)) return;
+  if (!(await confirmDialog({
+    title: 'Xoá cơ sở?',
+    message: `Cơ sở "${c.name}" cùng các phòng học sẽ bị xoá.`,
+    confirmText: 'Xoá cơ sở',
+  }))) return;
   try {
     await centerApi.deleteCenter(c.id);
     showToast(`Đã xóa trung tâm "${c.name}" thành công!`);
@@ -179,18 +188,6 @@ const handleDeleteRoom = async (roomId) => {
       <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Trung tâm</h1>
     </div>
 
-    <!-- Toast Notification -->
-    <div
-      v-if="toastMessage"
-      :class="[
-        toastType === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800',
-        'rounded-xl border p-3.5 flex items-center gap-2.5 text-xs sm:text-sm font-medium shadow-xs transition-all'
-      ]"
-    >
-      <CheckCircle2 v-if="toastType === 'success'" class="h-4.5 w-4.5 text-emerald-600 shrink-0" />
-      <AlertCircle v-else class="h-4.5 w-4.5 text-rose-600 shrink-0" />
-      <span>{{ toastMessage }}</span>
-    </div>
 
     <!-- Card: BẢNG TRUNG TÂM -->
     <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
@@ -324,7 +321,7 @@ const handleDeleteRoom = async (roomId) => {
             <input
               v-model="centerForm.name"
               type="text"
-              placeholder="ví dụ: Khoa Anh Music Hóc Môn"
+              placeholder="ví dụ: Cơ sở Quận 1"
               class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
             />
           </div>
@@ -334,7 +331,7 @@ const handleDeleteRoom = async (roomId) => {
             <input
               v-model="centerForm.address"
               type="text"
-              placeholder="ví dụ: 123 Tô Ký, Hóc Môn, TP.HCM"
+              placeholder="ví dụ: 12 Lê Lợi, Quận 1, TP.HCM"
               class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
             />
           </div>

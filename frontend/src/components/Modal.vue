@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, watch } from 'vue';
+import { X } from 'lucide-vue-next';
 
 const props = defineProps({
   show: {
@@ -13,6 +14,11 @@ const props = defineProps({
   closeable: {
     type: Boolean,
     default: true,
+  },
+  // Có title thì Modal tự vẽ thanh tiêu đề + nút đóng và padding cho nội dung
+  title: {
+    type: String,
+    default: '',
   },
 });
 
@@ -70,7 +76,7 @@ const maxWidthClass = computed(() => {
       leave-from-class="opacity-100"
       leave-to-class="opacity-0"
     >
-      <div v-show="show" class="fixed inset-0 z-50 overflow-y-auto">
+      <div v-show="show" class="fixed inset-0 z-50 overflow-y-auto overscroll-contain">
         <!-- Backdrop -->
         <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity" @click="close" />
 
@@ -86,10 +92,29 @@ const maxWidthClass = computed(() => {
           >
             <div
               v-show="show"
-              class="relative w-full transform overflow-hidden rounded-2xl sm:rounded-3xl bg-white text-left shadow-2xl transition-all border border-slate-200/90 my-6"
+              class="relative w-full transform overflow-hidden rounded-2xl sm:rounded-3xl bg-white text-left shadow-2xl transition-all border border-slate-200/90 my-auto"
               :class="maxWidthClass"
             >
-              <slot v-if="show" />
+              <template v-if="show">
+                <template v-if="title">
+                  <div class="flex items-center justify-between gap-4 border-b border-slate-100 px-5 sm:px-6 py-4">
+                    <h3 class="text-base font-bold text-slate-900">{{ title }}</h3>
+                    <button
+                      v-if="closeable"
+                      type="button"
+                      @click="close"
+                      class="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+                      aria-label="Đóng"
+                    >
+                      <X class="h-5 w-5" />
+                    </button>
+                  </div>
+                  <div class="p-5 sm:p-6">
+                    <slot />
+                  </div>
+                </template>
+                <slot v-else />
+              </template>
             </div>
           </transition>
         </div>

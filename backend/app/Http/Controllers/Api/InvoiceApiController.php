@@ -6,9 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Models\Course;
 use App\Models\Invoice;
 use App\Models\Student;
+use App\Support\BrandSettings;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 
 class InvoiceApiController extends Controller
 {
@@ -24,7 +28,15 @@ class InvoiceApiController extends Controller
             $query->where('status', $status);
         }
 
-        $invoices = $query->orderBy('paid_at', 'desc')->get();
+        $query->orderBy('paid_at', 'desc')->orderBy('id', 'desc');
+        $pagination = null;
+        if ($this->wantsPagination($request)) {
+            $paginator = $query->paginate($this->perPage($request));
+            $invoices = $paginator->items();
+            $pagination = $this->paginationMeta($paginator);
+        } else {
+            $invoices = $query->get();
+        }
 
         $monthlyTotal = (float) Invoice::where('status', 'paid')
             ->where('paid_at', 'like', "{$month}%")
@@ -35,6 +47,7 @@ class InvoiceApiController extends Controller
 
         return response()->json([
             'invoices' => $invoices,
+            'pagination' => $pagination,
             'monthlyTotal' => $monthlyTotal,
             'students' => $students,
             'courses' => $courses,
@@ -54,7 +67,7 @@ class InvoiceApiController extends Controller
         ]);
 
         $student = Student::find($validated['student_id']);
-        $invoiceCode = 'HD-'.date('Ym').'-'.str_pad($student->id, 3, '0', STR_PAD_LEFT).'-'.rand(100, 999);
+        $invoiceCode = Invoice::uniqueCode('HD-'.date('Ym').'-'.str_pad($student->id, 3, '0', STR_PAD_LEFT));
 
         $invoice = Invoice::create([
             'invoice_code' => $invoiceCode,
@@ -82,5 +95,84 @@ class InvoiceApiController extends Controller
             'message' => "Tạo phiếu thu {$invoiceCode} thành công!",
             'invoice' => $invoice,
         ], 201);
+    }
+
+    /**
+     * Sửa phiếu thu. Nếu đổi số buổi cộng thêm thì điều chỉnh số buổi của học viên theo phần chênh lệch.
+     */
+    public function update(Request $request, Invoice $invoice): JsonResponse
+    {
+        $validated = $request->validate([
+            'course_id' => 'nullable|exists:courses,id',
+            'amount' => 'required|numeric|min:0',
+            'sessions_added' => 'required|integer|min:0',
+            'payment_method' => 'required|string|in:bank_transfer,cash,pos,momo',
+            'paid_at' => 'required|date',
+            'note' => 'nullable|string',
+        ]);
+
+        DB::transaction(function () use ($invoice, $validated): void {
+            $delta = $validated['sessions_added'] - $invoice->sessions_added;
+            $student = $invoice->student;
+
+            if ($delta !== 0 && $student) {
+                $student->remaining_sessions = max(0, $student->remaining_sessions + $delta);
+                $student->total_sessions = max(0, $student->total_sessions + $delta);
+                $student->save();
+            }
+
+            $invoice->update([
+                'course_id' => $validated['course_id'] ?? $invoice->course_id,
+                'amount' => $validated['amount'],
+                'sessions_added' => $validated['sessions_added'],
+                'payment_method' => $validated['payment_method'],
+                'paid_at' => $validated['paid_at'],
+                'note' => $validated['note'] ?? null,
+            ]);
+        });
+
+        $invoice->load(['student.course', 'course']);
+
+        return response()->json([
+            'message' => "Đã cập nhật phiếu thu {$invoice->invoice_code}!",
+            'invoice' => $invoice,
+        ]);
+    }
+
+    /**
+     * Xóa phiếu thu và trừ lại số buổi đã cộng cho học viên.
+     */
+    public function destroy(Invoice $invoice): JsonResponse
+    {
+        DB::transaction(function () use ($invoice): void {
+            $student = $invoice->student;
+
+            if ($invoice->sessions_added > 0 && $student) {
+                $student->remaining_sessions = max(0, $student->remaining_sessions - $invoice->sessions_added);
+                $student->total_sessions = max(0, $student->total_sessions - $invoice->sessions_added);
+                $student->save();
+            }
+
+            $invoice->delete();
+        });
+
+        return response()->json([
+            'message' => "Đã xóa phiếu thu {$invoice->invoice_code}!",
+        ]);
+    }
+
+    /**
+     * Xuất phiếu thu học phí (đã thanh toán) ra file PDF.
+     */
+    public function pdf(Invoice $invoice): Response
+    {
+        $invoice->load(['student', 'course']);
+
+        $pdf = Pdf::loadView('pdf.payment-receipt', [
+            'invoice' => $invoice,
+            'brand' => BrandSettings::brand(),
+        ])->setPaper('a4')->setOption('isFontSubsettingEnabled', true);
+
+        return $pdf->download("{$invoice->invoice_code}.pdf");
     }
 }

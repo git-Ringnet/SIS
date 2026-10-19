@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Support\OwnerGuard;
+use App\Support\PagePermissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -16,6 +18,14 @@ class AuthApiController extends Controller
      */
     public function register(Request $request): JsonResponse
     {
+        // Chỉ cho tự đăng ký khi hệ thống chưa có tài khoản nào (lần cài đầu tiên).
+        // Sau đó tài khoản nhân sự do chủ trung tâm tạo ở màn Nhân sự.
+        if (User::exists()) {
+            return response()->json([
+                'message' => 'Hệ thống không cho phép tự đăng ký. Vui lòng liên hệ quản lý trung tâm để được cấp tài khoản.',
+            ], 403);
+        }
+
         $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
@@ -47,11 +57,7 @@ class AuthApiController extends Controller
 
         return response()->json([
             'message' => 'Đăng ký tài khoản thành công',
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
-            ],
+            'user' => $this->userPayload($user),
             'token' => $token,
         ], 201);
     }
@@ -89,11 +95,7 @@ class AuthApiController extends Controller
 
         return response()->json([
             'message' => 'Đăng nhập thành công',
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
-            ],
+            'user' => $this->userPayload($user),
             'token' => $token,
         ]);
     }
@@ -126,11 +128,21 @@ class AuthApiController extends Controller
         }
 
         return response()->json([
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
-            ],
+            'user' => $this->userPayload($user),
         ]);
+    }
+
+    /**
+     * Thông tin người dùng trả về cho giao diện, kèm quyền truy cập các trang.
+     */
+    private function userPayload(User $user): array
+    {
+        return [
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'is_owner' => OwnerGuard::isOwner($user),
+            'blocked_pages' => PagePermissions::blockedPages($user),
+        ];
     }
 }

@@ -1,4 +1,5 @@
 <script setup>
+import { notify } from '../services/notify';
 import { ref, watch } from 'vue';
 import { retentionApi } from '../services/api';
 import { Receipt, PhoneCall, Check, MessageSquare, FileText, Sparkles } from 'lucide-vue-next';
@@ -41,7 +42,7 @@ const updateStatus = async (newStatus) => {
     emit('updated', res.data.student);
   } catch (err) {
     localStatus.value = previousStatus;
-    alert(err.response?.data?.message || 'Có lỗi xảy ra');
+    notify.apiError(err, 'Có lỗi xảy ra');
   } finally {
     isUpdating.value = false;
   }
@@ -113,7 +114,7 @@ const updateStatus = async (newStatus) => {
       <button
         type="button"
         @click="emit('open-template', student)"
-        title="Mở mẫu tin nhắn Zalo/SMS soạn sẵn để copy"
+        title="Mở mẫu tin nhắn soạn sẵn để copy"
         class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white font-medium text-slate-700 hover:bg-slate-50 hover:text-indigo-600 hover:border-indigo-200 shadow-2xs transition-colors"
         :class="compact ? 'px-2 py-1 text-[11px]' : 'px-2.5 py-1 text-xs'"
       >

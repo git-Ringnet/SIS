@@ -17,12 +17,14 @@ import {
 // State
 const loading = ref(true);
 const selectedPeriod = ref('year');
-const selectedYear = ref(2026);
+const selectedYear = ref(new Date().getFullYear());
+// Năm hiện tại và 4 năm trước
+const yearOptions = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i);
 const selectedMonth = ref('current');
 const selectedCenter = ref('all');
 
 // Room report filter
-const roomCenter = ref('Khoa Anh Music Hóc Môn');
+const roomCenter = ref('all');
 const filterRoom = ref('all');
 const filterDay = ref('all');
 const onlyAvailable = ref(false); // Nút gạt "Chỉ còn chỗ"
@@ -49,6 +51,7 @@ const fetchData = async () => {
       month: selectedMonth.value,
       center: selectedCenter.value,
       room: filterRoom.value,
+      room_center: roomCenter.value,
       day: filterDay.value,
       only_available: onlyAvailable.value,
     });
@@ -139,9 +142,7 @@ const getBadgeText = (slot) => {
             @change="fetchData"
             class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs sm:text-sm text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
           >
-            <option :value="2026">2026</option>
-            <option :value="2025">2025</option>
-            <option :value="2024">2024</option>
+            <option v-for="y in yearOptions" :key="y" :value="y">{{ y }}</option>
           </select>
         </div>
 
@@ -428,11 +429,11 @@ const getBadgeText = (slot) => {
         <label class="block text-xs font-semibold text-slate-700 mb-1.5">Trung tâm (báo cáo phòng)</label>
         <select
           v-model="roomCenter"
+          @change="fetchData"
           class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs sm:text-sm text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         >
-          <option value="Khoa Anh Music Hóc Môn">Khoa Anh Music Hóc Môn</option>
-          <option value="Khoa Anh Music Quận 12">Khoa Anh Music Quận 12</option>
-          <option value="Khoa Anh Music Gò Vấp">Khoa Anh Music Gò Vấp</option>
+          <option value="all">Tất cả trung tâm</option>
+          <option v-for="c in centers" :key="c" :value="c">{{ c }}</option>
         </select>
       </div>
 
@@ -446,12 +447,7 @@ const getBadgeText = (slot) => {
               class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             >
               <option value="all">Tất cả phòng</option>
-              <option value="GROUP">GROUP</option>
-              <option value="PIANO 01">PIANO 01</option>
-              <option value="PIANO 02">PIANO 02</option>
-              <option value="GUITAR 01">GUITAR 01</option>
-              <option value="VOCAL 01">VOCAL 01</option>
-              <option value="DRUM 01">DRUM 01</option>
+              <option v-for="r in rooms" :key="r" :value="r">{{ r }}</option>
             </select>
           </div>
 

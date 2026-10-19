@@ -65,7 +65,7 @@ return [
     |
     */
 
-    'timezone' => 'UTC',
+    'timezone' => env('APP_TIMEZONE', 'Asia/Ho_Chi_Minh'),
 
     /*
     |--------------------------------------------------------------------------
@@ -121,6 +121,29 @@ return [
     'maintenance' => [
         'driver' => env('APP_MAINTENANCE_DRIVER', 'file'),
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Tài khoản quản trị đầu tiên
+    |--------------------------------------------------------------------------
+    |
+    | Dùng bởi DatabaseSeeder. Để trống ADMIN_PASSWORD thì dùng mật khẩu "password",
+    | khách tự đổi ở màn Cài đặt sau khi nhận hệ thống.
+    |
+    */
+
+    'admin' => [
+        'name' => env('ADMIN_NAME', 'Khoa Anh Music'),
+        'email' => env('ADMIN_EMAIL', 'admin@khoaanhmusic.com'),
+        'password' => env('ADMIN_PASSWORD'),
+    ],
+
+    // Tài khoản kỹ thuật của bên triển khai: toàn quyền như chủ trung tâm, không hiện ở màn Nhân sự.
+    // Để trống SYSTEM_ADMIN_EMAIL thì không tạo.
+    'system_admin' => [
+        'email' => env('SYSTEM_ADMIN_EMAIL', 'system_admin@sis.local'),
+        'password' => env('SYSTEM_ADMIN_PASSWORD'),
     ],
 
 ];

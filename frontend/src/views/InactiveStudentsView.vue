@@ -1,7 +1,10 @@
 <script setup>
+import { notify } from '../services/notify';
+import { confirmDialog } from '../services/useConfirm';
 import { ref, computed, onMounted } from 'vue';
 import { inactiveStudentApi, studentApi } from '../services/api';
 import MessageTemplateModal from '../components/MessageTemplateModal.vue';
+import Pagination from '../components/Pagination.vue';
 import {
   PauseCircle,
   UserX,
@@ -12,8 +15,6 @@ import {
   Clock,
   Edit2,
   Trash2,
-  CheckCircle2,
-  AlertCircle,
   Sparkles,
   X,
 } from 'lucide-vue-next';
@@ -22,13 +23,16 @@ const loading = ref(true);
 const students = ref([]);
 const upcomingReturnStudents = ref([]);
 const centers = ref([]);
-const toastMessage = ref('');
-const toastType = ref('success');
 
 // Filters
 const selectedCenter = ref('all');
 const selectedStatus = ref('all'); // all, paused, inactive
 const upcomingDays = ref(7); // 7, 14, 30
+
+// Phân trang danh sách chính
+const page = ref(1);
+const perPage = ref(20);
+const pagination = ref(null);
 
 // Modals
 const showTemplateModal = ref(false);
@@ -56,11 +60,13 @@ const templates = ref([
 ]);
 
 const showToast = (msg, type = 'success') => {
-  toastMessage.value = msg;
-  toastType.value = type;
-  setTimeout(() => {
-    toastMessage.value = '';
-  }, 4000);
+  if (type === 'success') {
+    notify.success(msg);
+  } else if (msg.startsWith('Vui lòng')) {
+    notify.warning(msg);
+  } else {
+    notify.error(msg);
+  }
 };
 
 const fetchData = async () => {
@@ -70,7 +76,15 @@ const fetchData = async () => {
       center: selectedCenter.value,
       status: selectedStatus.value,
       upcoming_days: upcomingDays.value,
+      page: page.value,
+      per_page: perPage.value,
     });
+    pagination.value = res.data.pagination || null;
+    // Trang hiện tại không còn dữ liệu (ví dụ vừa kích hoạt/xoá dòng cuối) thì lùi về trang cuối
+    if (pagination.value && page.value > pagination.value.last_page && pagination.value.last_page >= 1) {
+      page.value = pagination.value.last_page;
+      return fetchData();
+    }
     students.value = res.data.students || [];
     upcomingReturnStudents.value = res.data.upcoming_return_students || [];
     centers.value = res.data.centers || [];
@@ -79,6 +93,22 @@ const fetchData = async () => {
   } finally {
     loading.value = false;
   }
+};
+
+// Đổi bộ lọc thì quay về trang 1
+const applyFilters = () => {
+  page.value = 1;
+  fetchData();
+};
+
+const changePage = (p) => {
+  page.value = p;
+  fetchData();
+};
+
+const changePerPage = (n) => {
+  perPage.value = n;
+  applyFilters();
 };
 
 onMounted(fetchData);
@@ -137,7 +167,11 @@ const handleSaveEdit = async () => {
 
 // 4. Xóa học viên
 const handleDeleteStudent = async (student) => {
-  if (!confirm(`Bạn có chắc muốn xóa vĩnh viễn hồ sơ học viên "${student.name}"?`)) return;
+  if (!(await confirmDialog({
+    title: 'Xoá vĩnh viễn hồ sơ?',
+    message: `Hồ sơ học viên "${student.name}" sẽ bị xoá vĩnh viễn và không thể khôi phục.`,
+    confirmText: 'Xoá vĩnh viễn',
+  }))) return;
   try {
     await studentApi.delete(student.id);
     showToast(`Đã xóa học viên "${student.name}" thành công!`);
@@ -153,10 +187,6 @@ const formatDate = (val) => {
   return d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
 };
 
-const getZaloLink = (phone) => {
-  if (!phone) return '#';
-  return `https://zalo.me/${phone.replace(/[^0-9]/g, '')}`;
-};
 </script>
 
 <template>
@@ -166,18 +196,6 @@ const getZaloLink = (phone) => {
       <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">HV Tạm dừng - Nghỉ</h1>
     </div>
 
-    <!-- Toast Notification -->
-    <div
-      v-if="toastMessage"
-      :class="[
-        toastType === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800',
-        'rounded-xl border p-3.5 flex items-center gap-2.5 text-xs sm:text-sm font-medium shadow-xs transition-all'
-      ]"
-    >
-      <CheckCircle2 v-if="toastType === 'success'" class="h-4.5 w-4.5 text-emerald-600 shrink-0" />
-      <AlertCircle v-else class="h-4.5 w-4.5 text-rose-600 shrink-0" />
-      <span>{{ toastMessage }}</span>
-    </div>
 
     <!-- Card: BỘ LỌC & DANH SÁCH HỌC VIÊN -->
     <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-5">
@@ -199,7 +217,7 @@ const getZaloLink = (phone) => {
           <label class="text-xs font-semibold text-slate-700 whitespace-nowrap">Trung tâm</label>
           <select
             v-model="selectedCenter"
-            @change="fetchData"
+            @change="applyFilters"
             class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="all">Tất cả trung tâm</option>
@@ -212,7 +230,7 @@ const getZaloLink = (phone) => {
           <label class="text-xs font-semibold text-slate-700 whitespace-nowrap">Trạng thái</label>
           <select
             v-model="selectedStatus"
-            @change="fetchData"
+            @change="applyFilters"
             class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="all">Tất cả</option>
@@ -261,14 +279,6 @@ const getZaloLink = (phone) => {
               <span class="ml-2 text-amber-700 font-medium">Hạn bảo lưu đến: {{ formatDate(st.end_date) }}</span>
             </div>
             <div class="flex items-center gap-2">
-              <a
-                :href="getZaloLink(st.parent_phone)"
-                target="_blank"
-                class="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100"
-              >
-                <MessageSquare class="h-3 w-3" />
-                <span>Nhắn Zalo</span>
-              </a>
               <button
                 type="button"
                 @click="handleReactivate(st)"
@@ -363,7 +373,7 @@ const getZaloLink = (phone) => {
                     type="button"
                     @click="openTemplateModal(s)"
                     class="p-1.5 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                    title="Mẫu tin nhắn Zalo"
+                    title="Mẫu tin nhắn"
                   >
                     <MessageSquare class="h-4 w-4" />
                   </button>
@@ -403,6 +413,7 @@ const getZaloLink = (phone) => {
           </tbody>
         </table>
       </div>
+      <Pagination :meta="pagination" @change-page="changePage" @change-per-page="changePerPage" />
     </div>
 
     <!-- MODAL SỬA THỜI HẠN / GHI CHÚ -->

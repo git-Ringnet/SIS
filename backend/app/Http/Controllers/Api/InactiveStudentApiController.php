@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\RetentionLog;
 use App\Models\Student;
+use App\Support\CenterStore;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -31,7 +32,22 @@ class InactiveStudentApiController extends Controller
             $query->where('center', $centerFilter);
         }
 
-        $students = $query->orderBy('updated_at', 'desc')->get();
+        // Đếm trên toàn bộ kết quả lọc, không phụ thuộc trang đang xem
+        $counts = [
+            'total' => (clone $query)->count(),
+            'paused' => (clone $query)->where('status', 'paused')->count(),
+            'inactive' => (clone $query)->whereIn('status', ['inactive', 'dropped'])->count(),
+        ];
+
+        $query->orderBy('updated_at', 'desc')->orderBy('id', 'desc');
+        $pagination = null;
+        if ($this->wantsPagination($request)) {
+            $paginator = $query->paginate($this->perPage($request));
+            $students = $paginator->items();
+            $pagination = $this->paginationMeta($paginator);
+        } else {
+            $students = $query->get();
+        }
 
         // Học viên tạm dừng sắp đi học lại (dựa trên cột end_date)
         $now = Carbon::now();
@@ -43,21 +59,15 @@ class InactiveStudentApiController extends Controller
             ->whereBetween('end_date', [$now->format('Y-m-d'), $targetDate->format('Y-m-d')])
             ->get();
 
-        $centers = [
-            'Tất cả trung tâm',
-            'Khoa Anh Music Hóc Môn',
-            'Khoa Anh Music Quận 12',
-            'Khoa Anh Music Gò Vấp',
-        ];
+        $centers = CenterStore::names();
 
         return response()->json([
             'students' => $students,
+            'pagination' => $pagination,
             'upcoming_return_students' => $upcomingStudents,
             'centers' => $centers,
             'counts' => [
-                'total' => $students->count(),
-                'paused' => $students->where('status', 'paused')->count(),
-                'inactive' => $students->whereIn('status', ['inactive', 'dropped'])->count(),
+                ...$counts,
                 'upcoming' => $upcomingStudents->count(),
             ],
         ]);

@@ -1,4 +1,6 @@
 <script setup>
+import { confirmDialog } from '../services/useConfirm';
+import { notify, errorMessage } from '../services/notify';
 import { ref, onMounted, computed } from 'vue';
 import { inventoryApi } from '../services/api';
 import {
@@ -16,6 +18,7 @@ import {
   Layers,
   ArrowUpDown,
 } from 'lucide-vue-next';
+import MoneyInput from '../components/MoneyInput.vue';
 
 const loading = ref(true);
 const items = ref([]);
@@ -101,7 +104,7 @@ const openAddModal = () => {
     code: '',
     category: 'Giáo trình',
     unit: 'Cuốn',
-    center: selectedCenter.value !== 'all' ? selectedCenter.value : (centers.value[0] || 'Khoa Anh Music Hóc Môn'),
+    center: selectedCenter.value !== 'all' ? selectedCenter.value : (centers.value[0] || ''),
     cost_price: 0,
     sell_price: 0,
     quantity: 0,
@@ -120,7 +123,7 @@ const openEditModal = (it) => {
     code: it.code,
     category: it.category || 'Học cụ',
     unit: it.unit || 'Cái',
-    center: it.center || (centers.value[0] || 'Khoa Anh Music Hóc Môn'),
+    center: it.center || (centers.value[0] || ''),
     cost_price: it.cost_price || 0,
     sell_price: it.sell_price || 0,
     quantity: it.quantity || 0,
@@ -133,7 +136,7 @@ const openEditModal = (it) => {
 // Lưu Thêm/Sửa
 const submitForm = async () => {
   if (!form.value.name.trim()) {
-    alert('Vui lòng nhập tên học cụ / vật phẩm!');
+    notify.warning('Vui lòng nhập tên học cụ / vật phẩm!');
     return;
   }
   try {
@@ -146,32 +149,42 @@ const submitForm = async () => {
     await fetchData();
   } catch (err) {
     console.error('Lỗi lưu học cụ:', err);
-    alert('Có lỗi xảy ra: ' + (err.response?.data?.message || err.message));
+    notify.error('Có lỗi xảy ra', { description: errorMessage(err, err.message) });
   }
 };
 
 // Xóa học cụ
 const deleteItem = async (it) => {
-  if (!confirm(`Bạn có chắc muốn xóa "${it.name}" khỏi danh mục học cụ?`)) return;
+  if (!(await confirmDialog({
+    title: 'Xoá học cụ?',
+    message: `"${it.name}" sẽ bị xoá khỏi danh mục học cụ.`,
+    confirmText: 'Xoá',
+  }))) return;
   try {
     await inventoryApi.delete(it.id);
     await fetchData();
   } catch (err) {
     console.error('Lỗi xóa học cụ:', err);
-    alert('Có lỗi xảy ra: ' + (err.response?.data?.message || err.message));
+    notify.error('Có lỗi xảy ra', { description: errorMessage(err, err.message) });
   }
 };
 
 // Tải CSV
-const downloadCsv = () => {
-  const url = inventoryApi.getExportUrl(selectedCenter.value);
-  window.open(url, '_blank');
+const downloadCsv = async () => {
+  try {
+    await inventoryApi.exportCsv(selectedCenter.value);
+  } catch (err) {
+    notify.apiError(err, 'Không thể xuất file học cụ');
+  }
 };
 
 // Tải mẫu CSV
-const downloadTemplate = () => {
-  const url = inventoryApi.getTemplateUrl();
-  window.open(url, '_blank');
+const downloadTemplate = async () => {
+  try {
+    await inventoryApi.downloadTemplate();
+  } catch (err) {
+    notify.apiError(err, 'Không thể tải file mẫu');
+  }
 };
 
 // Mở modal Nhập CSV
@@ -233,7 +246,7 @@ const submitAdjust = async () => {
     showAdjustModal.value = false;
     await fetchData();
   } catch (err) {
-    alert('Lỗi điều chỉnh tồn kho: ' + (err.response?.data?.message || err.message));
+    notify.error('Lỗi điều chỉnh tồn kho', { description: errorMessage(err, err.message) });
   }
 };
 </script>
@@ -534,11 +547,8 @@ const submitAdjust = async () => {
             <!-- Giá nhập -->
             <div>
               <label class="block font-medium text-slate-700 mb-1">Giá nhập (VNĐ)</label>
-              <input
-                v-model.number="form.cost_price"
-                type="number"
-                min="0"
-                step="1000"
+              <MoneyInput
+                v-model="form.cost_price"
                 class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none"
               />
             </div>
@@ -546,11 +556,8 @@ const submitAdjust = async () => {
             <!-- Giá bán -->
             <div>
               <label class="block font-medium text-slate-700 mb-1">Giá bán ra (VNĐ)</label>
-              <input
-                v-model.number="form.sell_price"
-                type="number"
-                min="0"
-                step="1000"
+              <MoneyInput
+                v-model="form.sell_price"
                 class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none font-bold text-rose-600"
               />
             </div>

@@ -1,9 +1,13 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { useCenters } from '../services/useCenters';
+import { confirmDialog } from '../services/useConfirm';
+import { notify, errorMessage } from '../services/notify';
+import { ref, computed, onMounted, watch } from 'vue';
 import { leadApi, courseApi } from '../services/api';
 import Modal from '../components/Modal.vue';
 import SearchableSelect from '../components/SearchableSelect.vue';
 import MessageTemplateModal from '../components/MessageTemplateModal.vue';
+import Pagination from '../components/Pagination.vue';
 import {
   UserPlus,
   Users,
@@ -24,12 +28,14 @@ import {
   Plus,
   Check,
 } from 'lucide-vue-next';
+import MoneyInput from '../components/MoneyInput.vue';
 
 // Dữ liệu chính
 const leads = ref([]);
 const courses = ref([]);
 const stages = ref({});
-const centers = ref(['Khoa Anh Music Hóc Môn', 'Khoa Anh Music Quận 12', 'Khoa Anh Music Gò Vấp']);
+const centers = ref([]);
+const { defaultCenter, loadCenters } = useCenters();
 const loading = ref(true);
 
 // Chế độ xem: 'list' (Danh sách giống ảnh tham khảo - Mặc định) hoặc 'kanban'
@@ -39,7 +45,14 @@ const viewMode = ref('list');
 const filterCenter = ref('all');
 const filterYear = ref('all');
 const filterMonth = ref('all');
+// Năm hiện tại và 4 năm trước
+const yearOptions = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i);
 const searchQuery = ref('');
+
+// Phân trang (chỉ áp dụng cho chế độ Danh sách, Kanban cần đủ dữ liệu để chia cột)
+const page = ref(1);
+const perPage = ref(20);
+const pagination = ref(null);
 
 // Modals
 const showCreateModal = ref(false);
@@ -60,7 +73,7 @@ const newLeadForm = ref({
   interested_course_id: '',
   source: 'Facebook',
   status: 'new',
-  center: 'Khoa Anh Music Hóc Môn',
+  center: '',
   trial_date: '',
   notes: '',
   image_url: '',
@@ -126,7 +139,14 @@ const fetchData = async () => {
       year: filterYear.value,
       month: filterMonth.value,
       search: searchQuery.value,
+      ...(viewMode.value === 'list' ? { page: page.value, per_page: perPage.value } : {}),
     });
+    pagination.value = res.data.pagination || null;
+    // Trang hiện tại không còn dữ liệu (ví dụ vừa xoá dòng cuối) thì lùi về trang cuối
+    if (pagination.value && page.value > pagination.value.last_page && pagination.value.last_page >= 1) {
+      page.value = pagination.value.last_page;
+      return fetchData();
+    }
     leads.value = res.data.leads || [];
     courses.value = res.data.courses || [];
     stages.value = res.data.stages || {};
@@ -143,8 +163,27 @@ const fetchData = async () => {
   }
 };
 
+// Đổi bộ lọc thì quay về trang 1
+const applyFilters = () => {
+  page.value = 1;
+  fetchData();
+};
+
+const changePage = (p) => {
+  page.value = p;
+  fetchData();
+};
+
+const changePerPage = (n) => {
+  perPage.value = n;
+  applyFilters();
+};
+
+watch(viewMode, applyFilters);
+
 onMounted(() => {
   fetchData();
+  loadCenters();
 });
 
 const courseOptions = computed(() => {
@@ -171,7 +210,7 @@ const changeStatus = async (lead, newStatus) => {
     await leadApi.updateStatus(lead.id, { status: newStatus });
     lead.status = newStatus;
   } catch (err) {
-    alert('Lỗi cập nhật trạng thái: ' + (err.response?.data?.message || err.message));
+    notify.error('Lỗi cập nhật trạng thái', { description: errorMessage(err, err.message) });
   }
 };
 
@@ -192,7 +231,7 @@ const submitCareNote = async () => {
     showCareModal.value = false;
     await fetchData();
   } catch (err) {
-    alert('Lỗi lưu chăm sóc: ' + (err.response?.data?.message || err.message));
+    notify.error('Lỗi lưu chăm sóc', { description: errorMessage(err, err.message) });
   }
 };
 
@@ -216,10 +255,10 @@ const submitConvert = async () => {
     isSubmitting.value = true;
     await leadApi.convertToStudent(selectedLead.value.id, convertForm.value);
     showConvertModal.value = false;
-    alert(`Đã chuyển đổi thành công học viên ${convertForm.value.student_name}!`);
+    notify.success(`Đã chuyển đổi thành công học viên ${convertForm.value.student_name}!`);
     await fetchData();
   } catch (err) {
-    alert(err.response?.data?.message || 'Lỗi khi chuyển đổi thành học viên');
+    notify.apiError(err, 'Lỗi khi chuyển đổi thành học viên');
   } finally {
     isSubmitting.value = false;
   }
@@ -242,7 +281,7 @@ const submitImage = async () => {
     selectedLead.value.image_url = imageUrlInput.value;
     showImageModal.value = false;
   } catch (err) {
-    alert('Lỗi lưu hình ảnh: ' + (err.response?.data?.message || err.message));
+    notify.error('Lỗi lưu hình ảnh', { description: errorMessage(err, err.message) });
   }
 };
 
@@ -256,7 +295,7 @@ const copyLeadInfo = (lead) => {
   }, 2000);
 };
 
-// Mở modal tin nhắn Zalo
+// Mở modal mẫu tin nhắn
 const openMessageModal = (lead) => {
   selectedLead.value = {
     name: lead.student_name || lead.parent_name,
@@ -268,18 +307,26 @@ const openMessageModal = (lead) => {
 
 // Xóa lead
 const deleteLead = async (lead) => {
-  if (!confirm(`Bạn có chắc muốn xóa khách hàng "${lead.parent_name}"?`)) return;
+  if (!(await confirmDialog({
+    title: 'Xoá khách hàng tiềm năng?',
+    message: `Khách hàng "${lead.parent_name}" và lịch sử chăm sóc sẽ bị xoá.`,
+    confirmText: 'Xoá',
+  }))) return;
   try {
     await leadApi.delete(lead.id);
     await fetchData();
   } catch (err) {
-    alert('Lỗi khi xóa lead: ' + (err.response?.data?.message || err.message));
+    notify.error('Lỗi khi xóa lead', { description: errorMessage(err, err.message) });
   }
 };
 
 // Xuất CSV
-const downloadCsv = () => {
-  window.open(leadApi.getExportUrl(), '_blank');
+const downloadCsv = async () => {
+  try {
+    await leadApi.exportCsv();
+  } catch (err) {
+    notify.apiError(err, 'Không thể xuất file khách hàng');
+  }
 };
 
 // Mở modal tạo lead mới
@@ -292,7 +339,7 @@ const openCreateModal = () => {
     interested_course_id: courses.value[0]?.id || '',
     source: 'Facebook',
     status: 'new',
-    center: filterCenter.value !== 'all' ? filterCenter.value : 'Khoa Anh Music Hóc Môn',
+    center: filterCenter.value !== 'all' ? filterCenter.value : defaultCenter.value,
     trial_date: '',
     notes: '',
     image_url: '',
@@ -305,9 +352,10 @@ const submitCreateLead = async () => {
     isSubmitting.value = true;
     await leadApi.create(newLeadForm.value);
     showCreateModal.value = false;
+    page.value = 1;
     await fetchData();
   } catch (err) {
-    alert(err.response?.data?.message || 'Lỗi khi tạo lead');
+    notify.apiError(err, 'Lỗi khi tạo lead');
   } finally {
     isSubmitting.value = false;
   }
@@ -376,7 +424,7 @@ const submitCreateLead = async () => {
           <span class="text-xs text-slate-500 font-medium shrink-0">Trung tâm</span>
           <select
             v-model="filterCenter"
-            @change="fetchData"
+            @change="applyFilters"
             class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="all">Tất cả trung tâm</option>
@@ -389,12 +437,11 @@ const submitCreateLead = async () => {
           <span class="text-xs text-slate-500 font-medium shrink-0">Năm</span>
           <select
             v-model="filterYear"
-            @change="fetchData"
+            @change="applyFilters"
             class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="all">Tất cả năm</option>
-            <option value="2026">2026</option>
-            <option value="2025">2025</option>
+            <option v-for="y in yearOptions" :key="y" :value="String(y)">{{ y }}</option>
           </select>
         </div>
 
@@ -403,7 +450,7 @@ const submitCreateLead = async () => {
           <span class="text-xs text-slate-500 font-medium shrink-0">Tháng</span>
           <select
             v-model="filterMonth"
-            @change="fetchData"
+            @change="applyFilters"
             class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
           >
             <option value="all">Tất cả tháng</option>
@@ -415,7 +462,7 @@ const submitCreateLead = async () => {
         <div class="flex-1 min-w-44">
           <input
             v-model="searchQuery"
-            @keyup.enter="fetchData"
+            @keyup.enter="applyFilters"
             type="text"
             placeholder="Tìm tên, SĐT phụ huynh..."
             class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 placeholder:text-slate-400 focus:border-rose-500 focus:outline-none"
@@ -560,11 +607,11 @@ const submitCreateLead = async () => {
                 <Copy v-else class="h-4 w-4" />
               </button>
 
-              <!-- Nút [ 💬 ] (Gửi mẫu tin nhắn Zalo) -->
+              <!-- Nút [ 💬 ] (Mẫu tin nhắn soạn sẵn) -->
               <button
                 type="button"
                 @click="openMessageModal(lead)"
-                title="Gửi tin nhắn mẫu qua Zalo"
+                title="Mẫu tin nhắn soạn sẵn"
                 class="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 p-1 text-slate-500 hover:text-slate-800 transition-all cursor-pointer"
               >
                 <MessageSquare class="h-4 w-4" />
@@ -592,6 +639,7 @@ const submitCreateLead = async () => {
             </div>
           </div>
         </div>
+        <Pagination :meta="pagination" class="mt-4" @change-page="changePage" @change-per-page="changePerPage" />
       </div>
 
       <!-- CHẾ ĐỘ 2: PIPELINE KANBAN (Cho phép kéo/đổi trực quan) -->
@@ -677,7 +725,7 @@ const submitCreateLead = async () => {
 
     <!-- MODAL 1: THÊM KHÁCH HÀNG MỚI -->
     <Modal
-      :isOpen="showCreateModal"
+      :show="showCreateModal"
       title="Thêm Khách Hàng Tiềm Năng"
       @close="showCreateModal = false"
     >
@@ -801,7 +849,7 @@ const submitCreateLead = async () => {
 
     <!-- MODAL 2: GHI CHÚ CHĂM SÓC (📞) -->
     <Modal
-      :isOpen="showCareModal"
+      :show="showCareModal"
       title="Ghi Nhận Lịch Sử Chăm Sóc"
       @close="showCareModal = false"
     >
@@ -845,7 +893,7 @@ const submitCreateLead = async () => {
 
     <!-- MODAL 3: CHUYỂN THÀNH HỌC VIÊN CHÍNH THỨC -->
     <Modal
-      :isOpen="showConvertModal"
+      :show="showConvertModal"
       title="Kích Hoạt & Tạo Hồ Sơ Học Viên"
       @close="showConvertModal = false"
     >
@@ -900,11 +948,8 @@ const submitCreateLead = async () => {
 
         <div>
           <label class="block text-xs font-semibold text-slate-700 mb-1">Số tiền học phí đã thu (VNĐ)</label>
-          <input
-            v-model.number="convertForm.price"
-            type="number"
-            min="0"
-            step="1000"
+          <MoneyInput
+            v-model="convertForm.price"
             class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none font-bold text-rose-600"
           />
         </div>
@@ -930,7 +975,7 @@ const submitCreateLead = async () => {
 
     <!-- MODAL 4: HÌNH ẢNH HỢP ĐỒNG / BÀI TEST (🖼️) -->
     <Modal
-      :isOpen="showImageModal"
+      :show="showImageModal"
       title="Hình Ảnh & Phiếu Đăng Ký"
       @close="showImageModal = false"
     >
@@ -972,7 +1017,7 @@ const submitCreateLead = async () => {
       </div>
     </Modal>
 
-    <!-- MODAL 5: MẪU TIN NHẮN ZALO (💬) -->
+    <!-- MODAL 5: MẪU TIN NHẮN (💬) -->
     <MessageTemplateModal
       :show="showMessageModal"
       :student="selectedLead"

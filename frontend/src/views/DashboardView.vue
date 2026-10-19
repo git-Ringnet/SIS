@@ -1,10 +1,13 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue';
-import { dashboardApi, retentionApi } from '../services/api';
+import { useBrand } from '../services/useBrand';
+import { notify } from '../services/notify';
+import { ref, computed, onMounted, watch } from 'vue';
+import { dashboardApi, retentionApi, centerApi, studentApi } from '../services/api';
+import { useAuth } from '../services/useAuth';
+import { isPathBlocked } from '../services/permissions';
 import MessageTemplateModal from '../components/MessageTemplateModal.vue';
 import RetentionNoteModal from '../components/RetentionNoteModal.vue';
 import RenewModal from '../components/RenewModal.vue';
-import InvoicePDFModal from '../components/InvoicePDFModal.vue';
 import RetentionLogsModal from '../components/RetentionLogsModal.vue';
 import AttendanceButton from '../components/AttendanceButton.vue';
 import {
@@ -29,28 +32,44 @@ import {
   ArrowUpRight,
 } from 'lucide-vue-next';
 
+const { brandName } = useBrand();
+
 const stats = ref({});
+const { user } = useAuth();
 const expiringStudents = ref([]);
 const absenceAlerts = ref([]);
 const expiringEndDateStudents = ref([]);
 const recentAttendances = ref([]);
 const courses = ref([]);
 const templates = ref([]);
+const centers = ref([]);
 const loading = ref(true);
 
 const selectedCenter = ref('all');
 const showTemplateModal = ref(false);
 const showNoteModal = ref(false);
 const showRenewModal = ref(false);
-const showInvoicePDFModal = ref(false);
 const showLogsModal = ref(false);
 const selectedStudent = ref(null);
 const expiringFilter = ref('0-2'); // '0-2' or 'all'
 
+const fetchCenters = async () => {
+  try {
+    const res = await centerApi.getCenters();
+    centers.value = res.data?.centers || [];
+  } catch (err) {
+    console.error('Error fetching centers: ', err);
+  }
+};
+
 const fetchData = async () => {
   try {
     loading.value = true;
-    const res = await dashboardApi.getStats();
+    const params = {};
+    if (selectedCenter.value && selectedCenter.value !== 'all') {
+      params.center = selectedCenter.value;
+    }
+    const res = await dashboardApi.getStats(params);
     stats.value = res.data.stats || {};
     expiringStudents.value = res.data.expiringStudents || [];
     absenceAlerts.value = res.data.absenceAlerts || [];
@@ -65,7 +84,13 @@ const fetchData = async () => {
   }
 };
 
-onMounted(fetchData);
+watch(selectedCenter, () => {
+  fetchData();
+});
+
+onMounted(async () => {
+  await Promise.all([fetchCenters(), fetchData()]);
+});
 
 const displayedExpiringStudents = computed(() => {
   if (expiringFilter.value === '0-2') {
@@ -89,9 +114,22 @@ const openRenewModal = (student) => {
   showRenewModal.value = true;
 };
 
-const openInvoicePDF = (student) => {
-  selectedStudent.value = student;
-  showInvoicePDFModal.value = true;
+const openInvoicePDF = async (student) => {
+  // Mở tab ngay trong sự kiện click để không bị trình duyệt chặn popup
+  const pdfTab = window.open('', '_blank');
+  try {
+    const res = await studentApi.tuitionInvoicePdf(student.id);
+    const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+    if (pdfTab) {
+      pdfTab.location.href = url;
+    } else {
+      window.open(url, '_blank');
+    }
+  } catch (err) {
+    pdfTab?.close();
+    console.error('Error generating invoice PDF: ', err);
+    notify.error('Không thể tạo hóa đơn PDF. Vui lòng thử lại.');
+  }
 };
 
 const openLogsModal = (student) => {
@@ -99,22 +137,54 @@ const openLogsModal = (student) => {
   showLogsModal.value = true;
 };
 
+const isStatusActive = (student, statusKey) => {
+  if (!student?.retention_status || student.retention_status === 'normal') return false;
+  return student.retention_status.split(',').map((s) => s.trim()).includes(statusKey);
+};
+
 const toggleRetentionStatus = async (student, targetStatus) => {
-  const newStatus = student.retention_status === targetStatus ? 'normal' : targetStatus;
+  const currentList = student.retention_status && student.retention_status !== 'normal'
+    ? student.retention_status.split(',').map((s) => s.trim()).filter(Boolean)
+    : [];
+
+  let nextList;
+  if (currentList.includes(targetStatus)) {
+    // Tắt trạng thái này đi (độc lập, không ảnh hưởng các trạng thái khác)
+    nextList = currentList.filter((s) => s !== targetStatus);
+  } else {
+    // Bật thêm trạng thái này lên, đồng thời GIỮ NGUYÊN các trạng thái khác đã bật
+    nextList = [...currentList, targetStatus];
+  }
+
+  const newStatusString = nextList.length > 0 ? nextList.join(',') : 'normal';
   const oldStatus = student.retention_status;
-  student.retention_status = newStatus;
+  student.retention_status = newStatusString;
 
   try {
     const res = await retentionApi.updateStatus(student.id, {
-      status: newStatus,
+      status: newStatusString,
+      is_toggle: true,
     });
     if (res.data?.student) {
-      Object.assign(student, res.data.student);
+      student.retention_status = res.data.student.retention_status;
+      if (res.data.student.latest_retention_log) {
+        student.latest_retention_log = res.data.student.latest_retention_log;
+      }
     }
   } catch (err) {
     student.retention_status = oldStatus;
     console.error('Error updating retention status: ', err);
   }
+};
+
+const onStudentRenewed = (updatedStudent) => {
+  if (updatedStudent) {
+    const idx = expiringStudents.value.findIndex((s) => s.id === updatedStudent.id);
+    if (idx !== -1) {
+      expiringStudents.value.splice(idx, 1);
+    }
+  }
+  fetchData();
 };
 
 const onStudentLogSaved = (updatedStudent) => {
@@ -143,10 +213,6 @@ const formatDate = (val) => {
   return d.toLocaleDateString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
 };
 
-const getZaloLink = (phone) => {
-  if (!phone) return '#';
-  return `https://zalo.me/${phone.replace(/[^0-9]/g, '')}`;
-};
 
 const todoTasks = computed(() => [
   {
@@ -248,6 +314,11 @@ const todoTasks = computed(() => [
     actionColor: 'text-indigo-700 hover:text-indigo-800',
   },
 ]);
+
+// Chỉ hiện những việc thực sự cần xử lý (count > 0)
+const visibleTodoTasks = computed(() =>
+  todoTasks.value.filter((task) => task.count > 0 && !isPathBlocked(user.value, task.to)),
+);
 </script>
 
 <template>
@@ -260,7 +331,7 @@ const todoTasks = computed(() => [
           Tổng quan Vận hành & Học viên
         </h1>
         <p class="text-sm text-slate-500 mt-1">
-          Báo cáo học viên, chất lượng đào tạo và dòng tiền theo thời gian thực tại Khoa Anh Music.
+          Báo cáo học viên, chất lượng đào tạo và dòng tiền theo thời gian thực tại {{ brandName }}.
         </p>
       </div>
 
@@ -272,11 +343,12 @@ const todoTasks = computed(() => [
         <div class="relative w-full sm:w-64">
           <select
             v-model="selectedCenter"
-            class="w-full appearance-none rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-2.5 pr-9 text-sm font-medium text-slate-800 hover:border-indigo-300 focus:border-indigo-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
+            class="w-full appearance-none rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-2.5 pr-9 text-sm font-medium text-slate-800 hover:border-indigo-300 focus:border-indigo-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all cursor-pointer"
           >
             <option value="all">Tất cả trung tâm</option>
-            <option value="center-1">Cơ sở 1 - Khoa Anh Music</option>
-            <option value="center-2">Cơ sở 2 - Khoa Anh Art</option>
+            <option v-for="c in centers" :key="c.id" :value="c.name">
+              {{ c.name }}
+            </option>
           </select>
           <ChevronDown class="pointer-events-none absolute right-3.5 top-3.5 h-4.5 w-4.5 text-slate-400" />
         </div>
@@ -386,7 +458,7 @@ const todoTasks = computed(() => [
         </div>
 
         <!-- 3. DOANH THU THỰC THU -->
-        <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between">
+        <div v-if="stats.monthRevenue !== null" class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between">
           <div class="flex items-start justify-between">
             <div>
               <span class="text-xs font-bold uppercase tracking-wider text-slate-400">
@@ -408,7 +480,7 @@ const todoTasks = computed(() => [
         </div>
 
         <!-- 4. HÓA ĐƠN & CÔNG NỢ -->
-        <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between">
+        <div v-if="stats.debtTotalAmount !== null" class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between">
           <div class="flex items-start justify-between">
             <div>
               <span class="text-xs font-bold uppercase tracking-wider text-slate-400">
@@ -434,7 +506,7 @@ const todoTasks = computed(() => [
       </div>
 
       <!-- KHỐI VIỆC CẦN XỬ LÝ HÔM NAY -->
-      <div class="rounded-2xl border border-slate-200/90 bg-white p-5 sm:p-6 shadow-2xs">
+      <div v-if="visibleTodoTasks.length > 0" class="rounded-2xl border border-slate-200/90 bg-white p-5 sm:p-6 shadow-2xs">
         <div class="flex items-center gap-2.5 mb-4">
           <AlertTriangle class="h-5 w-5 text-red-500 shrink-0 stroke-[2.2]" />
           <h2 class="text-base sm:text-lg font-black tracking-wide text-slate-800 uppercase">
@@ -444,7 +516,7 @@ const todoTasks = computed(() => [
 
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div
-            v-for="task in todoTasks"
+            v-for="task in visibleTodoTasks"
             :key="task.id"
             :class="[
               task.cardBg,
@@ -564,7 +636,7 @@ const todoTasks = computed(() => [
                   type="button"
                   @click="toggleRetentionStatus(s, 'invoice_sent')"
                   :class="[
-                    s.retention_status === 'invoice_sent'
+                    isStatusActive(s, 'invoice_sent')
                       ? 'bg-blue-600 text-white shadow-xs font-semibold'
                       : 'border border-blue-500 bg-white hover:bg-blue-50 text-blue-600 font-medium',
                     'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs sm:text-sm transition-all active:scale-[0.98]'
@@ -573,10 +645,12 @@ const todoTasks = computed(() => [
                 >
                   <FileText class="h-3.5 w-3.5" />
                   <span>Hóa đơn</span>
+                  <Check v-if="isStatusActive(s, 'invoice_sent')" class="h-3 w-3" />
                 </button>
 
-                <!-- 2. [ 📄↓ ] (Xem & in PDF hóa đơn học phí) -->
+                <!-- 2. [ 📄↓ ] Xuất PDF hóa đơn: chỉ hiện khi đã tạo hóa đơn (nút Hóa đơn đang sáng) -->
                 <button
+                  v-if="isStatusActive(s, 'invoice_sent')"
                   type="button"
                   @click="openInvoicePDF(s)"
                   class="inline-flex items-center justify-center rounded-lg border border-blue-400 bg-white hover:bg-blue-50 px-2 py-1.5 text-xs sm:text-sm text-blue-600 shadow-2xs transition-all active:scale-[0.98]"
@@ -590,7 +664,7 @@ const todoTasks = computed(() => [
                   type="button"
                   @click="toggleRetentionStatus(s, 'following_up')"
                   :class="[
-                    s.retention_status === 'following_up'
+                    isStatusActive(s, 'following_up')
                       ? 'bg-amber-500 text-white shadow-xs font-semibold'
                       : 'border border-amber-400 bg-white hover:bg-amber-50 text-amber-600 font-medium',
                     'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs sm:text-sm transition-all active:scale-[0.98]'
@@ -599,22 +673,24 @@ const todoTasks = computed(() => [
                 >
                   <PhoneCall class="h-3.5 w-3.5" />
                   <span>Chăm sóc</span>
+                  <Check v-if="isStatusActive(s, 'following_up')" class="h-3 w-3" />
                 </button>
 
-                <!-- 4. [ 🗹 Đã đóng ] (Click vào sáng lên / toggle status 'renewed' trực tiếp) -->
+                <!-- 4. [ 🗹 Đã đóng ] (Click vào sáng lên / toggle status 'renewed') -->
                 <button
                   type="button"
                   @click="toggleRetentionStatus(s, 'renewed')"
                   :class="[
-                    s.retention_status === 'renewed'
+                    isStatusActive(s, 'renewed')
                       ? 'bg-emerald-600 text-white shadow-xs font-semibold'
                       : 'border border-emerald-500 bg-white hover:bg-emerald-50 text-emerald-600 font-medium',
                     'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs sm:text-sm transition-all active:scale-[0.98]'
                   ]"
-                  title="Đánh dấu đã đóng học phí / hoàn tất tái ký (sáng lên)"
+                  title="Đánh dấu đã đóng học phí"
                 >
                   <CheckCircle2 class="h-3.5 w-3.5" />
                   <span>Đã đóng</span>
+                  <Check v-if="isStatusActive(s, 'renewed')" class="h-3 w-3" />
                 </button>
 
                 <!-- 5. [ 📄 ] (Xem lịch sử chăm sóc & thêm ghi chú) -->
@@ -650,31 +726,31 @@ const todoTasks = computed(() => [
           </div>
         </div>
 
-        <!-- 2. CẢNH BÁO ĐẾN HẠN KẾT THÚC KHÓA HỌC -->
+        <!-- 2. CẢNH BÁO ĐẾN HẠN ĐÓNG HỌC PHÍ -->
         <div class="rounded-2xl border border-amber-200/80 bg-white shadow-2xs overflow-hidden">
           <div class="p-4 sm:p-5 border-b border-amber-100 bg-amber-50/30 flex items-center justify-between">
             <div class="flex items-center gap-2.5">
-              <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500 text-white">
-                <Clock class="h-4.5 w-4.5" />
+              <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500 text-white shadow-xs">
+                <AlertTriangle class="h-4.5 w-4.5" />
               </div>
               <div>
                 <h2 class="text-sm sm:text-base font-bold text-slate-900">
-                  Cảnh báo đến hạn kết thúc khóa học
+                  Cảnh báo đến hạn đóng học phí
                 </h2>
                 <p class="text-xs sm:text-sm text-slate-500">
-                  Khoá học có ngày kết thúc dự kiến trong vòng 5 ngày tới
+                  Học viên còn ≤ 1 buổi hoặc khoá học kết thúc trong vòng 5 ngày tới
                 </p>
               </div>
             </div>
-            <span class="inline-flex items-center rounded-full bg-amber-100 px-3 py-0.5 text-xs font-bold text-amber-800">
+            <span v-if="expiringEndDateStudents.length > 0" class="inline-flex items-center rounded-full bg-amber-100 px-3 py-0.5 text-xs font-bold text-amber-800">
               {{ expiringEndDateStudents.length }} học viên
             </span>
           </div>
 
           <div class="p-4 sm:p-5">
-            <div v-if="expiringEndDateStudents.length === 0" class="py-3 text-xs sm:text-sm font-semibold text-slate-600 flex items-center gap-2">
-              <span>Tất cả học viên đều còn thời hạn dài</span>
-              <span>✨</span>
+            <div v-if="expiringEndDateStudents.length === 0" class="py-2 text-xs sm:text-sm font-medium text-slate-600 flex items-center gap-1.5">
+              <span>Tất cả ổn</span>
+              <span>🎉</span>
             </div>
 
             <div v-else class="divide-y divide-slate-100 space-y-3">
@@ -686,13 +762,17 @@ const todoTasks = computed(() => [
                 <div>
                   <span class="font-bold text-slate-900 text-xs sm:text-[15px]">{{ s.name }}</span>
                   <span class="text-slate-500 text-xs sm:text-sm ml-2">({{ s.course?.name }})</span>
-                  <p class="text-xs sm:text-sm text-amber-700 mt-0.5">Hạn kết thúc: {{ s.end_date }}</p>
+                  <p class="text-xs sm:text-sm text-amber-700 mt-0.5">
+                    Còn {{ s.remaining_sessions ?? 0 }} buổi
+                    <template v-if="s.end_date"> &bull; Hạn kết thúc: {{ s.end_date }}</template>
+                  </p>
                 </div>
                 <button
                   @click="openRenewModal(s)"
                   class="rounded-lg bg-indigo-600 hover:bg-indigo-700 px-3.5 py-1.5 text-xs sm:text-sm font-medium text-white shadow-xs shadow-indigo-600/20 transition-all active:scale-[0.98]"
+                  title="Thu học phí, tạo phiếu thu và cộng buổi học"
                 >
-                  Gia hạn
+                  Thu học phí
                 </button>
               </div>
             </div>
@@ -721,12 +801,6 @@ const todoTasks = computed(() => [
       :student="selectedStudent"
       @close="showRenewModal = false"
       @renewed="fetchData"
-    />
-
-    <InvoicePDFModal
-      :show="showInvoicePDFModal"
-      :student="selectedStudent"
-      @close="showInvoicePDFModal = false"
     />
 
     <RetentionLogsModal
