@@ -421,26 +421,6 @@ const handleLogoUpload = (e) => {
             </select>
           </div>
         </div>
-
-        <!-- Thông tin chuyển khoản: in trên phiếu báo học phí PDF -->
-        <div>
-          <p class="text-xs font-bold text-slate-800">Thông tin chuyển khoản</p>
-          <p class="text-[11px] text-slate-500 mt-0.5">Hiển thị trên phiếu báo học phí PDF gửi phụ huynh.</p>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label class="block text-xs font-semibold text-slate-700 mb-1.5">Ngân hàng</label>
-            <input v-model="brand.bank_name" type="text" placeholder="VD: MB Bank (Quân Đội)" class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500" />
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-slate-700 mb-1.5">Số tài khoản</label>
-            <input v-model="brand.bank_account" type="text" placeholder="VD: 0123456789" class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500" />
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-slate-700 mb-1.5">Chủ tài khoản</label>
-            <input v-model="brand.bank_holder" type="text" placeholder="VD: NGUYEN VAN A" class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500" />
-          </div>
-        </div>
       </div>
 
       <div>

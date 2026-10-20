@@ -18,17 +18,67 @@ class PagePermissions
      * (dùng cho API mà trang khác vẫn cần đọc, ví dụ danh sách khoá học trong form học viên).
      */
     public const PAGE_APIS = [
+        'Bảng điều khiển' => ['all' => ['dashboard']],
+        'Học viên' => ['all' => ['students/template', 'students/import'], 'write' => ['students']],
+        'Điểm danh' => ['all' => ['attendance']],
+        'Check-in ca dạy' => ['all' => ['teacher-checkin']],
+        'Vắng liên tiếp' => ['all' => ['absences']],
+        'Khách hàng tiềm năng' => ['all' => ['leads']],
         'Doanh thu' => ['all' => ['revenue']],
         'Hóa đơn & Thu phí' => ['all' => ['invoices']],
-        'Khách hàng tiềm năng' => ['all' => ['leads']],
+        'Học cụ' => ['all' => ['inventory/export', 'inventory/template', 'inventory/import'], 'write' => ['inventory']],
+        'Sinh nhật' => ['all' => ['birthdays']],
+        'HV Tạm dừng - Nghỉ' => ['all' => ['inactive-students']],
+        'Khóa học' => ['write' => ['courses']],
+        'Trung tâm' => ['write' => ['centers']],
+        'Nhân sự' => ['write' => ['staff']],
         'Cài đặt' => ['all' => ['settings/brand', 'settings/vat', 'settings/activity-logs', 'settings/backups']],
         'Dữ liệu' => ['all' => ['export']],
         'Báo cáo' => ['all' => ['reports']],
-        'Học cụ' => ['all' => ['inventory/export', 'inventory/template', 'inventory/import'], 'write' => ['inventory']],
-        'Khóa học' => ['write' => ['courses']],
-        'Nhân sự' => ['write' => ['staff']],
-        'Trung tâm' => ['write' => ['centers']],
     ];
+
+    /**
+     * Trang mặc định bị chặn theo vai trò khi tạo tài khoản / đổi vai trò.
+     * Giáo viên chỉ dùng Điểm danh và Check-in ca dạy; chủ trung tâm mở thêm ở màn Nhân sự nếu cần.
+     */
+    public static function defaultBlockedPages(string $role): array
+    {
+        $all = array_keys(self::PAGE_APIS);
+
+        return match ($role) {
+            'Chủ trung tâm' => [],
+            'Quản lý / Lễ tân' => ['Cài đặt', 'Dữ liệu'],
+            'Giáo viên' => array_values(array_diff($all, ['Điểm danh', 'Check-in ca dạy'])),
+            default => ['Doanh thu', 'Hóa đơn & Thu phí', 'Khách hàng tiềm năng', 'Cài đặt', 'Dữ liệu'],
+        };
+    }
+
+    /**
+     * Thành viên ở màn Nhân sự ứng với tài khoản (null nếu không có trong danh sách).
+     */
+    public static function member(?User $user): ?array
+    {
+        if (! $user || ! Storage::exists('staff_data.json')) {
+            return null;
+        }
+
+        $staff = json_decode(Storage::get('staff_data.json'), true);
+        foreach ($staff['members'] ?? [] as $member) {
+            if (($member['email'] ?? null) === $user->email) {
+                return $member;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Tài khoản là giáo viên (không phải chủ trung tâm): chỉ được xem / check-in ca dạy của chính mình.
+     */
+    public static function isTeacher(?User $user): bool
+    {
+        return ! OwnerGuard::isOwner($user) && str_contains(self::member($user)['role'] ?? '', 'Giáo viên');
+    }
 
     /**
      * Danh sách trang bị chặn của người dùng (rỗng nếu là chủ trung tâm hoặc không có trong danh sách nhân sự).
@@ -37,18 +87,11 @@ class PagePermissions
      */
     public static function blockedPages(?User $user): array
     {
-        if (! $user || OwnerGuard::isOwner($user) || ! Storage::exists('staff_data.json')) {
+        if (! $user || OwnerGuard::isOwner($user)) {
             return [];
         }
 
-        $staff = json_decode(Storage::get('staff_data.json'), true);
-        foreach ($staff['members'] ?? [] as $member) {
-            if (($member['email'] ?? null) === $user->email) {
-                return array_values($member['blocked_pages'] ?? []);
-            }
-        }
-
-        return [];
+        return array_values(self::member($user)['blocked_pages'] ?? []);
     }
 
     public static function isBlocked(?User $user, string $page): bool

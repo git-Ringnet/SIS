@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Attendance;
 use App\Models\Student;
 use App\Support\CenterStore;
+use App\Support\StudentSchedule;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,76 +22,70 @@ class ReportApiController extends Controller
         $dayFilter = $request->input('day', 'all');
         $onlyAvailable = filter_var($request->input('only_available', false), FILTER_VALIDATE_BOOLEAN);
 
-        // 1. Dữ liệu xu hướng học viên đang học (Active + Paused) theo 12 tháng
+        // 1. Các mốc thời gian: theo năm = 12 tháng, theo quý = 3 tháng của quý, theo tháng = từng ngày
+        $period = $request->input('period', 'year');
+        $monthNum = $month === 'current' || ! $month ? now()->month : max(1, min(12, (int) $month));
+        $buckets = [];
+        if ($period === 'month') {
+            $first = Carbon::create($year, $monthNum, 1)->startOfDay();
+            for ($d = 1; $d <= $first->daysInMonth; $d++) {
+                $day = $first->copy()->day($d);
+                $buckets[] = ['label' => (string) $d, 'num' => $d, 'start' => $day->copy()->startOfDay(), 'end' => $day->copy()->endOfDay()];
+            }
+        } else {
+            $months = $period === 'quarter'
+                ? range(intdiv($monthNum - 1, 3) * 3 + 1, intdiv($monthNum - 1, 3) * 3 + 3)
+                : range(1, 12);
+            foreach ($months as $m) {
+                $first = Carbon::create($year, $m, 1);
+                $buckets[] = ['label' => "Th{$m}", 'num' => $m, 'start' => $first->copy()->startOfMonth(), 'end' => $first->copy()->endOfMonth()];
+            }
+        }
+        $rangeStart = $buckets[0]['start'];
+        $rangeEnd = end($buckets)['end'];
+
+        $students = Student::query()
+            ->when($center !== 'all' && $center, fn ($q) => $q->where('center', $center))
+            ->get(['id', 'status', 'join_date', 'created_at', 'updated_at']);
+        $attendances = Attendance::whereBetween('attended_at', [$rangeStart, $rangeEnd])
+            ->when($center !== 'all' && $center, fn ($q) => $q->whereIn('student_id', $students->pluck('id')))
+            ->get(['attended_at', 'status']);
+
+        $joinedAt = fn ($s) => $s->join_date ? Carbon::parse($s->join_date)->startOfDay() : $s->created_at;
+        // Ngày nghỉ học: lần cập nhật cuối của học viên đã chuyển sang Đã nghỉ
+        $isDropped = fn ($s) => in_array($s->status, ['inactive', 'dropped'], true);
+
         $activeTrend = [];
         $newVsDrop = [];
         $attendanceRates = [];
+        $today = now()->endOfDay();
 
-        $allStudents = Student::all();
-        $allAttendances = Attendance::whereYear('attended_at', $year)->get();
+        foreach ($buckets as $b) {
+            $future = $b['start']->gt($today);
+            $pointEnd = $b['end']->lt($today) ? $b['end'] : $today;
 
-        for ($m = 1; $m <= 12; $m++) {
-            $monthStart = Carbon::createFromDate($year, $m, 1)->startOfMonth();
-            $monthEnd = Carbon::createFromDate($year, $m, 1)->endOfMonth();
-
-            // Học viên đang học/tạm dừng tính đến cuối tháng m
-            $activeCount = $allStudents->filter(function ($s) use ($monthEnd) {
-                $joined = $s->join_date ? Carbon::parse($s->join_date) : $s->created_at;
-                if ($joined->gt($monthEnd)) {
-                    return false;
-                }
-                if ($s->status === 'inactive' && $s->updated_at->lt($monthEnd)) {
+            // Đang học + tạm dừng tại cuối mốc: đã nhập học và chưa nghỉ
+            $activeCount = $future ? null : $students->filter(function ($s) use ($pointEnd, $joinedAt, $isDropped) {
+                if ($joinedAt($s)->gt($pointEnd)) {
                     return false;
                 }
 
-                return in_array($s->status, ['active', 'paused']);
+                return ! ($isDropped($s) && $s->updated_at->lte($pointEnd));
             })->count();
 
-            // Nếu dữ liệu hiện tại ít, đảm bảo có số liệu trực quan tương tự đồ thị thực tế
-            if ($activeCount === 0 && $m >= 9) {
-                $activeCount = 4;
-            }
+            $newCount = $students->filter(fn ($s) => $joinedAt($s)->between($b['start'], $b['end']))->count();
+            $dropCount = $students->filter(fn ($s) => $isDropped($s) && $s->updated_at->between($b['start'], $b['end']))->count();
 
-            $activeTrend[] = [
-                'month' => "Th{$m}",
-                'month_num' => $m,
-                'count' => $activeCount,
-            ];
+            // Tỷ lệ đi học = có mặt / (có mặt + vắng) trong mốc
+            $inBucket = $attendances->filter(fn ($a) => $a->attended_at->between($b['start'], $b['end']));
+            $present = $inBucket->where('status', 'present')->count();
+            $absent = $inBucket->whereIn('status', ['absent_with_leave', 'absent_without_leave'])->count();
+            $marked = $present + $absent;
 
-            // Học viên mới vs Đã nghỉ
-            $newCount = $allStudents->filter(function ($s) use ($monthStart, $monthEnd) {
-                $joined = $s->join_date ? Carbon::parse($s->join_date) : $s->created_at;
-
-                return $joined->between($monthStart, $monthEnd);
-            })->count();
-
-            $dropCount = $allStudents->filter(function ($s) use ($monthStart, $monthEnd) {
-                return $s->status === 'inactive' && $s->updated_at->between($monthStart, $monthEnd);
-            })->count();
-
-            $newVsDrop[] = [
-                'month' => "Th{$m}",
-                'month_num' => $m,
-                'new_students' => $newCount,
-                'drop_students' => $dropCount,
-            ];
-
-            // Tỷ lệ đi học
-            $monthAttendances = $allAttendances->filter(function ($a) use ($monthStart, $monthEnd) {
-                return Carbon::parse($a->attended_at)->between($monthStart, $monthEnd);
-            });
-
-            $attendedSessions = $monthAttendances->count();
-            $totalExpected = $attendedSessions + ($allStudents->sum('absences_used') > 0 ? 1 : 0);
-
-            $rate = $totalExpected > 0 ? round(($attendedSessions / max(1, $totalExpected)) * 100) : 0;
-
-            $attendanceRates[] = [
-                'month' => "Th{$m}",
-                'month_num' => $m,
-                'rate' => $rate,
-                'attended' => $attendedSessions,
-            ];
+            $common = ['label' => $b['label'], 'month' => $b['label'], 'month_num' => $b['num']];
+            $activeTrend[] = [...$common, 'count' => $activeCount];
+            $newVsDrop[] = [...$common, 'new_students' => $newCount, 'drop_students' => $dropCount];
+            $attendanceRates[] = [...$common, 'rate' => $marked > 0 ? (int) round($present / $marked * 100) : ($future ? null : 0), 'attended' => $present, 'absent' => $absent];
         }
 
         // 2. Công suất phòng học theo khung giờ, tính từ lịch học cố định của học viên đang học
@@ -106,24 +101,26 @@ class ReportApiController extends Controller
             }
         }
 
+        // Công suất phòng theo từng ca học (mỗi ca có phòng riêng)
         $scheduledStudents = Student::where('status', 'active')
             ->whereNotNull('class_days')
-            ->whereNotNull('room')
-            ->whereNotNull('class_start_time')
             ->when($roomCenter !== 'all', fn ($q) => $q->where('center', $roomCenter))
-            ->get(['id', 'center', 'room', 'class_days', 'class_start_time']);
+            ->get();
 
         $slots = [];
         foreach ($scheduledStudents as $st) {
-            foreach ($st->class_days ?? [] as $day) {
-                $day = (int) $day;
-                $key = "{$st->room}|{$day}|{$st->class_start_time}";
+            foreach (StudentSchedule::slots($st) as $slot) {
+                if (empty($slot['room'])) {
+                    continue;
+                }
+                $day = (int) $slot['day'];
+                $key = "{$slot['room']}|{$day}|{$slot['start']}";
                 $slots[$key] ??= [
-                    'room' => $st->room,
+                    'room' => $slot['room'],
                     'day_number' => $day,
                     'day' => $dayLabels[$day] ?? '',
-                    'time' => $st->class_start_time,
-                    'capacity' => $capacities[$st->center.'|'.$st->room] ?? $capacities['*|'.$st->room] ?? 1,
+                    'time' => $slot['start'],
+                    'capacity' => $capacities[$st->center.'|'.$slot['room']] ?? $capacities['*|'.$slot['room']] ?? 1,
                     'current_students' => 0,
                 ];
                 $slots[$key]['current_students']++;
@@ -167,6 +164,7 @@ class ReportApiController extends Controller
 
         return response()->json([
             'filters' => [
+                'period' => $period,
                 'year' => $year,
                 'month' => $month,
                 'center' => $center,

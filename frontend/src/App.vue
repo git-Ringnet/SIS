@@ -4,7 +4,7 @@ import BrandLogo from './components/BrandLogo.vue';
 import { ref, computed, watch, watchEffect, onMounted, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuth } from './services/useAuth';
-import { isPathBlocked } from './services/permissions';
+import { isPathBlocked, firstAllowedPath } from './services/permissions';
 import { Toaster } from 'vue-sonner';
 import 'vue-sonner/style.css';
 import ConfirmDialog from './components/ConfirmDialog.vue';
@@ -66,7 +66,12 @@ const handleKeyDown = (e) => {
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown);
   // Lấy lại quyền mới nhất từ server (chủ trung tâm có thể vừa đổi phân quyền)
-  if (isAuthenticated.value) checkAuth();
+  if (isAuthenticated.value) {
+    checkAuth().then((freshUser) => {
+      // Quyền vừa bị đổi mà đang đứng ở trang bị chặn thì chuyển sang trang được phép
+      if (freshUser && isPathBlocked(freshUser, route.path)) router.replace(firstAllowedPath(freshUser));
+    });
+  }
 });
 
 onUnmounted(() => {
@@ -203,7 +208,7 @@ const handleLogout = () => {
         </nav>
 
         <!-- 2. Vận hành -->
-        <div>
+        <div v-if="operationNavigation.length > 0">
           <div v-if="isSidebarCollapsed" class="my-2 border-t border-slate-100"></div>
           <p v-else class="px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
             Vận hành
@@ -238,7 +243,7 @@ const handleLogout = () => {
         </div>
 
         <!-- 3. Cấu hình -->
-        <div>
+        <div v-if="configNavigation.length > 0">
           <div v-if="isSidebarCollapsed" class="my-2 border-t border-slate-100"></div>
           <p v-else class="px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
             Cấu hình
@@ -371,7 +376,7 @@ const handleLogout = () => {
               </nav>
 
               <!-- 2. Vận hành -->
-              <div>
+              <div v-if="operationNavigation.length > 0">
                 <p class="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400">
                   Vận hành
                 </p>
@@ -391,7 +396,7 @@ const handleLogout = () => {
               </div>
 
               <!-- 3. Cấu hình -->
-              <div>
+              <div v-if="configNavigation.length > 0">
                 <p class="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400">
                   Cấu hình
                 </p>
@@ -453,6 +458,7 @@ const handleLogout = () => {
         <!-- Top Right Actions -->
         <div class="flex items-center gap-2.5">
           <router-link
+            v-if="!isPathBlocked(user, '/students')"
             to="/students?create=true"
             class="hidden sm:inline-flex items-center gap-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white px-3.5 py-2 text-sm font-semibold shadow-xs shadow-rose-600/20 transition-all active:scale-[0.98]"
           >

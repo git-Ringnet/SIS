@@ -84,6 +84,12 @@ export const studentApi = {
   importCsv: (formData) => api.post('/students/import', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }),
+  uploadAvatar: (id, formData) => api.post(`/students/${id}/avatar`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+  addCourse: (id, data) => api.post(`/students/${id}/courses`, data),
+  updateCourseItem: (id, courseIndex, data) => api.put(`/students/${id}/courses/${courseIndex}`, data),
+  deleteCourseItem: (id, courseIndex) => api.delete(`/students/${id}/courses/${courseIndex}`),
 };
 
 export const retentionApi = {
@@ -102,10 +108,11 @@ export const messageTemplateApi = {
 export const leadApi = {
   getAll: (params) => api.get('/leads', { params }),
   create: (data) => api.post('/leads', data),
+  update: (id, data) => api.put(`/leads/${id}`, data),
   updateStatus: (id, data) => api.post(`/leads/${id}/status`, data),
   convertToStudent: (id, data) => api.post(`/leads/${id}/convert`, data),
   delete: (id) => api.delete(`/leads/${id}`),
-  exportCsv: () => downloadFile('/leads/export', {}, 'khach-hang-tiem-nang.csv'),
+  exportCsv: (params = {}) => downloadFile('/leads/export', params, 'khach-hang-tiem-nang.csv'),
 };
 
 export const courseApi = {
@@ -113,6 +120,11 @@ export const courseApi = {
   create: (data) => api.post('/courses', data),
   update: (id, data) => api.put(`/courses/${id}`, data),
   delete: (id) => api.delete(`/courses/${id}`),
+  // Lớp học trong khóa
+  classRooms: () => api.get('/courses/class-rooms'),
+  createClass: (courseId, data) => api.post(`/courses/${courseId}/classes`, data),
+  updateClass: (id, data) => api.put(`/courses/classes/${id}`, data),
+  deleteClass: (id) => api.delete(`/courses/classes/${id}`),
 };
 
 export const invoiceApi = {
@@ -169,6 +181,13 @@ export const centerApi = {
   createCenter: (data) => api.post('/centers', data),
   updateCenter: (id, data) => api.put(`/centers/${id}`, data),
   deleteCenter: (id) => api.delete(`/centers/${id}`),
+  uploadImage: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/centers/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
   addRoom: (id, data) => api.post(`/centers/${id}/rooms`, data),
   deleteRoom: (centerId, roomId) => api.delete(`/centers/${centerId}/rooms/${roomId}`),
 };
@@ -182,6 +201,7 @@ export const inactiveStudentApi = {
 
 export const birthdayApi = {
   getBirthdays: (params) => api.get('/birthdays', { params }),
+  toggleGift: (studentId, data = {}) => api.post(`/birthdays/${studentId}/toggle-gift`, data),
 };
 
 export const inventoryApi = {
@@ -190,17 +210,21 @@ export const inventoryApi = {
   update: (id, data) => api.put(`/inventory/${id}`, data),
   delete: (id) => api.delete(`/inventory/${id}`),
   adjust: (id, data) => api.post(`/inventory/${id}/adjust`, data),
-  importCsv: (formData) => api.post('/inventory/import', formData, {
+  importExcel: (formData) => api.post('/inventory/import', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }),
-  exportCsv: (center = 'all') => downloadFile('/inventory/export', { center }, 'hoc-cu.csv'),
-  downloadTemplate: () => downloadFile('/inventory/template', {}, 'mau-nhap-hoc-cu.csv'),
+  exportExcel: (center = 'all') => downloadFile('/inventory/export', { center }, 'kho-hoc-cu.xlsx'),
+  downloadTemplate: () => downloadFile('/inventory/template', {}, 'mau-nhap-hoc-cu.xlsx'),
 };
 
 export const revenueApi = {
   getRevenue: (params) => api.get('/revenue', { params }),
   createRevenue: (data) => api.post('/revenue', data),
+  updateRevenue: (id, data) => api.put(`/revenue/${id}`, data),
+  deleteRevenue: (id) => api.delete(`/revenue/${id}`),
   createExpense: (data) => api.post('/revenue/expenses', data),
+  updateExpense: (id, data) => api.put(`/revenue/expenses/${id}`, data),
+  deleteExpense: (id) => api.delete(`/revenue/expenses/${id}`),
   exportCsv: (params = {}) => downloadFile('/revenue/export', params, 'doanh-thu.csv'),
 };
 
@@ -215,14 +239,28 @@ export const teacherCheckinApi = {
   getCheckinData: (params) => api.get('/teacher-checkin', { params }),
   checkin: (data) => api.post('/teacher-checkin/checkin', data),
   recordAbsence: (data) => api.post('/teacher-checkin/absence', data),
+  getRates: () => api.get('/teacher-checkin/rates'),
+  getQrToken: (center) => api.get('/teacher-checkin/qr-token', { params: { center } }),
   updateRates: (data) => api.post('/teacher-checkin/rates', data),
   exportMonthly: (month) => downloadFile('/teacher-checkin/export', { month }, `ca-day-${month}.csv`),
+  // Nghỉ phép / dạy thay theo khoảng ngày
+  getLeaves: (params) => api.get('/teacher-checkin/leaves', { params }),
+  createLeave: (data) => api.post('/teacher-checkin/leaves', data),
+  createSubstitution: (data) => api.post('/teacher-checkin/substitutions', data),
+  deletePeriod: (type, id) => api.delete(`/teacher-checkin/${type}/${id}`),
 };
 
 export const dailyAttendanceApi = {
   getAttendance: (params) => api.get('/attendance', { params }),
+  getAvailableGroupSlots: (params) => api.get('/attendance/available-group-slots', { params }),
   mark: (studentId, data) => api.post(`/attendance/${studentId}/mark`, data),
   scheduleSingleLesson: (data) => api.post('/attendance/single-lesson', data),
+};
+
+export const parentPortalApi = {
+  getInfo: (studentId) => api.get(`/portal/students/${studentId}/info`),
+  verify: (studentId, phoneLast4) => api.post(`/portal/students/${studentId}/verify`, { phone_last4: phoneLast4 }),
+  requestLeave: (studentId, data) => api.post(`/portal/students/${studentId}/leave-request`, data),
 };
 
 export default api;

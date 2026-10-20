@@ -15,6 +15,7 @@ use App\Http\Controllers\Api\InventoryApiController;
 use App\Http\Controllers\Api\InvoiceApiController;
 use App\Http\Controllers\Api\LeadApiController;
 use App\Http\Controllers\Api\MessageTemplateApiController;
+use App\Http\Controllers\Api\ParentPortalApiController;
 use App\Http\Controllers\Api\ReportApiController;
 use App\Http\Controllers\Api\RetentionApiController;
 use App\Http\Controllers\Api\RevenueApiController;
@@ -22,6 +23,7 @@ use App\Http\Controllers\Api\SettingsApiController;
 use App\Http\Controllers\Api\StaffApiController;
 use App\Http\Controllers\Api\StudentApiController;
 use App\Http\Controllers\Api\TeacherCheckinApiController;
+use App\Http\Controllers\Api\TeacherLeaveApiController;
 use App\Http\Middleware\EnsurePageAccess;
 use Illuminate\Support\Facades\Route;
 
@@ -35,6 +37,13 @@ Route::prefix('auth')->group(function () {
 
 // Tên + logo thương hiệu cho màn đăng nhập (công khai)
 Route::get('/brand', [SettingsApiController::class, 'publicBrand']);
+
+// Cổng thông tin phụ huynh (Công khai - Xác thực bằng 4 số cuối số điện thoại)
+Route::prefix('portal')->group(function () {
+    Route::get('/students/{student}/info', [ParentPortalApiController::class, 'info']);
+    Route::post('/students/{student}/verify', [ParentPortalApiController::class, 'verify']);
+    Route::post('/students/{student}/leave-request', [ParentPortalApiController::class, 'requestLeave']);
+});
 
 // Toàn bộ API nghiệp vụ bắt buộc đăng nhập (token Sanctum) và tôn trọng quyền "trang bị chặn" của nhân sự
 Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () {
@@ -56,6 +65,10 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::post('/{student}/absence', [StudentApiController::class, 'recordAbsence']);
         Route::post('/{student}/supplies', [StudentApiController::class, 'addSupplies']);
         Route::put('/{student}/progress', [StudentApiController::class, 'updateCourseProgress']);
+        Route::post('/{student}/courses', [StudentApiController::class, 'addCourse']);
+        Route::put('/{student}/courses/{courseIndex}', [StudentApiController::class, 'updateCourseItem']);
+        Route::delete('/{student}/courses/{courseIndex}', [StudentApiController::class, 'deleteCourseItem']);
+        Route::post('/{student}/avatar', [StudentApiController::class, 'uploadAvatar']);
         Route::get('/{student}/tuition-invoice.pdf', [StudentApiController::class, 'tuitionInvoicePdf']);
     });
 
@@ -79,6 +92,7 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::get('/', [LeadApiController::class, 'index']);
         Route::get('/export', [LeadApiController::class, 'export']);
         Route::post('/', [LeadApiController::class, 'store']);
+        Route::put('/{lead}', [LeadApiController::class, 'update']);
         Route::post('/{lead}/status', [LeadApiController::class, 'updateStatus']);
         Route::post('/{lead}/convert', [LeadApiController::class, 'convertToStudent']);
         Route::delete('/{lead}', [LeadApiController::class, 'destroy']);
@@ -90,6 +104,12 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::post('/', [CourseApiController::class, 'store']);
         Route::put('/{course}', [CourseApiController::class, 'update']);
         Route::delete('/{course}', [CourseApiController::class, 'destroy']);
+
+        // Lớp học trong khóa
+        Route::get('/class-rooms', [CourseApiController::class, 'classRooms']);
+        Route::post('/{course}/classes', [CourseApiController::class, 'storeClass']);
+        Route::put('/classes/{courseClass}', [CourseApiController::class, 'updateClass']);
+        Route::delete('/classes/{courseClass}', [CourseApiController::class, 'destroyClass']);
     });
 
     // Invoices
@@ -143,6 +163,7 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
     Route::prefix('centers')->group(function () {
         Route::get('/', [CenterApiController::class, 'index']);
         Route::post('/', [CenterApiController::class, 'store']);
+        Route::post('/upload', [CenterApiController::class, 'uploadImage']);
         Route::put('/{id}', [CenterApiController::class, 'update']);
         Route::delete('/{id}', [CenterApiController::class, 'destroy']);
         Route::post('/{id}/rooms', [CenterApiController::class, 'addRoom']);
@@ -159,6 +180,7 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
 
     // Birthdays
     Route::get('/birthdays', [BirthdayApiController::class, 'index']);
+    Route::post('/birthdays/{student}/toggle-gift', [BirthdayApiController::class, 'toggleGift']);
 
     // Inventory / Học cụ
     Route::prefix('inventory')->group(function () {
@@ -178,6 +200,10 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::post('/', [RevenueApiController::class, 'store']);
         Route::get('/export', [RevenueApiController::class, 'export']);
         Route::post('/expenses', [RevenueApiController::class, 'storeExpense']);
+        Route::put('/expenses/{id}', [RevenueApiController::class, 'updateExpense'])->whereNumber('id');
+        Route::delete('/expenses/{id}', [RevenueApiController::class, 'destroyExpense'])->whereNumber('id');
+        Route::put('/{id}', [RevenueApiController::class, 'update']);
+        Route::delete('/{id}', [RevenueApiController::class, 'destroy']);
     });
 
     // Absences / Vắng liên tiếp
@@ -193,13 +219,22 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::get('/', [TeacherCheckinApiController::class, 'index']);
         Route::post('/checkin', [TeacherCheckinApiController::class, 'checkin']);
         Route::post('/absence', [TeacherCheckinApiController::class, 'recordAbsence']);
+        Route::get('/qr-token', [TeacherCheckinApiController::class, 'qrToken']);
+        Route::get('/rates', [TeacherCheckinApiController::class, 'rates']);
         Route::post('/rates', [TeacherCheckinApiController::class, 'updateRates']);
         Route::get('/export', [TeacherCheckinApiController::class, 'exportMonthly']);
+
+        // Nghỉ phép / dạy thay theo khoảng ngày
+        Route::get('/leaves', [TeacherLeaveApiController::class, 'index']);
+        Route::post('/leaves', [TeacherLeaveApiController::class, 'storeLeave']);
+        Route::post('/substitutions', [TeacherLeaveApiController::class, 'storeSubstitution']);
+        Route::delete('/{type}/{id}', [TeacherLeaveApiController::class, 'destroy'])->where('type', 'leaves|substitutions');
     });
 
     // Attendance / Điểm danh học viên hàng ngày
     Route::prefix('attendance')->group(function () {
         Route::get('/', [AttendanceApiController::class, 'index']);
+        Route::get('/available-group-slots', [AttendanceApiController::class, 'availableGroupSlots']);
         Route::post('/single-lesson', [AttendanceApiController::class, 'scheduleSingleLesson']);
         Route::post('/{student}/mark', [AttendanceApiController::class, 'markAttendance']);
     });

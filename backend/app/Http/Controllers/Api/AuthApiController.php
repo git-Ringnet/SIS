@@ -142,6 +142,8 @@ class AuthApiController extends Controller
             'name' => $user->name,
             'email' => $user->email,
             'is_owner' => OwnerGuard::isOwner($user),
+            // Giáo viên chỉ thấy / check-in ca dạy của chính mình
+            'is_teacher' => PagePermissions::isTeacher($user),
             'blocked_pages' => PagePermissions::blockedPages($user),
         ];
     }

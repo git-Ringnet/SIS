@@ -5,23 +5,22 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Attendance;
 use App\Models\Course;
+use App\Models\CourseClass;
 use App\Models\Invoice;
 use App\Models\Student;
 use App\Support\BrandSettings;
 use App\Support\CenterStore;
+use App\Support\ScheduleConflicts;
+use App\Support\StudentImport;
+use App\Support\StudentSchedule;
+use App\Support\SupplySales;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
-use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
-use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
-use PhpOffice\PhpSpreadsheet\IOFactory;
-use PhpOffice\PhpSpreadsheet\Shared\Date as ExcelDate;
-use PhpOffice\PhpSpreadsheet\Spreadsheet;
-use PhpOffice\PhpSpreadsheet\Style\Fill;
-use PhpOffice\PhpSpreadsheet\Style\NumberFormat;
+use Illuminate\Validation\ValidationException;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -78,18 +77,36 @@ class StudentApiController extends Controller
         }
 
         if ($assignedClass && $assignedClass !== 'all') {
-            $query->where('assigned_class', 'like', "%{$assignedClass}%");
+            if ($assignedClass === 'unassigned') {
+                $query->where(function ($q) {
+                    $q->whereNull('assigned_class')->orWhere('assigned_class', '');
+                });
+            } else {
+                $query->where('assigned_class', 'like', "%{$assignedClass}%");
+            }
         }
 
         if ($teacher && $teacher !== 'all') {
-            $query->where('teacher', 'like', "%{$teacher}%");
+            if ($teacher === 'unassigned') {
+                $query->where(function ($q) {
+                    $q->whereNull('teacher')->orWhere('teacher', '');
+                });
+            } else {
+                $query->where('teacher', 'like', "%{$teacher}%");
+            }
         }
 
         if ($staff && $staff !== 'all') {
-            $query->where(function ($q) use ($staff) {
-                $q->where('teacher', 'like', "%{$staff}%")
-                    ->orWhere('notes', 'like', "%{$staff}%");
-            });
+            if ($staff === 'unassigned') {
+                $query->where(function ($q) {
+                    $q->whereNull('teacher')->orWhere('teacher', '');
+                });
+            } else {
+                $query->where(function ($q) use ($staff) {
+                    $q->where('teacher', 'like', "%{$staff}%")
+                        ->orWhere('notes', 'like', "%{$staff}%");
+                });
+            }
         }
 
         if ($tuitionStatus === 'paid') {
@@ -148,14 +165,18 @@ class StudentApiController extends Controller
             Student::whereNotNull('center')->where('center', '!=', '')->distinct()->pluck('center')->toArray()
         )));
 
-        $teachers = Student::whereNotNull('teacher')->where('teacher', '!=', '')->distinct()->pluck('teacher')->toArray();
+        $teachers = Student::whereNotNull('teacher')->where('teacher', '!=', '')->distinct()->pluck('teacher')
+            ->flatMap(fn ($t) => array_map('trim', explode(',', $t)))->filter()->unique()->values()->toArray();
         $staffMembers = [];
         if (Storage::exists('staff_data.json')) {
             $staffData = json_decode(Storage::get('staff_data.json'), true);
             if (! empty($staffData['members'])) {
                 foreach ($staffData['members'] as $m) {
                     if (! empty($m['name'])) {
-                        $teachers[] = $m['name'];
+                        // Chỉ thành viên vai trò Giáo viên mới vào danh sách giáo viên
+                        if (str_contains($m['role'] ?? '', 'Giáo viên')) {
+                            $teachers[] = $m['name'];
+                        }
                         $staffMembers[] = $m['name'];
                     }
                 }
@@ -167,7 +188,30 @@ class StudentApiController extends Controller
             $staffMembers = $teachers;
         }
 
-        $classes = Student::whereNotNull('assigned_class')->where('assigned_class', '!=', '')->distinct()->pluck('assigned_class')->values();
+        $classes = [];
+        $courseClasses = CourseClass::with('course')->orderBy('name')->get();
+
+        foreach ($courseClasses as $cc) {
+            $displayName = $cc->course ? "{$cc->name} — {$cc->course->name}" : $cc->name;
+            $classes[] = [
+                'id' => $cc->name,
+                'name' => $displayName,
+            ];
+        }
+
+        $studentClasses = Student::whereNotNull('assigned_class')
+            ->where('assigned_class', '!=', '')
+            ->distinct()
+            ->pluck('assigned_class');
+
+        foreach ($studentClasses as $sc) {
+            if (! collect($classes)->contains('id', $sc)) {
+                $classes[] = [
+                    'id' => $sc,
+                    'name' => $sc,
+                ];
+            }
+        }
 
         if ($this->wantsPagination($request)) {
             $paginator = $query->paginate($this->perPage($request));
@@ -202,7 +246,8 @@ class StudentApiController extends Controller
             'invoices' => fn ($q) => $q->orderBy('created_at', 'desc'),
         ]);
 
-        $courses = Course::where('is_active', true)->get();
+        // Kèm lớp học của từng khóa để gán lớp ở trang chi tiết học viên
+        $courses = Course::with('classes')->where('is_active', true)->get();
 
         return response()->json([
             'student' => $student,
@@ -224,6 +269,7 @@ class StudentApiController extends Controller
             'total_sessions' => 'required|integer|min:1',
             'status' => 'required|string|in:active,paused,dropped',
             'join_date' => 'nullable|date',
+            'center' => 'nullable|string|max:255',
             'notes' => 'nullable|string',
             'create_invoice' => 'nullable|boolean',
             'invoice_amount' => 'nullable|numeric|min:0',
@@ -256,9 +302,10 @@ class StudentApiController extends Controller
             $amount = $validated['invoice_amount'] ?? ($course ? $course->price : 0);
 
             Invoice::create([
-                'invoice_code' => Invoice::uniqueCode('HD-'.date('Ym').'-'.str_pad($student->id, 3, '0', STR_PAD_LEFT)),
+                'invoice_code' => Invoice::nextInvoiceCodeForCenter($student->center),
                 'student_id' => $student->id,
                 'course_id' => $student->course_id,
+                'center' => $student->center,
                 'amount' => $amount,
                 'sessions_added' => $student->total_sessions,
                 'payment_method' => 'bank_transfer',
@@ -274,6 +321,7 @@ class StudentApiController extends Controller
         return response()->json([
             'message' => "Thêm học viên {$student->name} thành công!",
             'student' => $student,
+            'warnings' => ScheduleConflicts::warningsFor($student),
         ], 201);
     }
 
@@ -299,6 +347,7 @@ class StudentApiController extends Controller
                 }
             }],
             'notes' => 'nullable|string',
+            'center' => 'nullable|string|max:255',
             ...$this->scheduleRules(),
         ]);
 
@@ -308,6 +357,7 @@ class StudentApiController extends Controller
         return response()->json([
             'message' => "Cập nhật học viên {$student->name} thành công!",
             'student' => $student,
+            'warnings' => ScheduleConflicts::warningsFor($student),
         ]);
     }
 
@@ -322,12 +372,20 @@ class StudentApiController extends Controller
     }
 
     /**
-     * Lịch học cố định hằng tuần: các thứ học, giờ học, giáo viên, phòng.
+     * Lịch học cố định hằng tuần: danh sách ca (thứ + giờ + giáo viên + phòng), một ngày có thể nhiều ca.
+     * Vẫn nhận dạng cũ (class_days + một khung giờ) để tương thích.
      */
     private function scheduleRules(): array
     {
         return [
             'center' => 'nullable|string|max:255',
+            'schedules' => 'nullable|array|max:21',
+            'schedules.*.id' => 'nullable|string|max:40',
+            'schedules.*.day' => 'required|integer|between:0,6',
+            'schedules.*.start' => 'required|date_format:H:i',
+            'schedules.*.end' => 'nullable|date_format:H:i',
+            'schedules.*.teacher' => 'nullable|string|max:255',
+            'schedules.*.room' => 'nullable|string|max:100',
             'class_days' => 'nullable|array',
             'class_days.*' => 'integer|between:0,6',
             'class_start_time' => 'nullable|date_format:H:i',
@@ -342,24 +400,34 @@ class StudentApiController extends Controller
      */
     private function scheduleAttributes(array $validated): array
     {
-        $teacherRoom = array_intersect_key($validated, array_flip(['teacher', 'room']));
-
-        if (! array_key_exists('class_days', $validated)) {
-            return $teacherRoom;
+        if (array_key_exists('schedules', $validated)) {
+            $slots = StudentSchedule::normalize($validated['schedules'] ?? []);
+        } elseif (array_key_exists('class_days', $validated)) {
+            $slots = StudentSchedule::fromLegacy(
+                array_values(array_unique(array_map('intval', $validated['class_days'] ?? []))),
+                $validated['class_start_time'] ?? null,
+                $validated['class_end_time'] ?? null,
+                $validated['teacher'] ?? null,
+                $validated['room'] ?? null,
+            );
+        } else {
+            return array_intersect_key($validated, array_flip(['teacher', 'room']));
         }
 
-        $schedule = new Student([
-            'class_days' => array_values(array_unique(array_map('intval', $validated['class_days'] ?? []))),
-            'class_start_time' => $validated['class_start_time'] ?? null,
-            'class_end_time' => $validated['class_end_time'] ?? null,
-        ]);
+        foreach ($slots as $slot) {
+            if ($slot['end'] && $slot['end'] <= $slot['start']) {
+                throw ValidationException::withMessages([
+                    'schedules' => "Ca {$slot['start']}: giờ kết thúc phải sau giờ bắt đầu.",
+                ]);
+            }
+        }
+
+        $legacy = StudentSchedule::legacyColumns($slots);
 
         return [
-            ...$teacherRoom,
-            'class_days' => $schedule->class_days,
-            'class_start_time' => $schedule->class_start_time,
-            'class_end_time' => $schedule->class_end_time,
-            'schedule_info' => $schedule->scheduleSummary() ?? '1 buổi/tuần',
+            ...$legacy,
+            'schedules' => $slots ?: null,
+            'schedule_info' => $legacy['schedule_info'] ?? '1 buổi/tuần',
         ];
     }
 
@@ -371,30 +439,30 @@ class StudentApiController extends Controller
             ], 422);
         }
 
-        // Mỗi ngày chỉ trừ 1 buổi, tránh bấm 2 lần hoặc điểm danh lại ở màn Điểm danh
-        $alreadyPresentToday = Attendance::where('student_id', $student->id)
-            ->where('status', 'present')
-            ->whereDate('attended_at', Carbon::today())
-            ->exists();
-        if ($alreadyPresentToday) {
+        // Điểm danh ca kế tiếp chưa điểm danh của hôm nay (một ngày có thể nhiều ca); hết ca thì báo đã điểm danh
+        [$slot, $allDone] = StudentSchedule::nextUnmarkedSlotToday($student);
+        if ($allDone) {
             return response()->json([
-                'error' => "Học viên {$student->name} đã được điểm danh có mặt hôm nay.",
+                'error' => "Học viên {$student->name} đã được điểm danh đủ các ca hôm nay.",
             ], 422);
         }
 
-        $attendedCount = $student->total_sessions - $student->remaining_sessions + 1;
+        $item = StudentSchedule::courseItemForSlot($student, $slot['id'] ?? null);
+        StudentSchedule::consume($student, $item['id'] ?? null, 1);
+        $attendedCount = $student->total_sessions - $student->remaining_sessions;
 
         $attendance = Attendance::create([
             'student_id' => $student->id,
-            'course_id' => $student->course_id,
-            'session_number' => $attendedCount,
-            'attended_at' => Carbon::now(),
+            'course_id' => $item['course_id'] ?? $student->course_id,
+            'slot_id' => $slot['id'] ?? null,
+            'course_item_id' => $item['id'] ?? null,
+            'session_number' => max(1, $attendedCount),
+            'attended_at' => $slot ? Carbon::parse(Carbon::today()->toDateString().' '.$slot['start']) : Carbon::now(),
             'status' => 'present',
             'note' => $request->input('note', "Điểm danh buổi #{$attendedCount}"),
             'marked_by' => 'Giáo viên / Admin',
         ]);
 
-        $student->decrement('remaining_sessions');
         $student->consecutive_absences = 0;
         $student->save();
         $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
@@ -414,8 +482,8 @@ class StudentApiController extends Controller
             ->first();
 
         if ($latestAttendance) {
+            StudentSchedule::consume($student, $latestAttendance->course_item_id, -1);
             $latestAttendance->delete();
-            $student->increment('remaining_sessions');
             $student->save();
             $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
 
@@ -462,7 +530,19 @@ class StudentApiController extends Controller
             'items.*.name' => 'required|string',
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.price' => 'nullable|numeric|min:0',
+            'items.*.inventory_id' => 'nullable|integer',
+            'payment_method' => 'nullable|string|max:50',
         ]);
+
+        $center = $validated['center'] ?? $student->center ?? CenterStore::defaultName();
+
+        // Không cho giao quá số lượng còn trong kho của trung tâm
+        if ($errors = SupplySales::stockErrors($validated['items'], $center)) {
+            return response()->json([
+                'message' => 'Không đủ tồn kho: '.implode(' ', $errors),
+                'errors' => ['items' => $errors],
+            ], 422);
+        }
 
         $currentSupplies = $student->supplies ?? [];
         foreach ($validated['items'] as $item) {
@@ -472,7 +552,7 @@ class StudentApiController extends Controller
                 'quantity' => $item['quantity'],
                 'price' => $item['price'] ?? 0,
                 'delivery_date' => $validated['delivery_date'],
-                'center' => $validated['center'] ?? $student->center ?? CenterStore::defaultName(),
+                'center' => $center,
                 'status' => 'delivered',
                 'created_at' => Carbon::now()->toIso8601String(),
             ];
@@ -480,6 +560,17 @@ class StudentApiController extends Controller
 
         $student->supplies = $currentSupplies;
         $student->save();
+
+        // Giao học cụ = xuất kho + ghi doanh thu học cụ (nếu có giá)
+        SupplySales::deductStock($validated['items'], $center);
+        SupplySales::recordRevenue($validated['items'], [
+            'date' => $validated['delivery_date'],
+            'student_name' => $student->name,
+            'center' => $center,
+            'payment_method' => $validated['payment_method'] ?? 'Tiền mặt',
+            'recorded_by' => $request->user()?->name ?? 'Admin',
+            'note' => 'Giao học cụ cho học viên '.$student->code,
+        ]);
 
         return response()->json([
             'message' => "Đã thêm học cụ cho học viên {$student->name} thành công!",
@@ -499,10 +590,224 @@ class StudentApiController extends Controller
             'schedule_info' => 'nullable|string',
         ]);
 
+        // Gán lớp: lớp phải có thật (màn Khóa học → Lớp học) và chưa đủ sĩ số
+        if (! empty($validated['assigned_class']) && $validated['assigned_class'] !== $student->assigned_class) {
+            $class = CourseClass::where('name', $validated['assigned_class'])->first();
+            if (! $class) {
+                return response()->json(['message' => 'Lớp học không tồn tại.'], 422);
+            }
+            if ($class->isFull($student->id)) {
+                return response()->json([
+                    'message' => "Lớp {$class->name} đã đủ sĩ số ({$class->capacity}/{$class->capacity}). Hãy chọn lớp khác hoặc tăng sĩ số lớp.",
+                ], 422);
+            }
+        }
+
+        // Vào lớp có khung giờ thì học viên nhận lịch học, giáo viên, phòng của lớp
+        $message = "Cập nhật tiến độ học viên {$student->name} thành công!";
+        if (! empty($validated['assigned_class']) && isset($class) && $class->hasSlots()) {
+            $schedule = $class->studentSchedule();
+            if ($schedule) {
+                $validated = [...$validated, ...$schedule];
+                $message = "Đã gán vào lớp {$class->name} và cập nhật lịch học theo lớp.";
+            } else {
+                $message = "Đã gán vào lớp {$class->name}. Lớp có khung giờ khác giờ / khác giáo viên nên hãy xếp lịch học cho học viên tay.";
+            }
+        }
+
         $student->update($validated);
 
         return response()->json([
-            'message' => "Cập nhật tiến độ học viên {$student->name} thành công!",
+            'message' => $message,
+            'student' => $student,
+        ]);
+    }
+
+    public function addCourse(Request $request, Student $student): JsonResponse
+    {
+        $validated = $request->validate([
+            'course_id' => 'required|exists:courses,id',
+            'total_sessions' => 'required|integer|min:1',
+            'start_date' => 'nullable|date',
+            'end_date' => 'nullable|date',
+            'sessions_per_week' => 'nullable|string|max:100',
+        ]);
+
+        $course = Course::findOrFail($validated['course_id']);
+        $list = $student->registered_courses_list;
+
+        $newCourse = [
+            'id' => count($list) + 1,
+            'course_id' => (int) $course->id,
+            'course_name' => $course->name,
+            'total_sessions' => (int) $validated['total_sessions'],
+            'attended_sessions' => 0,
+            'remaining_sessions' => (int) $validated['total_sessions'],
+            'start_date' => $validated['start_date'] ?? Carbon::today()->format('Y-m-d'),
+            'end_date' => $validated['end_date'] ?? null,
+            'schedule_info' => ! empty($validated['sessions_per_week']) ? "{$validated['sessions_per_week']} buổi/tuần" : '1 buổi/tuần',
+            'sessions_per_week' => $validated['sessions_per_week'] ?? '',
+            'allowed_absences' => 3,
+            'absences_used' => 0,
+            'status' => 'active',
+        ];
+
+        $list[] = $newCourse;
+
+        $overallTotal = array_sum(array_column($list, 'total_sessions'));
+        $overallRemaining = array_sum(array_column($list, 'remaining_sessions'));
+
+        $student->registered_courses = $list;
+        $student->course_id = $course->id;
+        $student->total_sessions = $overallTotal;
+        $student->remaining_sessions = $overallRemaining;
+        if (! empty($validated['start_date'])) {
+            $student->join_date = $validated['start_date'];
+        }
+        if (! empty($validated['end_date'])) {
+            $student->end_date = $validated['end_date'];
+        }
+        if (! empty($validated['sessions_per_week'])) {
+            $student->schedule_info = "{$validated['sessions_per_week']} buổi/tuần";
+        }
+        $student->save();
+        $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
+
+        return response()->json([
+            'message' => "Đã thêm khóa học {$course->name} cho học viên {$student->name} thành công!",
+            'student' => $student,
+        ]);
+    }
+
+    public function updateCourseItem(Request $request, Student $student, int $courseIndex): JsonResponse
+    {
+        $validated = $request->validate([
+            'total_sessions' => 'nullable|integer|min:1',
+            'attended_sessions' => 'nullable|integer|min:0',
+            'allowed_absences' => 'nullable|integer|min:0',
+            'absences_used' => 'nullable|integer|min:0',
+            'status' => 'nullable|string|in:active,completed,paused',
+            // Đổi sang khóa khác (nút bút chì cạnh tên khóa)
+            'course_id' => 'nullable|exists:courses,id',
+            // Thời gian khóa học (nút "Sửa" cạnh Copy placeholder)
+            'start_date' => 'nullable|date',
+            'end_date' => 'nullable|date|after_or_equal:start_date',
+            'sessions_per_week' => 'nullable|integer|min:1|max:14',
+            // Các ca của khoá này trên trang Điểm danh (rỗng = dùng chung mọi ca)
+            'schedule_ids' => 'nullable|array',
+            'schedule_ids.*' => 'string|max:40',
+        ], [
+            'end_date.after_or_equal' => 'Ngày kết thúc phải sau hoặc bằng ngày bắt đầu',
+        ]);
+
+        $list = $student->registered_courses_list;
+        $found = false;
+
+        foreach ($list as $key => $item) {
+            if ($item['id'] == $courseIndex || $key == $courseIndex) {
+                if (isset($validated['total_sessions'])) {
+                    $list[$key]['total_sessions'] = (int) $validated['total_sessions'];
+                }
+                if (isset($validated['attended_sessions'])) {
+                    $list[$key]['attended_sessions'] = (int) $validated['attended_sessions'];
+                }
+                $list[$key]['remaining_sessions'] = max(0, (int) $list[$key]['total_sessions'] - (int) ($list[$key]['attended_sessions'] ?? 0));
+                if (isset($validated['allowed_absences'])) {
+                    $list[$key]['allowed_absences'] = (int) $validated['allowed_absences'];
+                }
+                if (isset($validated['absences_used'])) {
+                    $list[$key]['absences_used'] = (int) $validated['absences_used'];
+                }
+                if (isset($validated['status'])) {
+                    $list[$key]['status'] = $validated['status'];
+                } elseif ($list[$key]['remaining_sessions'] <= 0) {
+                    $list[$key]['status'] = 'completed';
+                }
+                if (! empty($validated['course_id'])) {
+                    $newCourse = Course::find($validated['course_id']);
+                    // Khóa chính của học viên đang là khóa này thì đổi theo
+                    if ((int) $student->course_id === (int) ($list[$key]['course_id'] ?? 0)) {
+                        $student->course_id = $newCourse->id;
+                    }
+                    $list[$key]['course_id'] = (int) $newCourse->id;
+                    $list[$key]['course_name'] = $newCourse->name;
+                }
+                if ($request->has('start_date')) {
+                    $list[$key]['start_date'] = $validated['start_date'] ?? null;
+                }
+                if ($request->has('end_date')) {
+                    $list[$key]['end_date'] = $validated['end_date'] ?? null;
+                }
+                if ($request->has('schedule_ids')) {
+                    $validIds = array_column(StudentSchedule::slots($student), 'id');
+                    $list[$key]['schedule_ids'] = array_values(array_intersect($validated['schedule_ids'] ?? [], $validIds));
+                }
+                if ($request->has('sessions_per_week')) {
+                    $perWeek = $validated['sessions_per_week'] ?? null;
+                    $list[$key]['sessions_per_week'] = $perWeek ? (string) $perWeek : '';
+                    $list[$key]['schedule_info'] = $perWeek ? "{$perWeek} buổi/tuần" : ($student->schedule_info ?: '1 buổi/tuần');
+                }
+                $found = true;
+                break;
+            }
+        }
+
+        if (! $found) {
+            return response()->json(['error' => 'Không tìm thấy khóa học cần cập nhật.'], 404);
+        }
+
+        $student->registered_courses = $list;
+        $student->total_sessions = array_sum(array_column($list, 'total_sessions'));
+        $student->remaining_sessions = array_sum(array_column($list, 'remaining_sessions'));
+        $student->save();
+        $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
+
+        return response()->json([
+            'message' => 'Cập nhật khóa học thành công!',
+            'student' => $student,
+        ]);
+    }
+
+    public function deleteCourseItem(Student $student, int $courseIndex): JsonResponse
+    {
+        $list = $student->registered_courses_list;
+        $newList = [];
+        foreach ($list as $key => $item) {
+            if ($item['id'] != $courseIndex && $key != $courseIndex) {
+                $newList[] = $item;
+            }
+        }
+
+        if (empty($newList)) {
+            return response()->json(['error' => 'Không thể xóa tất cả khóa học của học viên.'], 422);
+        }
+
+        $student->registered_courses = array_values($newList);
+        $student->total_sessions = array_sum(array_column($newList, 'total_sessions'));
+        $student->remaining_sessions = array_sum(array_column($newList, 'remaining_sessions'));
+        $student->save();
+        $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
+
+        return response()->json([
+            'message' => 'Đã xóa khóa học thành công!',
+            'student' => $student,
+        ]);
+    }
+
+    public function uploadAvatar(Request $request, Student $student): JsonResponse
+    {
+        $request->validate([
+            'avatar' => 'required|image|mimes:jpeg,png,jpg,webp|max:3072',
+        ]);
+
+        $path = $request->file('avatar')->store('avatars', 'public');
+        $avatarUrl = Storage::url($path);
+
+        $student->update(['avatar' => $avatarUrl]);
+
+        return response()->json([
+            'message' => 'Tải ảnh đại diện thành công!',
+            'avatar' => $avatarUrl,
             'student' => $student,
         ]);
     }
@@ -511,13 +816,16 @@ class StudentApiController extends Controller
     {
         $student->load('course');
 
-        $invoiceCode = 'HD-'.now()->year.'-'.($student->code ?? $student->id).'-'.now()->month;
+        $center = CenterStore::findByName($student->center);
+        $prefix = CenterStore::prefixForCenter($student->center);
+        $invoiceCode = $prefix.'-'.now()->format('Ym').'-'.($student->code ?? $student->id);
 
         $pdf = Pdf::loadView('pdf.tuition-invoice', [
             'student' => $student,
             'invoiceCode' => $invoiceCode,
             'issuedAt' => now()->format('d/m/Y'),
             'amount' => $student->course?->price ?? 0,
+            'center' => $center,
             'brand' => BrandSettings::brand(),
         ])->setPaper('a4')->setOption('isFontSubsettingEnabled', true);
 
@@ -525,66 +833,16 @@ class StudentApiController extends Controller
     }
 
     /**
-     * Tải file Excel mẫu nhập học viên theo định dạng SenyApp.
+     * Tải file Excel mẫu nhập học viên (có sheet hướng dẫn, cột bắt buộc, danh sách chọn).
      */
     public function downloadTemplate(): StreamedResponse
     {
-        $columns = [
-            'full_name' => ['Họ tên học viên (bắt buộc)', 'VÕ MINH AN'],
-            'birthday' => ['Ngày sinh, định dạng DD/MM/YYYY', '15/03/2015'],
-            'parent_name' => ['Tên phụ huynh', 'NGUYỄN HOÀNG KIM ANH'],
-            'parent_phone' => ['SĐT phụ huynh', '0908168815'],
-            'parent_email' => ['Email phụ huynh', 'parent@email.com'],
-            'student_phone' => ['SĐT học viên / Zalo', ''],
-            'address' => ['Địa chỉ', '123 Lê Lợi'],
-            'enrollment_date' => ['Ngày nhập học, định dạng DD/MM/YYYY', '01/01/2026'],
-            'notes' => ['Ghi chú', 'Loves painting'],
-            'status' => ['Trạng thái: active | paused | stopped', 'active'],
-            'center_name' => ['Tên trung tâm', CenterStore::defaultName()],
-            'schedules' => ['Lịch học, phân cách bằng dấu ; (vd: Thứ 2 15:00; Thứ 4 17:00)', 'Thứ 2 15:00; Thứ 4 17:00'],
-            'courses' => ['Khóa học, phân cách bằng dấu ;', 'Foundation 1; Acrylic'],
-        ];
-
-        $spreadsheet = new Spreadsheet;
-
-        $sheet = $spreadsheet->getActiveSheet();
-        $sheet->setTitle('Học viên');
-        $sheet->fromArray([array_keys($columns), array_column($columns, 1)], null, 'A1', true);
-
-        $lastCol = Coordinate::stringFromColumnIndex(count($columns));
-        // Định dạng Text cho toàn bộ cột để Excel không tự đổi ngày / mất số 0 đầu SĐT
-        $sheet->getStyle("A1:{$lastCol}1000")->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_TEXT);
-        $sheet->getStyle("A1:{$lastCol}1")->applyFromArray([
-            'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
-            'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'E11D48']],
-        ]);
-        $sheet->freezePane('A2');
-        foreach (range(1, count($columns)) as $i) {
-            $sheet->getColumnDimension(Coordinate::stringFromColumnIndex($i))->setAutoSize(true);
-        }
-
-        $guide = $spreadsheet->createSheet();
-        $guide->setTitle('Hướng dẫn');
-        $guide->fromArray([['Cột', 'Mô tả'], ...array_map(
-            fn ($key, $col) => [$key, $col[0]],
-            array_keys($columns),
-            $columns,
-        )]);
-        $guide->getStyle('A1:B1')->getFont()->setBold(true);
-        $guide->getColumnDimension('A')->setAutoSize(true);
-        $guide->getColumnDimension('B')->setAutoSize(true);
-
-        $spreadsheet->setActiveSheetIndex(0);
-
-        return response()->streamDownload(function () use ($spreadsheet): void {
-            (new Xlsx($spreadsheet))->save('php://output');
-        }, 'students_template.xlsx', [
-            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        ]);
+        return StudentImport::template();
     }
 
     /**
-     * Nhập danh sách học viên từ file Excel (.xlsx/.xls) hoặc CSV theo đúng chuẩn template.
+     * Nhập danh sách học viên từ file Excel (.xlsx/.xls) hoặc CSV theo file mẫu.
+     * Trả về số dòng đã nhập, các dòng bị bỏ qua (kèm lý do) và các cảnh báo.
      */
     public function importCsv(Request $request): JsonResponse
     {
@@ -592,285 +850,18 @@ class StudentApiController extends Controller
             'csv_file' => 'required|file|mimes:xlsx,xls,csv,txt|max:10240',
         ]);
 
-        $file = $request->file('csv_file');
-        if (! $file) {
-            return response()->json(['message' => 'Không tìm thấy file tải lên!'], 400);
-        }
-
         try {
-            $rows = $this->readImportRows($file);
+            $result = StudentImport::import($request->file('csv_file'));
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
         } catch (\Throwable) {
             return response()->json(['message' => 'Không thể đọc file! Vui lòng dùng file Excel hoặc CSV theo mẫu.'], 400);
         }
 
-        // Tìm dòng header, bỏ qua các dòng ghi chú bắt đầu bằng #
-        $header = null;
-        while (($line = array_shift($rows)) !== null) {
-            if (empty(array_filter($line))) {
-                continue;
-            }
-            if (isset($line[0]) && str_starts_with(trim($line[0]), '#')) {
-                continue;
-            }
-            $header = array_map(fn ($h) => trim(strtolower((string) $h)), $line);
-            break;
-        }
+        $skipped = count($result['skipped']);
+        $message = "Đã nhập thành công {$result['imported_count']} học viên"
+            .($skipped ? ", bỏ qua {$skipped} dòng thiếu thông tin" : '').'.';
 
-        if (! $header) {
-            return response()->json(['message' => 'File không có hàng tiêu đề hợp lệ!'], 400);
-        }
-
-        $colIndex = array_flip($header);
-        $importedCount = 0;
-
-        $defaultCourse = Course::where('is_active', true)->first();
-        if (! $defaultCourse) {
-            $defaultCourse = Course::firstOrCreate([
-                'name' => 'Khóa học tiêu chuẩn',
-            ], [
-                'code' => 'KH-001',
-                'price' => 1500000,
-                'default_sessions' => 12,
-                'is_active' => true,
-            ]);
-        }
-
-        foreach ($rows as $row) {
-            if (empty(array_filter($row))) {
-                continue;
-            }
-
-            $fullName = trim($row[$colIndex['full_name'] ?? 0] ?? '');
-            if (empty($fullName) || str_starts_with($fullName, '#')) {
-                continue;
-            }
-
-            $rawDob = trim($row[$colIndex['birthday'] ?? 1] ?? '');
-            $dob = $this->parseDate($rawDob);
-
-            $parentName = trim($row[$colIndex['parent_name'] ?? 2] ?? '');
-            if (empty($parentName)) {
-                $parentName = 'Phụ huynh '.$fullName;
-            }
-
-            $parentPhone = trim($row[$colIndex['parent_phone'] ?? 3] ?? '');
-            if (empty($parentPhone)) {
-                $parentPhone = '0900000000';
-            }
-
-            $parentEmail = trim($row[$colIndex['parent_email'] ?? 4] ?? '') ?: null;
-            $studentPhone = trim($row[$colIndex['student_phone'] ?? 5] ?? '') ?: null;
-            $address = trim($row[$colIndex['address'] ?? 6] ?? '') ?: null;
-
-            $rawEnrollment = trim($row[$colIndex['enrollment_date'] ?? 7] ?? '');
-            $joinDate = $this->parseDate($rawEnrollment) ?: Carbon::today()->toDateString();
-
-            $notes = trim($row[$colIndex['notes'] ?? 8] ?? '') ?: null;
-
-            $rawStatus = trim(strtolower($row[$colIndex['status'] ?? 9] ?? ''));
-            $status = match ($rawStatus) {
-                'active', 'hoạt động', 'đang học' => 'active',
-                'paused', 'tạm dừng' => 'paused',
-                'stopped', 'dropped', 'đã nghỉ', 'nghỉ học' => 'dropped',
-                default => 'active',
-            };
-
-            $centerName = trim($row[$colIndex['center_name'] ?? 10] ?? '') ?: CenterStore::defaultName();
-            $schedulesStr = trim($row[$colIndex['schedules'] ?? 11] ?? '');
-            $coursesStr = trim($row[$colIndex['courses'] ?? 12] ?? '');
-
-            // Course mapping
-            $courseId = $defaultCourse->id;
-            if (! empty($coursesStr)) {
-                $courseNames = preg_split('/[;,]/', $coursesStr);
-                $firstCourseName = trim($courseNames[0] ?? '');
-                if (! empty($firstCourseName)) {
-                    $matchedCourse = Course::where('name', 'like', "%{$firstCourseName}%")->first();
-                    if ($matchedCourse) {
-                        $courseId = $matchedCourse->id;
-                    } else {
-                        $newCourse = Course::create([
-                            'code' => 'KH-'.strtoupper(substr(md5($firstCourseName), 0, 4)),
-                            'name' => $firstCourseName,
-                            'price' => 1500000,
-                            'default_sessions' => 12,
-                            'is_active' => true,
-                        ]);
-                        $courseId = $newCourse->id;
-                    }
-                }
-            }
-
-            $scheduleData = $this->parseSchedules($schedulesStr);
-            $code = Student::nextCode();
-
-            Student::create([
-                'code' => $code,
-                'name' => $fullName,
-                'dob' => $dob,
-                'gender' => 'Nam',
-                'parent_name' => $parentName,
-                'parent_phone' => $parentPhone,
-                'parent_zalo' => $studentPhone ?: $parentPhone,
-                'parent_email' => $parentEmail,
-                'address' => $address,
-                'course_id' => $courseId,
-                'total_sessions' => 12,
-                'remaining_sessions' => 12,
-                'status' => $status,
-                'join_date' => $joinDate,
-                'notes' => $notes,
-                'center' => $centerName,
-                ...$scheduleData,
-            ]);
-
-            $importedCount++;
-        }
-
-        return response()->json([
-            'message' => "Đã nhập thành công {$importedCount} học viên vào hệ thống!",
-            'imported_count' => $importedCount,
-        ]);
-    }
-
-    /**
-     * Đọc toàn bộ dòng của file import thành mảng chuỗi (hỗ trợ .xlsx, .xls, .csv).
-     *
-     * @return list<list<string>>
-     */
-    private function readImportRows(UploadedFile $file): array
-    {
-        $extension = strtolower($file->getClientOriginalExtension());
-
-        if (in_array($extension, ['xlsx', 'xls'], true)) {
-            $reader = IOFactory::createReaderForFile($file->getRealPath());
-            $reader->setReadDataOnly(true);
-            $sheet = $reader->load($file->getRealPath())->getSheet(0);
-
-            return array_map(
-                fn ($row) => array_map(fn ($value) => trim((string) $value), $row),
-                $sheet->toArray(null, true, false),
-            );
-        }
-
-        $handle = fopen($file->getRealPath(), 'r');
-        if (! $handle) {
-            throw new \RuntimeException('Cannot open file');
-        }
-
-        // Bỏ qua UTF-8 BOM nếu có
-        if (fread($handle, 3) !== "\xEF\xBB\xBF") {
-            rewind($handle);
-        }
-
-        $rows = [];
-        while (($line = fgetcsv($handle)) !== false) {
-            $rows[] = array_map(fn ($v) => (string) $v, $line);
-        }
-        fclose($handle);
-
-        return $rows;
-    }
-
-    /**
-     * Parse ngày tháng từ chuỗi CSV (hỗ trợ DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD).
-     */
-    private function parseDate(?string $value): ?string
-    {
-        if (empty($value)) {
-            return null;
-        }
-
-        $value = trim($value);
-
-        try {
-            // Ô ngày trong Excel bị lưu dạng số serial (vd: 42078)
-            if (is_numeric($value) && $value > 0 && $value < 80000) {
-                return Carbon::instance(ExcelDate::excelToDateTimeObject((float) $value))->toDateString();
-            }
-
-            if (preg_match('/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/', $value, $m)) {
-                return Carbon::createFromDate((int) $m[3], (int) $m[2], (int) $m[1])->toDateString();
-            }
-
-            return Carbon::parse($value)->toDateString();
-        } catch (\Throwable) {
-            return null;
-        }
-    }
-
-    /**
-     * Parse lịch học từ định dạng: "Thứ 2 15:00; Thứ 4 17:00" hoặc tiếng Anh.
-     */
-    private function parseSchedules(?string $schedulesStr): array
-    {
-        if (empty($schedulesStr)) {
-            return [
-                'class_days' => null,
-                'class_start_time' => null,
-                'class_end_time' => null,
-                'schedule_info' => '1 buổi/tuần',
-            ];
-        }
-
-        $dayMap = [
-            'chủ nhật' => 0, 'cn' => 0, 'sunday' => 0, 'sun' => 0,
-            'thứ 2' => 1, 'thu 2' => 1, 't2' => 1, 'monday' => 1, 'mon' => 1,
-            'thứ 3' => 2, 'thu 3' => 2, 't3' => 2, 'tuesday' => 2, 'tue' => 2,
-            'thứ 4' => 3, 'thu 4' => 3, 't4' => 3, 'wednesday' => 3, 'wed' => 3,
-            'thứ 5' => 4, 'thu 5' => 4, 't5' => 4, 'thursday' => 4, 'thu' => 4,
-            'thứ 6' => 5, 'thu 6' => 5, 't6' => 5, 'friday' => 5, 'fri' => 5,
-            'thứ 7' => 6, 'thu 7' => 6, 't7' => 6, 'saturday' => 6, 'sat' => 6,
-        ];
-
-        $days = [];
-        $startTime = null;
-
-        $parts = preg_split('/[;,]/', $schedulesStr);
-        if ($parts) {
-            foreach ($parts as $part) {
-                $part = trim($part);
-                if (empty($part)) {
-                    continue;
-                }
-
-                $lower = mb_strtolower($part, 'UTF-8');
-                foreach ($dayMap as $name => $dayNum) {
-                    if (str_contains($lower, $name)) {
-                        $days[] = $dayNum;
-                        break;
-                    }
-                }
-
-                if (! $startTime && preg_match('/(\d{1,2}:\d{2})/', $part, $m)) {
-                    $startTime = str_pad($m[1], 5, '0', STR_PAD_LEFT);
-                }
-            }
-        }
-
-        $days = array_values(array_unique($days));
-        sort($days);
-
-        $endTime = null;
-        if ($startTime) {
-            try {
-                $endTime = Carbon::createFromFormat('H:i', $startTime)->addHour()->format('H:i');
-            } catch (\Throwable) {
-                $endTime = null;
-            }
-        }
-
-        $schedule = new Student([
-            'class_days' => ! empty($days) ? $days : null,
-            'class_start_time' => $startTime,
-            'class_end_time' => $endTime,
-        ]);
-
-        return [
-            'class_days' => ! empty($days) ? $days : null,
-            'class_start_time' => $startTime,
-            'class_end_time' => $endTime,
-            'schedule_info' => $schedule->scheduleSummary() ?: $schedulesStr,
-        ];
+        return response()->json(['message' => $message, ...$result]);
     }
 }

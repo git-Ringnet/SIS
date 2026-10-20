@@ -31,6 +31,26 @@ class Course extends Model
         return $this->hasMany(Student::class)->where('status', 'active');
     }
 
+    public function classes(): HasMany
+    {
+        return $this->hasMany(CourseClass::class)->orderBy('name');
+    }
+
+    /**
+     * Mã khóa tự sinh (KH-001, KH-002...) vì màn Khóa học không còn ô nhập mã.
+     */
+    public static function nextCode(): string
+    {
+        $max = static::where('code', 'like', 'KH-%')->pluck('code')
+            ->map(fn ($c) => (int) preg_replace('/\D/', '', $c))->max() ?? 0;
+
+        do {
+            $code = 'KH-'.str_pad((string) ++$max, 3, '0', STR_PAD_LEFT);
+        } while (static::where('code', $code)->exists());
+
+        return $code;
+    }
+
     public function leads(): HasMany
     {
         return $this->hasMany(Lead::class, 'interested_course_id');

@@ -7,7 +7,7 @@ use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * Dữ liệu tối thiểu để hệ thống chạy được cho khách hàng mới: tài khoản quản trị và mẫu tin nhắn.
@@ -21,16 +21,23 @@ class DatabaseSeeder extends Seeder
 
     public function run(): void
     {
+        // 0. Database trống (cài mới / vừa migrate:fresh): xoá luôn dữ liệu dạng file JSON còn sót lại
+        // (nhân sự, trung tâm & phòng học, học cụ, thu chi, chấm công...) để hệ thống trắng hoàn toàn.
+        // Chạy lại seed khi đã có tài khoản (cập nhật phiên bản) thì không đụng tới.
+        if (! User::exists()) {
+            $this->clearFileData();
+        }
+
         // 1. Tài khoản chủ trung tâm (ADMIN_* trong .env). Mặc định mật khẩu "password", khách tự đổi sau khi nhận.
         // Tạo trước để là tài khoản đầu tiên = chủ trung tâm gốc.
         $admin = config('app.admin');
         $this->createAccount($admin['name'], $admin['email'], $admin['password'] ?: 'password');
 
         // 2. Tài khoản kỹ thuật cho bên triển khai (SYSTEM_ADMIN_* trong .env): toàn quyền, không hiện ở màn Nhân sự
-        // nên khách không xoá / đổi mật khẩu được. Không đặt mật khẩu thì tự sinh ngẫu nhiên (KHÔNG dùng mật khẩu dễ đoán).
+        // nên khách không xoá / đổi mật khẩu được. Không đặt SYSTEM_ADMIN_PASSWORD thì dùng "password@123".
         $system = config('app.system_admin');
         if ($system['email']) {
-            $this->createAccount('System Admin', $system['email'], $system['password'] ?: Str::password(16, symbols: false));
+            $this->createAccount('System Admin', $system['email'], $system['password'] ?: 'password@123');
         }
 
         // 3. Message Templates for Quick Zalo/SMS Copy
@@ -64,6 +71,20 @@ class DatabaseSeeder extends Seeder
         foreach ($templates as $t) {
             MessageTemplate::firstOrCreate(['category' => $t['category']], $t);
         }
+    }
+
+    /**
+     * Xoá các file dữ liệu JSON trong storage/app/private (không đụng tới thư mục backup).
+     */
+    private function clearFileData(): void
+    {
+        $files = array_filter(Storage::files(), fn ($f) => str_ends_with($f, '.json'));
+        if ($files === []) {
+            return;
+        }
+
+        Storage::delete($files);
+        $this->command?->warn('Đã xoá dữ liệu dạng file còn sót lại: '.implode(', ', $files));
     }
 
     /**

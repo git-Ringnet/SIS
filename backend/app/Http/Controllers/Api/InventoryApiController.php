@@ -4,6 +4,9 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Support\CenterStore;
+use App\Support\InventoryImport;
+use App\Support\SupplySales;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -189,6 +192,8 @@ class InventoryApiController extends Controller
 
         foreach ($items as &$it) {
             if ($it['id'] === $id) {
+                $oldQty = (int) ($it['quantity'] ?? 0);
+                $soldItem = $it;
                 $newQty = max(0, ($it['quantity'] ?? 0) + (int) $validated['delta']);
                 $it['quantity'] = $newQty;
                 $found = true;
@@ -202,195 +207,58 @@ class InventoryApiController extends Controller
 
         $this->saveInventoryData($items);
 
+        // Xuất kho để bán → ghi doanh thu học cụ theo giá bán
+        $sold = 0;
+        if ((int) $validated['delta'] < 0 && str_starts_with($validated['reason'] ?? '', 'Bán')) {
+            $sold = min(abs((int) $validated['delta']), $oldQty);
+            SupplySales::recordRevenue([['name' => $soldItem['name'], 'quantity' => $sold, 'price' => $soldItem['sell_price'] ?? 0]], [
+                'date' => Carbon::today()->toDateString(),
+                'center' => $soldItem['center'] ?? null,
+                'recorded_by' => $request->user()?->name ?? 'Admin',
+                'note' => $validated['reason'],
+            ]);
+        }
+
         return response()->json([
-            'message' => 'Cập nhật số lượng tồn kho thành công!',
+            'message' => $sold > 0 ? 'Đã xuất kho và ghi doanh thu học cụ!' : 'Cập nhật số lượng tồn kho thành công!',
             'new_quantity' => $newQty,
         ]);
     }
 
     public function export(Request $request): StreamedResponse
     {
-        $items = $this->loadInventoryData();
-        $center = trim($request->input('center', 'all'));
-
-        if ($center !== 'all' && ! empty($center)) {
-            $items = array_values(array_filter($items, fn ($it) => ($it['center'] ?? '') === $center));
-        }
-
-        $fileName = 'kho_hoc_cu_'.date('Ymd_His').'.csv';
-
-        return response()->streamDownload(function () use ($items) {
-            $output = fopen('php://output', 'w');
-            // Ghi UTF-8 BOM để Excel hiển thị tiếng Việt không bị lỗi font
-            fwrite($output, "\xEF\xBB\xBF");
-
-            fputcsv($output, [
-                'Mã học cụ',
-                'Tên vật phẩm',
-                'Phân loại',
-                'Đơn vị tính',
-                'Cơ sở / Trung tâm',
-                'Giá nhập (VNĐ)',
-                'Giá bán (VNĐ)',
-                'Số lượng tồn',
-                'Cảnh báo tối thiểu',
-                'Ghi chú',
-            ]);
-
-            foreach ($items as $it) {
-                fputcsv($output, [
-                    $it['code'] ?? '',
-                    $it['name'] ?? '',
-                    $it['category'] ?? '',
-                    $it['unit'] ?? '',
-                    $it['center'] ?? '',
-                    $it['cost_price'] ?? 0,
-                    $it['sell_price'] ?? 0,
-                    $it['quantity'] ?? 0,
-                    $it['min_threshold'] ?? 3,
-                    $it['note'] ?? '',
-                ]);
-            }
-
-            fclose($output);
-        }, $fileName, [
-            'Content-Type' => 'text/csv; charset=UTF-8',
-            'Content-Disposition' => 'attachment; filename="'.$fileName.'"',
-        ]);
+        return InventoryImport::export(trim((string) $request->input('center', 'all')));
     }
 
     public function template(): StreamedResponse
     {
-        $fileName = 'mau_nhap_hoc_cu.csv';
-
-        return response()->streamDownload(function () {
-            $output = fopen('php://output', 'w');
-            fwrite($output, "\xEF\xBB\xBF");
-
-            fputcsv($output, [
-                'Mã học cụ (Để trống nếu tự tạo)',
-                'Tên vật phẩm (*)',
-                'Phân loại',
-                'Đơn vị tính (*)',
-                'Cơ sở / Trung tâm (*)',
-                'Giá nhập (VNĐ)',
-                'Giá bán (VNĐ)',
-                'Số lượng tồn',
-                'Mức cảnh báo tối thiểu',
-                'Ghi chú',
-            ]);
-
-            // Mẫu dòng ví dụ
-            fputcsv($output, [
-                'HC-ALFRED-01',
-                'Giáo trình Piano Alfred Tập 1',
-                'Giáo trình',
-                'Cuốn',
-                CenterStore::defaultName(),
-                60000,
-                120000,
-                20,
-                5,
-                'Sách bìa cứng',
-            ]);
-            fputcsv($output, [
-                '',
-                'Capo Guitar Alice A007',
-                'Phụ kiện',
-                'Cái',
-                CenterStore::defaultName(),
-                35000,
-                70000,
-                15,
-                3,
-                'Màu đen',
-            ]);
-
-            fclose($output);
-        }, $fileName, [
-            'Content-Type' => 'text/csv; charset=UTF-8',
-            'Content-Disposition' => 'attachment; filename="'.$fileName.'"',
-        ]);
+        return InventoryImport::template();
     }
 
     public function import(Request $request): JsonResponse
     {
         $request->validate([
-            'csv_file' => 'required|file|mimes:csv,txt|max:5120',
+            'file' => 'required_without:csv_file|file|mimes:xlsx,xls,csv,txt|max:5120',
+            'csv_file' => 'nullable|file|mimes:xlsx,xls,csv,txt|max:5120',
+        ], [
+            'file.required_without' => 'Vui lòng chọn file Excel để nhập!',
+            'file.mimes' => 'File phải là Excel (.xlsx) theo mẫu của hệ thống.',
         ]);
 
-        $file = $request->file('csv_file');
-        $handle = fopen($file->getRealPath(), 'r');
-
-        if (! $handle) {
-            return response()->json(['message' => 'Không thể đọc file CSV!'], 400);
+        try {
+            $result = InventoryImport::import($request->file('file') ?? $request->file('csv_file'));
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        // Bỏ qua BOM nếu có
-        $bom = fread($handle, 3);
-        if ($bom !== "\xEF\xBB\xBF") {
-            rewind($handle);
+        $message = "Đã thêm {$result['imported_count']} học cụ";
+        if ($result['updated_count'] > 0) {
+            $message .= ", cập nhật {$result['updated_count']} học cụ trùng mã";
+        }
+        if ($result['skipped']) {
+            $message .= ', bỏ qua '.count($result['skipped']).' dòng';
         }
 
-        $header = fgetcsv($handle);
-        if (! $header) {
-            fclose($handle);
-
-            return response()->json(['message' => 'File CSV không có nội dung!'], 400);
-        }
-
-        $items = $this->loadInventoryData();
-        $maxId = count($items) > 0 ? max(array_column($items, 'id')) : 0;
-        $importedCount = 0;
-
-        while (($row = fgetcsv($handle)) !== false) {
-            if (empty(array_filter($row))) {
-                continue;
-            }
-
-            $name = trim($row[1] ?? '');
-            if (empty($name)) {
-                continue;
-            }
-
-            $code = trim($row[0] ?? '');
-            if (empty($code)) {
-                $code = 'HC-'.strtoupper(substr(md5(uniqid()), 0, 6));
-            }
-
-            $category = trim($row[2] ?? '') ?: 'Học cụ';
-            $unit = trim($row[3] ?? '') ?: 'Cái';
-            $center = trim($row[4] ?? '') ?: CenterStore::defaultName();
-            $costPrice = isset($row[5]) ? (float) str_replace([',', '.'], '', $row[5]) : 0;
-            $sellPrice = isset($row[6]) ? (float) str_replace([',', '.'], '', $row[6]) : 0;
-            $quantity = isset($row[7]) ? (int) $row[7] : 0;
-            $minThreshold = isset($row[8]) ? (int) $row[8] : 3;
-            $note = trim($row[9] ?? '');
-
-            $maxId++;
-            $items[] = [
-                'id' => $maxId,
-                'name' => $name,
-                'code' => $code,
-                'category' => $category,
-                'unit' => $unit,
-                'center' => $center,
-                'cost_price' => $costPrice,
-                'sell_price' => $sellPrice,
-                'quantity' => $quantity,
-                'min_threshold' => $minThreshold,
-                'note' => $note,
-            ];
-            $importedCount++;
-        }
-
-        fclose($handle);
-
-        $this->saveInventoryData($items);
-
-        return response()->json([
-            'message' => "Đã nhập thành công {$importedCount} học cụ!",
-            'imported_count' => $importedCount,
-        ]);
+        return response()->json(['message' => $message.'.', ...$result]);
     }
 }

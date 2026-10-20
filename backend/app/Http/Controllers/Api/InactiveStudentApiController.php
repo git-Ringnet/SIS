@@ -49,14 +49,16 @@ class InactiveStudentApiController extends Controller
             $students = $query->get();
         }
 
-        // Học viên tạm dừng sắp đi học lại (dựa trên cột end_date)
+        // Học viên tạm dừng sắp đi học lại (dựa trên hạn bảo lưu "Đến ngày")
         $now = Carbon::now();
         $targetDate = Carbon::now()->addDays($upcomingDays);
 
         $upcomingStudents = Student::with('course')
             ->where('status', 'paused')
-            ->whereNotNull('end_date')
-            ->whereBetween('end_date', [$now->format('Y-m-d'), $targetDate->format('Y-m-d')])
+            ->whereNotNull('paused_until')
+            ->whereBetween('paused_until', [$now->format('Y-m-d'), $targetDate->format('Y-m-d')])
+            ->when($centerFilter !== 'all', fn ($q) => $q->where('center', $centerFilter))
+            ->orderBy('paused_until')
             ->get();
 
         $centers = CenterStore::names();
@@ -77,6 +79,8 @@ class InactiveStudentApiController extends Controller
     {
         $student->status = 'active';
         $student->consecutive_absences = 0;
+        $student->paused_until = null;
+        $student->pause_note = null;
         $student->save();
 
         RetentionLog::create([
@@ -101,13 +105,10 @@ class InactiveStudentApiController extends Controller
             'notes' => 'nullable|string',
         ]);
 
+        // Hạn bảo lưu và lý do lưu riêng, không đè ngày kết thúc khoá / ghi chú của học viên
         $student->status = 'paused';
-        if (! empty($validated['end_date'])) {
-            $student->end_date = $validated['end_date'];
-        }
-        if (! empty($validated['notes'])) {
-            $student->notes = $validated['notes'];
-        }
+        $student->paused_until = $validated['end_date'] ?? null;
+        $student->pause_note = $validated['notes'] ?? null;
         $student->save();
 
         RetentionLog::create([
@@ -115,7 +116,7 @@ class InactiveStudentApiController extends Controller
             'action_type' => 'note_added',
             'status' => 'following_up',
             'contact_date' => Carbon::now(),
-            'content' => 'Chuyển học viên sang trạng thái Tạm dừng/Bảo lưu. Dự kiến đi học lại: '.($student->end_date ? Carbon::parse($student->end_date)->format('d/m/Y') : 'Chưa rõ'),
+            'content' => 'Chuyển học viên sang trạng thái Tạm dừng/Bảo lưu. Dự kiến đi học lại: '.($student->paused_until ? $student->paused_until->format('d/m/Y') : 'Chưa rõ'),
             'created_by' => 'Admin',
         ]);
 
@@ -132,9 +133,8 @@ class InactiveStudentApiController extends Controller
         ]);
 
         $student->status = 'inactive';
-        if (! empty($validated['notes'])) {
-            $student->notes = $validated['notes'];
-        }
+        $student->paused_until = null;
+        $student->pause_note = $validated['notes'] ?? null;
         $student->save();
 
         RetentionLog::create([

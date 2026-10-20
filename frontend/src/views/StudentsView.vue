@@ -14,6 +14,10 @@ import DatePickerVN from '../components/DatePickerVN.vue';
 import Pagination from '../components/Pagination.vue';
 import ScheduleFields from '../components/ScheduleFields.vue';
 import ImportStudentsModal from '../components/ImportStudentsModal.vue';
+import StudentDetailModal from '../components/StudentDetailModal.vue';
+import MessageTemplateModal from '../components/MessageTemplateModal.vue';
+import RetentionNoteModal from '../components/RetentionNoteModal.vue';
+import RenewModal from '../components/RenewModal.vue';
 import { useCenters } from '../services/useCenters';
 import {
   UserPlus,
@@ -31,6 +35,18 @@ import {
   Filter,
   Download,
   UploadCloud,
+  Upload,
+  User,
+  Plus,
+  ArrowUp,
+  ArrowDown,
+  Share2,
+  MessageSquare,
+  CreditCard,
+  Calendar,
+  UserX,
+  Copy,
+  Check,
 } from 'lucide-vue-next';
 import MoneyInput from '../components/MoneyInput.vue';
 
@@ -72,17 +88,20 @@ const filterCenterOptions = computed(() => [
 
 const filterClassOptions = computed(() => [
   { id: 'all', name: 'Tất cả lớp học' },
-  ...availableClasses.value.map(cls => ({ id: cls, name: cls }))
+  { id: 'unassigned', name: 'Chưa gán lớp' },
+  ...availableClasses.value.map(cls => (typeof cls === 'object' && cls ? cls : { id: cls, name: cls }))
 ]);
 
 const filterTeacherOptions = computed(() => [
   { id: 'all', name: 'Tất cả giáo viên' },
-  ...availableTeachers.value.map(t => ({ id: t, name: t }))
+  { id: 'unassigned', name: 'Chưa gán' },
+  ...availableTeachers.value.map(t => (typeof t === 'object' && t ? t : { id: t, name: t }))
 ]);
 
 const filterStaffOptions = computed(() => [
   { id: 'all', name: 'Tất cả người phụ trách' },
-  ...(availableStaff.value.length ? availableStaff.value : availableTeachers.value).map(s => ({ id: s, name: s }))
+  { id: 'unassigned', name: 'Chưa gán' },
+  ...(availableStaff.value.length ? availableStaff.value : availableTeachers.value).map(s => (typeof s === 'object' && s ? s : { id: s, name: s }))
 ]);
 
 const showCreateModal = ref(false);
@@ -90,9 +109,532 @@ const showEditModal = ref(false);
 const showSupplyModal = ref(false);
 const showImportModal = ref(false);
 const showInfoModal = ref(false);
+const showDetailModal = ref(false);
+const selectedDetailStudentId = ref(null);
 const selectedSupplyStudent = ref(null);
 const editingStudent = ref(null);
 const isSubmitting = ref(false);
+
+const expandedStudentId = ref(null);
+const inlineAttended = ref({});
+const inlineTotal = ref({});
+const inlineAllowedAbsences = ref({});
+
+const activeActionStudent = ref(null);
+const showNoteModal = ref(false);
+const showRenewModal = ref(false);
+const showAbsenceModal = ref(false);
+const showParentPortalModal = ref(false);
+const copiedPortalLink = ref(false);
+const absenceWithLeave = ref(true);
+const absenceNote = ref('');
+const isSubmittingAbsence = ref(false);
+
+const formatDate = (val) => {
+  if (!val) return '—';
+  try {
+    const d = new Date(val);
+    return toLocalDateString(d);
+  } catch {
+    return val;
+  }
+};
+
+const getStudentProgress = (st) => {
+  if (!st || st.total_sessions <= 0) return 0;
+  const attended = Math.max(0, st.total_sessions - st.remaining_sessions);
+  return Math.min(100, Math.round((attended / st.total_sessions) * 100));
+};
+
+const toggleExpandStudent = (student) => {
+  if (expandedStudentId.value === student.id) {
+    expandedStudentId.value = null;
+  } else {
+    expandedStudentId.value = student.id;
+    inlineAttended.value[student.id] = Math.max(0, student.total_sessions - student.remaining_sessions);
+    inlineTotal.value[student.id] = student.total_sessions;
+    inlineAllowedAbsences.value[student.id] = student.allowed_absences || 3;
+  }
+};
+
+const handleRowClick = (event, student) => {
+  const target = event.target;
+  if (target.closest('button') || target.closest('a') || target.closest('input') || target.closest('select') || target.closest('label')) {
+    return;
+  }
+  toggleExpandStudent(student);
+};
+
+const saveInlineAttendedSessions = async (st) => {
+  const newAttended = Number(inlineAttended.value[st.id]);
+  const newTotal = Number(st.total_sessions);
+  const newRemaining = Math.max(0, newTotal - newAttended);
+
+  try {
+    await studentApi.updateProgress(st.id, {
+      remaining_sessions: newRemaining,
+    });
+    st.remaining_sessions = newRemaining;
+    notify.success('Đã lưu số buổi đã học!');
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Lỗi khi cập nhật');
+  }
+};
+
+const saveInlineTotalSessions = async (st) => {
+  const newTotal = Number(inlineTotal.value[st.id]);
+  const currentAttended = Math.max(0, st.total_sessions - st.remaining_sessions);
+  const newRemaining = Math.max(0, newTotal - currentAttended);
+
+  try {
+    await studentApi.updateProgress(st.id, {
+      total_sessions: newTotal,
+      remaining_sessions: newRemaining,
+    });
+    st.total_sessions = newTotal;
+    st.remaining_sessions = newRemaining;
+    notify.success('Đã lưu tổng số buổi học!');
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Lỗi khi cập nhật');
+  }
+};
+
+const saveInlineAllowedAbsences = async (st) => {
+  try {
+    const val = Number(inlineAllowedAbsences.value[st.id]);
+    await studentApi.updateProgress(st.id, {
+      allowed_absences: val,
+    });
+    st.allowed_absences = val;
+    notify.success('Đã lưu giới hạn vắng phép!');
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Lỗi khi cập nhật');
+  }
+};
+
+const failedAvatars = ref(new Set());
+const handleAvatarError = (studentId) => {
+  failedAvatars.value.add(studentId);
+};
+
+const getAvatarUrl = (url) => {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
+    return url;
+  }
+  return url.startsWith('/') ? url : `/${url}`;
+};
+
+const uploadAvatarFile = async (event, st) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  const formData = new FormData();
+  formData.append('avatar', file);
+
+  try {
+    const res = await studentApi.uploadAvatar(st.id, formData);
+    st.avatar = res.data.avatar;
+    failedAvatars.value.delete(st.id);
+    notify.success('Đã tải ảnh học viên thành công!');
+  } catch (err) {
+    notify.apiError(err, 'Không thể tải ảnh');
+  }
+};
+
+// Ẩn / Hiện khóa hoàn thành
+const hideCompletedCourses = ref({});
+const toggleHideCompleted = (studentId) => {
+  hideCompletedCourses.value[studentId] = !hideCompletedCourses.value[studentId];
+};
+
+const getStudentCourses = (student) => {
+  return student.registered_courses_list || [];
+};
+
+const isCourseCompleted = (c) => {
+  return c.status === 'completed' || Number(c.remaining_sessions) <= 0 || (Number(c.attended_sessions) >= Number(c.total_sessions));
+};
+
+const getVisibleCourses = (student) => {
+  const all = getStudentCourses(student);
+  if (!hideCompletedCourses.value[student.id]) {
+    return all;
+  }
+  return all.filter((c) => !isCourseCompleted(c));
+};
+
+const getCourseProgress = (c) => {
+  if (!c || !c.total_sessions || c.total_sessions <= 0) return 0;
+  const attended = Number(c.attended_sessions ?? (c.total_sessions - c.remaining_sessions) ?? 0);
+  return Math.min(100, Math.round((attended / c.total_sessions) * 100));
+};
+
+// Form thêm khóa học inline
+const showAddCourseForm = ref({});
+const isSubmittingCourse = ref({});
+const addCourseForms = ref({});
+
+const getAddCourseForm = (studentId) => {
+  if (!addCourseForms.value[studentId]) {
+    const today = new Date().toISOString().split('T')[0];
+    addCourseForms.value[studentId] = {
+      course_id: courses.value[0]?.id || '',
+      total_sessions: 12,
+      start_date: today,
+      sessions_per_week: '',
+      end_date: '',
+    };
+  }
+  return addCourseForms.value[studentId];
+};
+
+const toggleAddCourseForm = (student) => {
+  showAddCourseForm.value[student.id] = !showAddCourseForm.value[student.id];
+  if (showAddCourseForm.value[student.id]) {
+    getAddCourseForm(student.id);
+  }
+};
+
+const submitAddCourse = async (student) => {
+  const form = getAddCourseForm(student.id);
+  if (!form.course_id) {
+    notify.error('Vui lòng chọn khóa học.');
+    return;
+  }
+  if (!form.total_sessions || Number(form.total_sessions) <= 0) {
+    notify.error('Tổng số buổi phải lớn hơn 0.');
+    return;
+  }
+
+  try {
+    isSubmittingCourse.value[student.id] = true;
+    const res = await studentApi.addCourse(student.id, {
+      course_id: form.course_id,
+      total_sessions: Number(form.total_sessions),
+      start_date: form.start_date || null,
+      end_date: form.end_date || null,
+      sessions_per_week: form.sessions_per_week || null,
+    });
+    notify.success(res.data.message || 'Đã thêm khóa học cho học viên thành công!');
+    showAddCourseForm.value[student.id] = false;
+    if (res.data.student) {
+      Object.assign(student, res.data.student);
+    }
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Lỗi khi thêm khóa học');
+  } finally {
+    isSubmittingCourse.value[student.id] = false;
+  }
+};
+
+// Inline inputs cho từng thẻ khóa học
+const courseAttendedInputs = ref({});
+const courseTotalInputs = ref({});
+const courseAllowedAbsencesInputs = ref({});
+
+const getCourseAttendedInput = (student, courseItem) => {
+  const key = `${student.id}_${courseItem.id}`;
+  if (courseAttendedInputs.value[key] === undefined) {
+    courseAttendedInputs.value[key] = courseItem.attended_sessions ?? 0;
+  }
+  return {
+    get value() { return courseAttendedInputs.value[key]; },
+    set value(v) { courseAttendedInputs.value[key] = v; }
+  };
+};
+
+const getCourseTotalInput = (student, courseItem) => {
+  const key = `${student.id}_${courseItem.id}`;
+  if (courseTotalInputs.value[key] === undefined) {
+    courseTotalInputs.value[key] = courseItem.total_sessions ?? 12;
+  }
+  return {
+    get value() { return courseTotalInputs.value[key]; },
+    set value(v) { courseTotalInputs.value[key] = v; }
+  };
+};
+
+const getCourseAllowedAbsencesInput = (student, courseItem) => {
+  const key = `${student.id}_${courseItem.id}`;
+  if (courseAllowedAbsencesInputs.value[key] === undefined) {
+    courseAllowedAbsencesInputs.value[key] = courseItem.allowed_absences ?? 3;
+  }
+  return {
+    get value() { return courseAllowedAbsencesInputs.value[key]; },
+    set value(v) { courseAllowedAbsencesInputs.value[key] = v; }
+  };
+};
+
+const saveCourseAttended = async (student, courseItem) => {
+  const key = `${student.id}_${courseItem.id}`;
+  const newAttended = Number(courseAttendedInputs.value[key] ?? courseItem.attended_sessions);
+  try {
+    const res = await studentApi.updateCourseItem(student.id, courseItem.id, {
+      attended_sessions: newAttended,
+    });
+    notify.success('Đã lưu số buổi đã học!');
+    if (res.data.student) {
+      Object.assign(student, res.data.student);
+    }
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Lỗi khi lưu số buổi đã học');
+  }
+};
+
+const saveCourseTotal = async (student, courseItem) => {
+  const key = `${student.id}_${courseItem.id}`;
+  const newTotal = Number(courseTotalInputs.value[key] ?? courseItem.total_sessions);
+  try {
+    const res = await studentApi.updateCourseItem(student.id, courseItem.id, {
+      total_sessions: newTotal,
+    });
+    notify.success('Đã lưu tổng số buổi học!');
+    if (res.data.student) {
+      Object.assign(student, res.data.student);
+    }
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Lỗi khi lưu tổng số buổi');
+  }
+};
+
+const saveCourseAllowedAbsences = async (student, courseItem) => {
+  const key = `${student.id}_${courseItem.id}`;
+  const val = Number(courseAllowedAbsencesInputs.value[key] ?? courseItem.allowed_absences);
+  try {
+    const res = await studentApi.updateCourseItem(student.id, courseItem.id, {
+      allowed_absences: val,
+    });
+    notify.success('Đã lưu giới hạn vắng phép!');
+    if (res.data.student) {
+      Object.assign(student, res.data.student);
+    }
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Lỗi khi lưu giới hạn vắng phép');
+  }
+};
+
+// ---- Lịch nhiều ca: ca nào thuộc khoá nào ("Chọn lịch cho trang điểm danh") ----
+const DAY_SHORT = { 1: 'T2', 2: 'T3', 3: 'T4', 4: 'T5', 5: 'T6', 6: 'T7', 0: 'CN' };
+const slotLabel = (slot) => `${DAY_SHORT[slot.day] ?? ''} · ${slot.start}${slot.end ? ` - ${slot.end}` : ''}`;
+
+// Các ca của khoá: đã chọn riêng thì theo danh sách chọn, không thì dùng chung mọi ca
+const courseSlots = (student, courseItem) => {
+  const all = student.schedule_slots || [];
+  const ids = courseItem?.schedule_ids || [];
+  return ids.length ? all.filter((x) => ids.includes(x.id)) : all;
+};
+
+const slotPicker = ref({ key: null, ids: [] });
+const savingSlotPicker = ref(false);
+
+const openSlotPicker = (student, courseItem) => {
+  const key = `${student.id}_${courseItem.id}`;
+  slotPicker.value = slotPicker.value.key === key ? { key: null, ids: [] } : { key, ids: [...(courseItem.schedule_ids || [])] };
+};
+
+const toggleSlotPick = (id) => {
+  const ids = slotPicker.value.ids;
+  slotPicker.value.ids = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
+};
+
+const saveSlotPicker = async (student, courseItem) => {
+  try {
+    savingSlotPicker.value = true;
+    const res = await studentApi.updateCourseItem(student.id, courseItem.id, { schedule_ids: slotPicker.value.ids });
+    notify.success('Đã lưu lịch của khóa học');
+    if (res.data.student) Object.assign(student, res.data.student);
+    slotPicker.value = { key: null, ids: [] };
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Không lưu được lịch của khóa học');
+  } finally {
+    savingSlotPicker.value = false;
+  }
+};
+
+// ---- Đổi khóa học của một thẻ khóa (nút bút chì cạnh tên khóa) ----
+const changeCourseState = ref({ show: false, student: null, item: null, courseId: '' });
+const savingCourseChange = ref(false);
+
+const openChangeCourse = (student, courseItem) => {
+  changeCourseState.value = { show: true, student, item: courseItem, courseId: courseItem.course_id || student.course_id || '' };
+};
+
+const submitChangeCourse = async () => {
+  const { student, item, courseId } = changeCourseState.value;
+  try {
+    savingCourseChange.value = true;
+    const res = await studentApi.updateCourseItem(student.id, item.id, { course_id: Number(courseId) });
+    notify.success('Đã đổi khóa học!');
+    if (res.data.student) Object.assign(student, res.data.student);
+    changeCourseState.value.show = false;
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Không đổi được khóa học');
+  } finally {
+    savingCourseChange.value = false;
+  }
+};
+
+// ---- Thời gian khóa học (nút "Sửa" cạnh Copy placeholder) ----
+const courseDatesState = ref({ key: null, student: null, item: null, start: '', perWeek: null, end: '', endTouched: false });
+const savingCourseDates = ref(false);
+
+const toIsoDate = (val) => (val ? String(val).slice(0, 10) : '');
+
+// Ngày kết thúc dự kiến = buổi học cuối cùng trong tuần cuối:
+// số tuần = tổng buổi ÷ buổi/tuần (làm tròn lên); trong tuần cuối lấy ngày học muộn nhất theo lịch học của học viên.
+const computeCourseEndDate = (startIso, totalSessions, perWeek, classDays) => {
+  if (!startIso || !totalSessions || !perWeek) return '';
+  const weeks = Math.ceil(totalSessions / perWeek);
+  const lastWeekStart = new Date(`${startIso}T00:00:00`);
+  lastWeekStart.setDate(lastWeekStart.getDate() + (weeks - 1) * 7);
+  const days = (classDays || []).map(Number);
+  for (let offset = 6; offset >= 0; offset--) {
+    const d = new Date(lastWeekStart);
+    d.setDate(d.getDate() + offset);
+    if (days.length === 0 || days.includes(d.getDay())) return toLocalDateString(d);
+  }
+  return '';
+};
+
+const openCourseDates = (student, courseItem) => {
+  const key = `${student.id}_${courseItem.id}`;
+  if (courseDatesState.value.key === key) {
+    courseDatesState.value.key = null;
+    return;
+  }
+  const perWeek = Number(courseItem.sessions_per_week) || (courseSlots(student, courseItem).length || null);
+  courseDatesState.value = {
+    key,
+    student,
+    item: courseItem,
+    start: toIsoDate(courseItem.start_date || student.join_date),
+    perWeek,
+    end: toIsoDate(courseItem.end_date || student.end_date),
+    endTouched: !!(courseItem.end_date || student.end_date),
+  };
+};
+
+const recomputeCourseEnd = () => {
+  const st = courseDatesState.value;
+  if (st.endTouched || !st.item) return;
+  st.end = computeCourseEndDate(st.start, Number(st.item.total_sessions), Number(st.perWeek), courseSlots(st.student, st.item).map((x) => x.day));
+};
+
+const submitCourseDates = async () => {
+  const { student, item, start, perWeek, end } = courseDatesState.value;
+  try {
+    savingCourseDates.value = true;
+    const res = await studentApi.updateCourseItem(student.id, item.id, {
+      start_date: start || null,
+      sessions_per_week: perWeek ? Number(perWeek) : null,
+      end_date: end || null,
+    });
+    notify.success('Đã lưu thời gian khóa học!');
+    if (res.data.student) Object.assign(student, res.data.student);
+    courseDatesState.value.key = null;
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Không lưu được thời gian khóa học');
+  } finally {
+    savingCourseDates.value = false;
+  }
+};
+
+const deleteStudentCourse = async (student, courseItem) => {
+  const allCourses = getStudentCourses(student);
+  if (allCourses.length <= 1) {
+    notify.error('Học viên phải có ít nhất 1 khóa học.');
+    return;
+  }
+  if (!confirm(`Bạn có chắc chắn muốn xóa khóa học "${courseItem.course_name}" của học viên ${student.name}?`)) {
+    return;
+  }
+  try {
+    const res = await studentApi.deleteCourseItem(student.id, courseItem.id);
+    notify.success(res.data.message || 'Đã xóa khóa học thành công!');
+    if (res.data.student) {
+      Object.assign(student, res.data.student);
+    }
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Lỗi khi xóa khóa học');
+  }
+};
+
+const copyPlaceholder = (st) => {
+  navigator.clipboard?.writeText(st.name || '');
+  notify.success(`Đã sao chép: ${st.name}`);
+};
+
+const openRetentionNote = (st) => {
+  activeActionStudent.value = st;
+  showNoteModal.value = true;
+};
+
+const openRenew = (st) => {
+  activeActionStudent.value = st;
+  showRenewModal.value = true;
+};
+
+const openAbsence = (st) => {
+  activeActionStudent.value = st;
+  absenceNote.value = '';
+  absenceWithLeave.value = true;
+  showAbsenceModal.value = true;
+};
+
+const openParentPortal = (st) => {
+  activeActionStudent.value = st;
+  showParentPortalModal.value = true;
+};
+
+const submitAbsence = async () => {
+  if (!activeActionStudent.value) return;
+  try {
+    isSubmittingAbsence.value = true;
+    await studentApi.recordAbsence(activeActionStudent.value.id, {
+      with_leave: absenceWithLeave.value,
+      note: absenceNote.value,
+    });
+    showAbsenceModal.value = false;
+    notify.success('Đã ghi nhận vắng học!');
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Lỗi khi ghi nhận vắng');
+  } finally {
+    isSubmittingAbsence.value = false;
+  }
+};
+
+const activeParentPortalUrl = computed(() => {
+  if (!activeActionStudent.value?.id) return '';
+  return `${window.location.origin}/portal/${activeActionStudent.value.id}`;
+});
+
+const copyParentPortalLink = () => {
+  if (!activeParentPortalUrl.value) return;
+  navigator.clipboard?.writeText(activeParentPortalUrl.value);
+  copiedPortalLink.value = true;
+  notify.success('Đã sao chép link Cổng phụ huynh!');
+  setTimeout(() => {
+    copiedPortalLink.value = false;
+  }, 2500);
+};
+
+const openStudentDetail = (id) => {
+  selectedDetailStudentId.value = id;
+  showDetailModal.value = true;
+};
 
 const newStudentForm = ref({
   name: '',
@@ -110,11 +652,7 @@ const newStudentForm = ref({
   create_invoice: true,
   invoice_amount: 3600000,
   center: '',
-  class_days: [],
-  class_start_time: '',
-  class_end_time: '',
-  teacher: '',
-  room: '',
+  schedules: [],
 });
 const { centerNames, defaultCenter, loadCenters } = useCenters();
 
@@ -164,12 +702,12 @@ const handleDownloadTemplate = async () => {
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', 'students_template.xlsx');
+    link.setAttribute('download', 'mau_nhap_hoc_vien.xlsx');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     window.URL.revokeObjectURL(url);
-    notify.success('Đã tải file mẫu students_template.xlsx!');
+    notify.success('Đã tải file mẫu. Mở file xem sheet "Hướng dẫn" trước khi điền.');
   } catch (err) {
     console.error('Error downloading template:', err);
     notify.error('Không thể tải file mẫu. Vui lòng thử lại!');
@@ -235,6 +773,11 @@ const openSupplyModal = (student) => {
   showSupplyModal.value = true;
 };
 
+// Cảnh báo trùng lịch / vượt sức chứa phòng (vẫn lưu, chỉ nhắc để sắp xếp lại)
+const showScheduleWarnings = (warnings) => {
+  (warnings || []).forEach((w) => notify.warning(w, { duration: 10000 }));
+};
+
 const submitCreateStudent = async () => {
   if (!newStudentForm.value.name || !newStudentForm.value.parent_name || !newStudentForm.value.parent_phone) {
     notify.warning('Vui lòng điền đầy đủ Tên học viên, Tên phụ huynh và Số điện thoại');
@@ -243,7 +786,8 @@ const submitCreateStudent = async () => {
 
   try {
     isSubmitting.value = true;
-    await studentApi.create(newStudentForm.value);
+    const res = await studentApi.create(newStudentForm.value);
+    showScheduleWarnings(res.data.warnings);
     showCreateModal.value = false;
     newStudentForm.value = {
       name: '',
@@ -261,11 +805,7 @@ const submitCreateStudent = async () => {
       create_invoice: true,
       invoice_amount: 3600000,
       center: defaultCenter.value,
-      class_days: [],
-      class_start_time: '',
-      class_end_time: '',
-      teacher: '',
-      room: '',
+      schedules: [],
     };
     applyFilters();
   } catch (err) {
@@ -276,7 +816,8 @@ const submitCreateStudent = async () => {
 };
 
 const openEditStudent = (student) => {
-  editingStudent.value = { ...student, class_days: student.class_days || [] };
+  // Sửa trên bản sao danh sách ca (lịch nhiều ca)
+  editingStudent.value = { ...student, schedules: (student.schedule_slots || []).map((slot) => ({ ...slot })) };
   showEditModal.value = true;
 };
 
@@ -284,7 +825,8 @@ const submitEditStudent = async () => {
   if (!editingStudent.value) return;
   try {
     isSubmitting.value = true;
-    await studentApi.update(editingStudent.value.id, editingStudent.value);
+    const res = await studentApi.update(editingStudent.value.id, editingStudent.value);
+    showScheduleWarnings(res.data.warnings);
     showEditModal.value = false;
     fetchData();
   } catch (err) {
@@ -558,26 +1100,32 @@ const getAttendanceSummaryTooltip = (student) => {
               <th class="py-4 px-4 text-center">Số buổi</th>
               <th class="py-4 px-4 text-center">Vắng</th>
               <th class="py-4 px-4 text-center">Trạng thái</th>
-              <th class="py-4 px-4 text-center">Điểm danh</th>
               <th class="py-4 px-4 text-right">Thao tác</th>
+              <th class="py-4 px-4">Người phụ trách</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100 text-slate-700">
-            <tr
+            <template
               v-for="student in students"
               :key="student.id"
-              class="hover:bg-slate-50/80 transition-colors"
             >
+              <tr
+                @click="handleRowClick($event, student)"
+                class="hover:bg-slate-50/80 transition-colors cursor-pointer select-none"
+                :class="expandedStudentId === student.id ? 'bg-red-50/20' : ''"
+              >
               <!-- Name, Course & Attendance Dots (SenyApp style) -->
               <td class="py-4 px-4">
                 <div class="flex items-center gap-3">
                   <div class="min-w-0">
-                    <router-link
-                      :to="`/students/${student.id}`"
-                      class="font-black text-slate-900 hover:text-indigo-600 block text-sm sm:text-base tracking-tight truncate"
+                    <button
+                      type="button"
+                      @click="openStudentDetail(student.id)"
+                      class="font-black text-slate-900 hover:text-indigo-600 block text-sm sm:text-base tracking-tight truncate text-left cursor-pointer transition-colors"
+                      title="Xem hồ sơ học viên"
                     >
                       {{ student.name }}
-                    </router-link>
+                    </button>
                     <span class="text-xs text-slate-400 block font-medium truncate mb-1">
                       {{ student.course?.name }}
                     </span>
@@ -687,22 +1235,18 @@ const getAttendanceSummaryTooltip = (student) => {
                 </Badge>
               </td>
 
-              <!-- Quick Attendance Button -->
-              <td class="py-3.5 px-4 text-center">
-                <AttendanceButton :student="student" :compact="true" @attended="fetchData" @undone="fetchData" />
-              </td>
-
               <!-- Actions matching Screenshot 1 exactly -->
               <td class="py-3.5 px-4 text-right">
                 <div class="flex items-center justify-end gap-1">
-                  <!-- Eye: Xem nhanh -->
-                  <router-link
-                    :to="`/students/${student.id}`"
+                  <!-- Eye: Xem hồ sơ học viên dạng Modal -->
+                  <button
+                    type="button"
+                    @click="openStudentDetail(student.id)"
                     class="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-800 transition-colors"
-                    title="Xem hồ sơ học viên"
+                    title="Xem hồ sơ học viên (Modal)"
                   >
                     <Eye class="h-4 w-4" />
-                  </router-link>
+                  </button>
 
                   <!-- ExternalLink: Mở trang riêng chi tiết thông tin học viên -->
                   <router-link
@@ -734,7 +1278,7 @@ const getAttendanceSummaryTooltip = (student) => {
 
                   <!-- Trash2: Xóa -->
                   <button
-                    @click="deleteStudent(student)"
+                    @click.stop="deleteStudent(student)"
                     class="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-red-600 transition-colors"
                     title="Xóa học viên"
                   >
@@ -742,13 +1286,527 @@ const getAttendanceSummaryTooltip = (student) => {
                   </button>
                 </div>
               </td>
-            </tr>
 
-            <tr v-if="students.length === 0">
-              <td colspan="8" class="py-12 text-center text-xs text-slate-400">
-                Không tìm thấy học viên nào phù hợp.
+              <!-- Người phụ trách -->
+              <td class="py-3.5 px-4 text-xs whitespace-nowrap">
+                <template v-if="student.teacher">
+                  <div class="font-bold text-slate-800">{{ student.teacher }}</div>
+                  <div v-if="student.staff_email" class="text-slate-400 text-[11px] font-mono">{{ student.staff_email }}</div>
+                </template>
+                <template v-else>
+                  <span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 text-slate-400">
+                    Chưa gán
+                  </span>
+                </template>
               </td>
             </tr>
+
+            <!-- DROPDOWN THÔNG TIN HỌC VIÊN KHI CLICK VÀO VÙNG TRỐNG (SenyApp style) -->
+            <tr v-if="expandedStudentId === student.id" class="bg-[#fafbfc] border-y-2 border-slate-200">
+              <td colspan="8" class="p-5 sm:p-7 space-y-6">
+                <!-- 1. Ảnh học viên -->
+                <div class="flex items-start gap-4">
+                  <!-- Ảnh preview -->
+                  <div class="flex h-24 w-24 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white shadow-2xs overflow-hidden">
+                    <img
+                      v-if="student.avatar && !failedAvatars.has(student.id)"
+                      :src="getAvatarUrl(student.avatar)"
+                      @error="handleAvatarError(student.id)"
+                      class="h-full w-full object-cover"
+                    />
+                    <div v-else class="text-slate-400 text-xs font-medium text-center p-2 flex flex-col items-center justify-center h-full">
+                      <User class="h-8 w-8 text-slate-300 mb-1" />
+                      <span>Chưa có ảnh</span>
+                    </div>
+                  </div>
+
+                  <div class="space-y-1.5">
+                    <h4 class="text-sm font-bold text-slate-900">Ảnh học viên</h4>
+                    <p class="text-xs text-slate-400">
+                      Ảnh lớn sẽ được tự động nén xuống dưới 2MB. JPG/PNG.
+                    </p>
+                    <label class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs cursor-pointer active:scale-95 transition-all">
+                      <Upload class="h-3.5 w-3.5 text-slate-500" />
+                      <span>Tải ảnh lên</span>
+                      <input type="file" accept="image/*" class="hidden" @change="uploadAvatarFile($event, student)" />
+                    </label>
+                  </div>
+                </div>
+
+                <!-- 2. Tổng tiến độ -->
+                <div class="space-y-2">
+                  <div class="flex items-center justify-between text-xs sm:text-sm">
+                    <span class="font-bold text-slate-900">Tổng tiến độ</span>
+                    <span class="font-semibold text-slate-500 text-xs">
+                      {{ student.total_sessions - student.remaining_sessions }} / {{ student.total_sessions }} buổi &bull; còn {{ student.remaining_sessions }}
+                    </span>
+                  </div>
+
+                  <!-- Coral / Red Progress Bar matching Screenshot -->
+                  <div class="w-full bg-red-100/60 rounded-full h-2.5 overflow-hidden">
+                    <div
+                      class="h-full bg-red-500 rounded-full transition-all duration-500"
+                      :style="{ width: `${getStudentProgress(student)}%` }"
+                    ></div>
+                  </div>
+                </div>
+
+                <!-- 3. Khóa học đã đăng ký -->
+                <div class="space-y-3">
+                  <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                    <div>
+                      <h4 class="text-sm font-bold text-slate-900">Khóa học đã đăng ký</h4>
+                      <p class="text-xs text-slate-400 mt-0.5">
+                        Tổng đã mua: {{ student.total_sessions }} &bull; Đã điểm danh: {{ student.total_sessions - student.remaining_sessions }} &bull; Còn lại: {{ student.remaining_sessions }}
+                      </p>
+                    </div>
+
+                    <!-- Dãy nút hành động chuẩn SenyApp -->
+                    <div class="flex flex-wrap items-center gap-2 text-xs">
+                      <button
+                        type="button"
+                        @click="toggleHideCompleted(student.id)"
+                        class="h-8 w-8 rounded-xl border flex items-center justify-center shadow-2xs transition-colors"
+                        :class="hideCompletedCourses[student.id] ? 'bg-red-50 border-red-300 text-red-600' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'"
+                        :title="hideCompletedCourses[student.id] ? 'Đang ẩn khóa hoàn thành (Bấm để hiện tất cả)' : 'Đang hiện tất cả khóa (Bấm để ẩn khóa hoàn thành)'"
+                      >
+                        <span
+                          class="h-3 w-3 rounded-full transition-all"
+                          :class="hideCompletedCourses[student.id] ? 'bg-red-500 ring-2 ring-red-200' : 'border-2 border-red-500'"
+                        ></span>
+                      </button>
+
+                      <button
+                        type="button"
+                        @click="openRetentionNote(student)"
+                        class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3 py-1.5 font-semibold text-slate-700 shadow-2xs active:scale-95 transition-all"
+                      >
+                        <MessageSquare class="h-3.5 w-3.5 text-slate-500" />
+                        <span>Nhận xét</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        @click="openRenew(student)"
+                        class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3 py-1.5 font-semibold text-slate-700 shadow-2xs active:scale-95 transition-all"
+                      >
+                        <CreditCard class="h-3.5 w-3.5 text-slate-500" />
+                        <span>Học phí</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        @click="openStudentDetail(student.id)"
+                        class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3 py-1.5 font-semibold text-slate-700 shadow-2xs active:scale-95 transition-all"
+                      >
+                        <Calendar class="h-3.5 w-3.5 text-slate-500" />
+                        <span>Ngày đã học</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        @click="openAbsence(student)"
+                        class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3 py-1.5 font-semibold text-slate-700 shadow-2xs active:scale-95 transition-all"
+                      >
+                        <UserX class="h-3.5 w-3.5 text-slate-500" />
+                        <span>Vắng</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        @click="openParentPortal(student)"
+                        class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3 py-1.5 font-semibold text-slate-700 shadow-2xs active:scale-95 transition-all"
+                      >
+                        <Share2 class="h-3.5 w-3.5 text-slate-500" />
+                        <span>Cổng phụ huynh</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        @click="toggleAddCourseForm(student)"
+                        class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3 py-1.5 font-semibold text-slate-700 shadow-2xs active:scale-95 transition-all"
+                        :class="showAddCourseForm[student.id] ? 'bg-slate-100 ring-2 ring-red-500/20 text-red-600' : ''"
+                      >
+                        <Plus class="h-3.5 w-3.5 text-slate-500" />
+                        <span>Thêm khóa học</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- FORM THÊM KHÓA HỌC INLINE (Khớp ảnh 3) -->
+                  <div
+                    v-if="showAddCourseForm[student.id]"
+                    class="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-2xs space-y-4 animate-in fade-in duration-200"
+                  >
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+                      <!-- 1. Khóa học -->
+                      <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1.5">Khóa học</label>
+                        <select
+                          v-model="getAddCourseForm(student.id).course_id"
+                          class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-red-500 focus:ring-1 focus:ring-red-500 focus:outline-none transition-all"
+                        >
+                          <option value="" disabled>Chọn khóa học</option>
+                          <option v-for="c in courses" :key="c.id" :value="c.id">
+                            {{ c.name }}
+                          </option>
+                        </select>
+                      </div>
+
+                      <!-- 2. Tổng số buổi -->
+                      <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1.5">Tổng số buổi</label>
+                        <input
+                          type="number"
+                          min="1"
+                          v-model="getAddCourseForm(student.id).total_sessions"
+                          class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-red-500 focus:ring-1 focus:ring-red-500 focus:outline-none transition-all"
+                        />
+                      </div>
+
+                      <!-- 3. Ngày bắt đầu -->
+                      <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1.5">Ngày bắt đầu</label>
+                        <input
+                          type="date"
+                          v-model="getAddCourseForm(student.id).start_date"
+                          class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-red-500 focus:ring-1 focus:ring-red-500 focus:outline-none transition-all"
+                        />
+                      </div>
+
+                      <!-- 4. Buổi/tuần (tuỳ chọn) -->
+                      <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1.5">Buổi/tuần (tuỳ chọn)</label>
+                        <input
+                          type="text"
+                          placeholder="vd: 2"
+                          v-model="getAddCourseForm(student.id).sessions_per_week"
+                          class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-red-500 focus:ring-1 focus:ring-red-500 focus:outline-none transition-all"
+                        />
+                      </div>
+
+                      <!-- 5. Ngày kết thúc dự kiến -->
+                      <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1.5">Ngày kết thúc dự kiến</label>
+                        <input
+                          type="date"
+                          placeholder="dd/mm/yyyy"
+                          v-model="getAddCourseForm(student.id).end_date"
+                          class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-red-500 focus:ring-1 focus:ring-red-500 focus:outline-none transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    <!-- Nút Thêm (đỏ nổi bật góc phải như ảnh 3) -->
+                    <div class="flex items-center justify-end gap-2 pt-1 border-t border-slate-100">
+                      <button
+                        type="button"
+                        @click="showAddCourseForm[student.id] = false"
+                        class="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold transition-all"
+                      >
+                        Hủy
+                      </button>
+                      <button
+                        type="button"
+                        @click="submitAddCourse(student)"
+                        :disabled="isSubmittingCourse[student.id]"
+                        class="px-6 py-2 rounded-xl bg-red-600 hover:bg-red-700 active:scale-95 text-white font-bold text-xs shadow-2xs transition-all disabled:opacity-50"
+                      >
+                        {{ isSubmittingCourse[student.id] ? 'Đang thêm...' : 'Thêm' }}
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Danh sách các thẻ khóa học chi tiết -->
+                  <div class="space-y-3">
+                    <div
+                      v-for="(cItem, cIdx) in getVisibleCourses(student)"
+                      :key="cItem.id || cIdx"
+                      class="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-2xs space-y-3.5 transition-all"
+                    >
+                      <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                          <div class="flex flex-col text-slate-400">
+                            <ArrowUp class="h-3 w-3" />
+                            <ArrowDown class="h-3 w-3 -mt-0.5" />
+                          </div>
+                          <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-100/70 border border-amber-200 text-amber-900 font-bold text-xs">
+                            <span>{{ cItem.course_name || student.course?.name || 'Khóa học' }}</span>
+                            <Edit3 class="h-3 w-3 text-slate-400 cursor-pointer hover:text-slate-700" title="Đổi khóa học" @click="openChangeCourse(student, cItem)" />
+                          </span>
+                        </div>
+
+                        <span class="text-xs font-bold text-slate-500 font-mono">
+                          {{ cItem.attended_sessions ?? (cItem.total_sessions - cItem.remaining_sessions) }} / {{ cItem.total_sessions }}
+                        </span>
+                      </div>
+
+                      <!-- Subline: Dates & Actions -->
+                      <div class="relative flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                        <div class="flex items-center gap-1">
+                          <Calendar class="h-3.5 w-3.5 text-slate-400" />
+                          <span>
+                            Bắt đầu {{ formatDate(cItem.start_date || student.join_date) }} &bull; Kết thúc dự kiến {{ cItem.end_date ? formatDate(cItem.end_date) : (student.end_date ? formatDate(student.end_date) : '—') }} &bull; {{ cItem.schedule_info || student.schedule_info || '1 buổi/tuần' }}
+                            <template v-if="cItem.schedule_ids?.length"> &bull; Ca: {{ courseSlots(student, cItem).map(slotLabel).join(', ') }}</template>
+                          </span>
+                        </div>
+                        <button type="button" @click="copyPlaceholder(student)" class="text-slate-400 hover:text-slate-700 font-medium">
+                          Copy placeholder
+                        </button>
+                        <button
+                          type="button"
+                          @click="openCourseDates(student, cItem)"
+                          title="Sửa ngày bắt đầu, số buổi/tuần, ngày kết thúc dự kiến"
+                          class="text-slate-500 hover:text-slate-800 flex items-center gap-0.5 font-medium"
+                        >
+                          <Edit3 class="h-3 w-3" />
+                          <span>Sửa</span>
+                        </button>
+
+                        <!-- Popup thời gian khóa học -->
+                        <div
+                          v-if="courseDatesState.key === `${student.id}_${cItem.id}`"
+                          class="absolute right-0 top-full z-30 mt-2 w-80 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl space-y-3 text-slate-700"
+                        >
+                          <div class="text-xs font-semibold">
+                            Ngày bắt đầu
+                            <DatePickerVN v-model="courseDatesState.start" :default-today="false" class="mt-1" @change="recomputeCourseEnd" />
+                          </div>
+                          <label class="block text-xs font-semibold">
+                            Buổi/tuần <span class="font-normal text-slate-400">(tuỳ chọn)</span>
+                            <input
+                              v-model.number="courseDatesState.perWeek"
+                              type="number"
+                              min="1"
+                              max="14"
+                              @input="recomputeCourseEnd"
+                              class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-rose-500 focus:outline-none"
+                            />
+                          </label>
+                          <div class="text-xs font-semibold">
+                            Ngày kết thúc dự kiến
+                            <DatePickerVN v-model="courseDatesState.end" :default-today="false" class="mt-1" @change="courseDatesState.endTouched = true" />
+                          </div>
+                          <p class="text-[11px] leading-relaxed text-slate-500">
+                            Tự tính từ tổng {{ cItem.total_sessions }} buổi ÷ buổi/tuần, và lấy đúng buổi học cuối cùng trong tuần cuối
+                            (theo lịch học của học viên). Sửa tay sẽ giữ nguyên ngày bạn chọn.
+                            <button
+                              v-if="courseDatesState.endTouched"
+                              type="button"
+                              @click="courseDatesState.endTouched = false; recomputeCourseEnd()"
+                              class="font-semibold text-rose-600 hover:underline"
+                            >
+                              Tính lại tự động
+                            </button>
+                          </p>
+                          <div class="flex justify-end gap-2">
+                            <button type="button" @click="courseDatesState.key = null" class="rounded-xl border border-slate-200 px-4 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                              Huỷ
+                            </button>
+                            <button
+                              type="button"
+                              :disabled="savingCourseDates"
+                              @click="submitCourseDates"
+                              class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 px-4 py-1.5 text-xs font-bold text-white"
+                            >
+                              Lưu
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- Blue progress bar matching Screenshot -->
+                      <div class="w-full bg-red-100/60 rounded-full h-2 overflow-hidden">
+                        <div
+                          class="h-full bg-sky-500 rounded-full transition-all duration-500"
+                          :style="{ width: `${getCourseProgress(cItem)}%` }"
+                        ></div>
+                      </div>
+
+                      <!-- Inline Editors: [ Attended ] [ Lưu ] | [ Total ] [ Lưu ] | [ 📅 ] | [ 🗑️ ] -->
+                      <div class="flex flex-wrap items-end gap-3 text-xs pt-1">
+                        <div class="space-y-0.5" title="Số buổi học viên đã học thực tế của khóa này. Sửa khi cần điều chỉnh tay (ví dụ chuyển từ sổ cũ sang); số buổi còn lại tự tính = Tổng buổi − Đã học.">
+                          <span class="text-[10px] font-semibold text-slate-500">Đã học (buổi)</span>
+                          <div class="flex items-center gap-1">
+                          <input
+                            type="number"
+                            v-model="getCourseAttendedInput(student, cItem).value"
+                            aria-label="Số buổi đã học"
+                            min="0"
+                            class="w-14 rounded-lg border border-slate-300 bg-white px-2 py-1 text-center font-bold text-slate-900 focus:border-sky-500 focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            @click="saveCourseAttended(student, cItem)"
+                            title="Lưu số buổi đã học"
+                            class="rounded-lg bg-sky-500 px-3 py-1 font-bold text-white hover:bg-sky-600 transition-colors shadow-2xs"
+                          >
+                            Lưu
+                          </button>
+                          </div>
+                        </div>
+
+                        <div class="space-y-0.5" title="Tổng số buổi học viên đã mua / đăng ký cho khóa này.">
+                          <span class="text-[10px] font-semibold text-slate-500">Tổng buổi đã mua</span>
+                          <div class="flex items-center gap-1">
+                          <input
+                            type="number"
+                            v-model="getCourseTotalInput(student, cItem).value"
+                            aria-label="Tổng số buổi đã mua"
+                            min="1"
+                            class="w-14 rounded-lg border border-slate-300 bg-white px-2 py-1 text-center font-bold text-slate-900 focus:border-emerald-500 focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            @click="saveCourseTotal(student, cItem)"
+                            title="Lưu tổng số buổi"
+                            class="rounded-lg bg-emerald-500 px-3 py-1 font-bold text-white hover:bg-emerald-600 transition-colors shadow-2xs"
+                          >
+                            Lưu
+                          </button>
+                          </div>
+                        </div>
+
+                        <div class="relative">
+                          <button
+                            type="button"
+                            @click="openSlotPicker(student, cItem)"
+                            :class="[
+                              cItem.schedule_ids?.length ? 'bg-amber-400 text-slate-900 hover:bg-amber-500' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50',
+                              'p-1.5 rounded-lg transition-colors',
+                            ]"
+                            title="Chọn lịch cho trang điểm danh"
+                          >
+                            <Calendar class="h-4 w-4" />
+                          </button>
+                          <!-- Popup chọn ca của khoá -->
+                          <div
+                            v-if="slotPicker.key === `${student.id}_${cItem.id}`"
+                            class="absolute right-0 top-full z-30 mt-2 w-80 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl space-y-3 text-left"
+                          >
+                            <p class="text-sm font-bold text-slate-900">Chọn lịch cho trang điểm danh</p>
+                            <p class="text-[11px] leading-relaxed text-slate-500">
+                              Chọn các ca của khoá này: điểm danh ca nào sẽ trừ buổi vào khoá đó. Không chọn ca nào thì khoá
+                              dùng chung mọi ca (như hiện tại).
+                            </p>
+                            <p v-if="!(student.schedule_slots || []).length" class="text-xs text-slate-400">
+                              Học viên chưa có lịch học. Bấm sửa học viên để thêm ca.
+                            </p>
+                            <label
+                              v-for="slot in student.schedule_slots || []"
+                              :key="slot.id"
+                              class="flex items-center gap-2 text-sm text-slate-800 cursor-pointer"
+                            >
+                              <input
+                                type="checkbox"
+                                :checked="slotPicker.ids.includes(slot.id)"
+                                @change="toggleSlotPick(slot.id)"
+                                class="h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                              />
+                              <span>{{ slotLabel(slot) }}</span>
+                              <span v-if="slot.teacher" class="text-xs text-slate-400">· {{ slot.teacher }}</span>
+                            </label>
+                            <div class="flex justify-end gap-2 pt-1">
+                              <button type="button" @click="slotPicker = { key: null, ids: [] }" class="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                                Huỷ
+                              </button>
+                              <button
+                                type="button"
+                                :disabled="savingSlotPicker"
+                                @click="saveSlotPicker(student, cItem)"
+                                class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 px-3 py-1.5 text-xs font-bold text-white"
+                              >
+                                Lưu
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          @click="deleteStudentCourse(student, cItem)"
+                          class="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
+                          title="Xóa khóa học này"
+                        >
+                          <Trash2 class="h-4 w-4" />
+                        </button>
+                      </div>
+
+                      <!-- Absences row: Đã vắng có phép 0/2 [ 2 ] [ Lưu ] -->
+                      <div class="flex items-end gap-2 text-xs pt-1">
+                        <span class="rounded-md bg-red-50 border border-red-200 px-2.5 py-1 font-bold text-red-700 text-[11px]" title="Đã dùng / tối đa số buổi vắng có phép">
+                          Đã vắng có phép {{ cItem.absences_used || 0 }}/{{ cItem.allowed_absences ?? 3 }}
+                        </span>
+                        <div class="space-y-0.5" title="Số buổi được phép vắng có phép tối đa của khóa này. Nhãn bên cạnh cho biết đã dùng bao nhiêu buổi.">
+                          <span class="text-[10px] font-semibold text-slate-500">Số buổi được vắng có phép</span>
+                          <div class="flex items-center gap-1">
+                        <input
+                          type="number"
+                          v-model="getCourseAllowedAbsencesInput(student, cItem).value"
+                          aria-label="Số buổi được vắng có phép"
+                          min="0"
+                          class="w-14 rounded-lg border border-slate-300 bg-white px-2 py-1 text-center font-bold text-slate-900 focus:border-sky-500 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          @click="saveCourseAllowedAbsences(student, cItem)"
+                          title="Lưu số buổi được vắng có phép"
+                          class="rounded-lg bg-sky-500 px-3 py-1 font-bold text-white hover:bg-sky-600 transition-colors shadow-2xs"
+                        >
+                          Lưu
+                        </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Khi tất cả khóa hoàn thành đang bị ẩn -->
+                    <div
+                      v-if="getVisibleCourses(student).length === 0"
+                      class="p-5 text-center rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 text-slate-500 text-xs font-medium"
+                    >
+                      <span>Khóa học đã hoàn thành đang được ẩn.</span>
+                      <button
+                        type="button"
+                        @click="toggleHideCompleted(student.id)"
+                        class="ml-1.5 text-red-600 font-bold hover:underline"
+                      >
+                        Bấm vào đây để hiện
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 4. Học cụ đã giao -->
+                <div class="space-y-1 text-xs pt-1">
+                  <div class="flex items-center justify-between">
+                    <span class="font-bold text-slate-700">Học cụ đã giao</span>
+                    <button
+                      type="button"
+                      @click="openSupplyModal(student)"
+                      class="text-[11px] font-bold text-rose-600 hover:underline"
+                    >
+                      + Giao thêm học cụ
+                    </button>
+                  </div>
+                  <div v-if="!student.supplies || student.supplies.length === 0" class="text-slate-400 py-1">
+                    Chưa có học cụ
+                  </div>
+                  <div v-else class="divide-y divide-slate-100 bg-white rounded-xl p-3 border border-slate-200/80 space-y-1.5">
+                    <div v-for="sup in student.supplies" :key="sup.name" class="flex items-center justify-between py-1">
+                      <span class="font-bold text-slate-800">{{ sup.name }} ({{ formatDate(sup.delivery_date) }})</span>
+                      <span class="font-bold text-slate-700">SL: {{ sup.quantity }}</span>
+                    </div>
+                  </div>
+                </div>
+              </td>
+            </tr>
+          </template>
+
+          <tr v-if="students.length === 0">
+            <td colspan="8" class="py-12 text-center text-xs text-slate-400">
+              Không tìm thấy học viên nào phù hợp.
+            </td>
+          </tr>
           </tbody>
         </table>
       </div>
@@ -1057,6 +2115,41 @@ const getAttendanceSummaryTooltip = (student) => {
     />
 
     <!-- Info / Guide Modal -->
+    <!-- Đổi khóa học cho một thẻ khóa -->
+    <Modal :show="changeCourseState.show" max-width="md" @close="changeCourseState.show = false">
+      <div class="p-6 space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="text-base font-bold text-slate-900">Đổi khóa học</h3>
+          <button type="button" @click="changeCourseState.show = false" class="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+            <X class="h-5 w-5" />
+          </button>
+        </div>
+        <label class="block text-xs font-semibold text-slate-700">
+          Khóa học thay thế
+          <select
+            v-model="changeCourseState.courseId"
+            class="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-rose-500 focus:outline-none"
+          >
+            <option v-for="c in courses" :key="c.id" :value="c.id">{{ c.name }}</option>
+          </select>
+        </label>
+        <p class="text-[11px] text-slate-500">Số buổi đã học, tổng buổi và thời gian của thẻ khóa này được giữ nguyên.</p>
+        <div class="flex justify-end gap-2">
+          <button type="button" @click="changeCourseState.show = false" class="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+            Hủy
+          </button>
+          <button
+            type="button"
+            :disabled="savingCourseChange || !changeCourseState.courseId || Number(changeCourseState.courseId) === Number(changeCourseState.item?.course_id)"
+            @click="submitChangeCourse"
+            class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 px-4 py-2 text-sm font-bold text-white"
+          >
+            Lưu thay đổi
+          </button>
+        </div>
+      </div>
+    </Modal>
+
     <Modal :show="showInfoModal" max-width="lg" @close="showInfoModal = false">
       <div class="p-6">
         <div class="flex items-center justify-between pb-4 border-b border-slate-100">
@@ -1114,6 +2207,144 @@ const getAttendanceSummaryTooltip = (student) => {
             class="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl"
           >
             Đã hiểu
+          </button>
+        </div>
+      </div>
+    </Modal>
+
+    <!-- Modal Chi Tiết Hồ Sơ Học Viên -->
+    <StudentDetailModal
+      :show="showDetailModal"
+      :student-id="selectedDetailStudentId"
+      @close="showDetailModal = false"
+      @updated="fetchData"
+    />
+
+    <!-- Retention Note Modal -->
+    <RetentionNoteModal
+      :show="showNoteModal"
+      :student="activeActionStudent"
+      @close="showNoteModal = false"
+      @saved="fetchData"
+    />
+
+    <!-- Renew Modal -->
+    <RenewModal
+      :show="showRenewModal"
+      :student="activeActionStudent"
+      @close="showRenewModal = false"
+      @renewed="fetchData"
+    />
+
+    <!-- Absence Modal -->
+    <Modal :show="showAbsenceModal" max-width="md" @close="showAbsenceModal = false">
+      <div class="p-5 space-y-4 text-xs">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+          <h3 class="text-sm font-bold text-slate-900">Ghi nhận vắng học cho {{ activeActionStudent?.name }}</h3>
+          <button @click="showAbsenceModal = false" class="text-slate-400 hover:text-slate-600">
+            <X class="h-4 w-4" />
+          </button>
+        </div>
+
+        <form @submit.prevent="submitAbsence" class="space-y-3">
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">Loại vắng</label>
+            <div class="flex items-center gap-4">
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" :value="true" v-model="absenceWithLeave" class="text-indigo-600" />
+                <span>Nghỉ có phép</span>
+              </label>
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="radio" :value="false" v-model="absenceWithLeave" class="text-indigo-600" />
+                <span>Vắng không phép</span>
+              </label>
+            </div>
+          </div>
+
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">Lý do / Ghi chú</label>
+            <textarea
+              v-model="absenceNote"
+              rows="3"
+              placeholder="Nhập lý do nghỉ học (bận, ốm, đi du lịch...)"
+              class="w-full rounded-xl border border-slate-200 p-2.5 text-xs focus:border-indigo-500 focus:outline-none"
+            ></textarea>
+          </div>
+
+          <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              @click="showAbsenceModal = false"
+              class="px-3.5 py-1.5 rounded-xl border border-slate-200 text-slate-600 font-semibold"
+            >
+              Hủy
+            </button>
+            <button
+              type="submit"
+              :disabled="isSubmittingAbsence"
+              class="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold disabled:opacity-50"
+            >
+              {{ isSubmittingAbsence ? 'Đang lưu...' : 'Lưu vắng' }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </Modal>
+
+    <!-- Parent Portal Modal -->
+    <Modal :show="showParentPortalModal" max-width="md" @close="showParentPortalModal = false">
+      <div class="p-5 space-y-4 text-xs">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+          <h3 class="text-sm font-bold text-slate-900">Cổng thông tin phụ huynh</h3>
+          <button @click="showParentPortalModal = false" class="text-slate-400 hover:text-slate-600">
+            <X class="h-4 w-4" />
+          </button>
+        </div>
+
+        <p class="text-slate-600 leading-relaxed">
+          Gửi đường link này cho phụ huynh học viên <strong>{{ activeActionStudent?.name }}</strong>. Phụ huynh truy cập link cần nhập <strong class="text-indigo-600">4 số cuối số điện thoại</strong> để tra cứu số buổi đã học, tiến độ và lịch học:
+        </p>
+
+        <div class="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
+          <input
+            type="text"
+            readonly
+            :value="activeParentPortalUrl"
+            class="w-full bg-transparent border-0 text-slate-700 text-xs focus:ring-0 select-all font-mono"
+          />
+          <button
+            type="button"
+            @click="copyParentPortalLink"
+            class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold shrink-0 transition-colors inline-flex items-center gap-1"
+          >
+            <Check v-if="copiedPortalLink" class="h-3.5 w-3.5 text-emerald-300" />
+            <Copy v-else class="h-3.5 w-3.5" />
+            <span>{{ copiedPortalLink ? 'Đã chép' : 'Sao chép' }}</span>
+          </button>
+        </div>
+
+        <div class="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-900 text-[11px] space-y-1">
+          <p class="font-bold">🔒 Cơ chế bảo mật thông tin học viên:</p>
+          <p>
+            Khi mở link, phụ huynh sẽ thấy ô nhập 4 số cuối SĐT. Mã xác thực của học viên này là: <span class="font-mono font-bold text-amber-700 bg-amber-100/80 px-1.5 py-0.5 rounded">{{ activeActionStudent?.parent_phone ? activeActionStudent.parent_phone.slice(-4) : '••••' }}</span>
+          </p>
+        </div>
+
+        <div class="flex justify-between items-center pt-2">
+          <a
+            :href="activeParentPortalUrl"
+            target="_blank"
+            class="px-3 py-2 rounded-xl border border-indigo-200 text-indigo-700 hover:bg-indigo-50 font-bold transition-colors inline-flex items-center gap-1"
+          >
+            <ExternalLink class="h-3.5 w-3.5" />
+            <span>Mở Cổng phụ huynh</span>
+          </a>
+          <button
+            type="button"
+            @click="showParentPortalModal = false"
+            class="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold"
+          >
+            Đóng
           </button>
         </div>
       </div>

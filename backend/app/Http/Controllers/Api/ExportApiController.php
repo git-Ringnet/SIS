@@ -9,6 +9,7 @@ use App\Models\Invoice;
 use App\Models\Student;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ExportApiController extends Controller
@@ -18,7 +19,7 @@ class ExportApiController extends Controller
      */
     public function export(Request $request, string $type): StreamedResponse
     {
-        $center = $request->input('center', 'all');
+        $center = (string) $request->input('center', 'all');
         $fileName = match ($type) {
             'students' => 'Danh_sach_hoc_vien_'.date('Ymd_His').'.csv',
             'courses' => 'Danh_sach_khoa_hoc_'.date('Ymd_His').'.csv',
@@ -36,18 +37,18 @@ class ExportApiController extends Controller
             'Expires' => '0',
         ];
 
-        return response()->stream(function () use ($type) {
+        return response()->stream(function () use ($type, $center) {
             $handle = fopen('php://output', 'w');
 
             // Ghi UTF-8 BOM để Excel không bị lỗi font tiếng Việt
             fprintf($handle, chr(0xEF).chr(0xBB).chr(0xBF));
 
             match ($type) {
-                'students' => $this->exportStudents($handle),
-                'courses' => $this->exportCourses($handle),
-                'attendance' => $this->exportAttendance($handle),
-                'payments' => $this->exportPayments($handle),
-                'supplies' => $this->exportSupplies($handle),
+                'students' => $this->exportStudents($handle, $center),
+                'courses' => $this->exportCourses($handle, $center),
+                'attendance' => $this->exportAttendance($handle, $center),
+                'payments' => $this->exportPayments($handle, $center),
+                'supplies' => $this->exportSupplies($handle, $center),
                 default => fputcsv($handle, ['Không tìm thấy loại dữ liệu']),
             };
 
@@ -55,7 +56,30 @@ class ExportApiController extends Controller
         }, 200, $headers);
     }
 
-    private function exportStudents($handle): void
+    /**
+     * Có lọc theo một trung tâm cụ thể hay không ("all" / rỗng = tất cả)
+     */
+    private function filtersCenter(string $center): bool
+    {
+        return $center !== '' && $center !== 'all';
+    }
+
+    private function formatMoney($value): string
+    {
+        return number_format((float) $value, 0, ',', '.');
+    }
+
+    private function readJson(string $path): array
+    {
+        if (! Storage::exists($path)) {
+            return [];
+        }
+        $data = json_decode(Storage::get($path), true);
+
+        return is_array($data) ? $data : [];
+    }
+
+    private function exportStudents($handle, string $center): void
     {
         fputcsv($handle, [
             'Mã học viên',
@@ -65,7 +89,13 @@ class ExportApiController extends Controller
             'Phụ huynh',
             'Số điện thoại',
             'Zalo',
+            'Email phụ huynh',
+            'Địa chỉ',
+            'Trung tâm',
             'Khóa học',
+            'Lớp',
+            'Lịch học',
+            'Giáo viên',
             'Tổng số buổi',
             'Số buổi còn lại',
             'Số buổi đã vắng',
@@ -75,13 +105,16 @@ class ExportApiController extends Controller
             'Ghi chú',
         ]);
 
-        $students = Student::with('course')->orderBy('id', 'asc')->get();
+        $students = Student::with('course')
+            ->when($this->filtersCenter($center), fn ($q) => $q->where('center', $center))
+            ->orderBy('id', 'asc')
+            ->get();
 
         foreach ($students as $s) {
             $statusLabel = match ($s->status) {
                 'active' => 'Đang học',
                 'paused' => 'Tạm dừng',
-                'inactive' => 'Đã nghỉ',
+                'inactive', 'dropped' => 'Đã nghỉ',
                 default => $s->status,
             };
 
@@ -100,7 +133,13 @@ class ExportApiController extends Controller
                 $s->parent_name,
                 $s->parent_phone,
                 $s->parent_zalo,
+                $s->parent_email,
+                $s->address,
+                $s->center,
                 $s->course ? $s->course->name : '',
+                $s->assigned_class,
+                $s->schedule_info,
+                $s->teacher,
                 $s->total_sessions,
                 $s->remaining_sessions,
                 $s->absences_used ?? 0,
@@ -112,130 +151,200 @@ class ExportApiController extends Controller
         }
     }
 
-    private function exportCourses($handle): void
+    private function exportCourses($handle, string $center): void
     {
         fputcsv($handle, [
             'Mã khóa',
             'Tên khóa học',
-            'Phân loại',
             'Số buổi mặc định',
             'Học phí (VND)',
             'Trạng thái',
+            'Số học viên đang học',
+            'Tổng số buổi đã học',
             'Mô tả',
         ]);
 
-        $courses = Course::orderBy('id', 'asc')->get();
+        // Số học viên / số buổi đã học tính trong phạm vi trung tâm đang lọc
+        $studentIds = $this->filtersCenter($center) ? Student::where('center', $center)->pluck('id') : null;
+        $activeCounts = Student::where('status', 'active')
+            ->when($studentIds !== null, fn ($q) => $q->whereIn('id', $studentIds))
+            ->selectRaw('course_id, count(*) as total')->groupBy('course_id')->pluck('total', 'course_id');
+        $attendedCounts = Attendance::where('status', 'present')
+            ->when($studentIds !== null, fn ($q) => $q->whereIn('student_id', $studentIds))
+            ->selectRaw('course_id, count(*) as total')->groupBy('course_id')->pluck('total', 'course_id');
 
-        foreach ($courses as $c) {
+        foreach (Course::orderBy('id', 'asc')->get() as $c) {
             fputcsv($handle, [
                 $c->code,
                 $c->name,
-                $c->category,
                 $c->default_sessions,
-                number_format($c->price, 0, ',', '.'),
+                $this->formatMoney($c->price),
                 $c->is_active ? 'Đang mở' : 'Đã dừng',
+                (int) ($activeCounts[$c->id] ?? 0),
+                (int) ($attendedCounts[$c->id] ?? 0),
                 $c->description,
             ]);
         }
     }
 
-    private function exportAttendance($handle): void
+    private function exportAttendance($handle, string $center): void
     {
         fputcsv($handle, [
-            'Thời gian điểm danh',
+            'Ngày',
+            'Giờ',
             'Mã học viên',
             'Tên học viên',
+            'Trung tâm',
             'Khóa học',
-            'Buổi số',
-            'Ghi chú / Nhận xét của giáo viên',
-        ]);
-
-        $attendances = Attendance::with(['student', 'course'])->orderBy('attended_at', 'desc')->get();
-
-        foreach ($attendances as $a) {
-            fputcsv($handle, [
-                $a->attended_at ? Carbon::parse($a->attended_at)->format('d/m/Y H:i') : '',
-                $a->student ? $a->student->code : '',
-                $a->student ? $a->student->name : '',
-                $a->course ? $a->course->name : ($a->student && $a->student->course ? $a->student->course->name : ''),
-                $a->session_number,
-                $a->notes,
-            ]);
-        }
-    }
-
-    private function exportPayments($handle): void
-    {
-        fputcsv($handle, [
-            'Mã hóa đơn',
-            'Mã học viên',
-            'Tên học viên',
-            'Khóa học',
-            'Số tiền (VND)',
-            'Số buổi cộng',
-            'Phương thức thanh toán',
             'Trạng thái',
-            'Ngày thanh toán',
+            'Buổi số',
+            'Người điểm danh',
             'Ghi chú',
         ]);
 
-        $invoices = Invoice::with(['student', 'course'])->orderBy('created_at', 'desc')->get();
+        $attendances = Attendance::with(['student.course', 'course'])
+            ->when($this->filtersCenter($center), fn ($q) => $q->whereHas('student', fn ($s) => $s->where('center', $center)))
+            ->orderBy('attended_at', 'desc')
+            ->get();
 
-        foreach ($invoices as $i) {
-            $methodLabel = match ($i->payment_method) {
-                'bank_transfer' => 'Chuyển khoản',
-                'cash' => 'Tiền mặt',
-                'pos' => 'Thẻ POS',
-                'momo' => 'Ví MoMo',
-                default => $i->payment_method,
-            };
-
-            $statusLabel = match ($i->status) {
-                'paid' => 'Đã thanh toán',
-                'unpaid' => 'Chưa thanh toán',
-                'cancelled' => 'Đã hủy',
-                default => $i->status,
+        foreach ($attendances as $a) {
+            $statusLabel = match ($a->status) {
+                'present' => 'Có mặt',
+                'absent_with_leave' => 'Vắng có phép',
+                'absent_without_leave' => 'Vắng không phép',
+                default => $a->status,
             };
 
             fputcsv($handle, [
-                $i->invoice_code,
-                $i->student ? $i->student->code : '',
-                $i->student ? $i->student->name : '',
-                $i->course ? $i->course->name : '',
-                number_format($i->amount, 0, ',', '.'),
-                $i->sessions_added,
-                $methodLabel,
+                $a->attended_at ? $a->attended_at->format('d/m/Y') : '',
+                $a->attended_at ? $a->attended_at->format('H:i') : '',
+                $a->student?->code,
+                $a->student?->name,
+                $a->student?->center,
+                $a->course?->name ?? $a->student?->course?->name,
                 $statusLabel,
-                $i->paid_at ? Carbon::parse($i->paid_at)->format('d/m/Y H:i') : '',
-                $i->note,
+                $a->session_number,
+                $a->marked_by,
+                $a->note,
             ]);
         }
     }
 
-    private function exportSupplies($handle): void
+    /**
+     * Lịch sử thanh toán: học phí từ hoá đơn + doanh thu nhập tay (học cụ, khoản thu khác)
+     */
+    private function exportPayments($handle, string $center): void
+    {
+        fputcsv($handle, [
+            'Ngày thanh toán',
+            'Mã hóa đơn',
+            'Mã học viên',
+            'Tên học viên',
+            'Trung tâm',
+            'Khóa học',
+            'Học cụ',
+            'Học phí (VND)',
+            'Phí học cụ (VND)',
+            'Tổng (VND)',
+            'Số buổi cộng',
+            'Phương thức thanh toán',
+            'Người thu',
+            'Ghi chú',
+        ]);
+
+        $rows = [];
+        foreach (Invoice::with(['student', 'course'])->where('status', 'paid')->get() as $i) {
+            $invCenter = $i->center ?: $i->student?->center;
+            if ($this->filtersCenter($center) && $invCenter !== $center) {
+                continue;
+            }
+            $paidAt = $i->paid_at ?: $i->created_at;
+            $rows[] = [$paidAt?->timestamp ?? 0, [
+                $paidAt ? $paidAt->format('d/m/Y') : '',
+                $i->invoice_code,
+                $i->student?->code,
+                $i->student?->name,
+                $invCenter,
+                $i->course?->name,
+                '',
+                $this->formatMoney($i->amount),
+                0,
+                $this->formatMoney($i->amount),
+                $i->sessions_added,
+                match ($i->payment_method) {
+                    'bank_transfer' => 'Chuyển khoản',
+                    'cash' => 'Tiền mặt',
+                    'pos' => 'Thẻ POS',
+                    'momo' => 'Ví MoMo',
+                    default => $i->payment_method,
+                },
+                $i->recorded_by,
+                $i->note,
+            ]];
+        }
+
+        foreach ($this->readJson('custom_revenues.json') as $r) {
+            if ($this->filtersCenter($center) && ($r['center'] ?? '') !== $center) {
+                continue;
+            }
+            $date = ! empty($r['date']) ? Carbon::parse($r['date']) : null;
+            $course = $r['course_name'] ?? '';
+            $item = $r['inventory_name'] ?? '';
+            $rows[] = [$date?->timestamp ?? 0, [
+                $date ? $date->format('d/m/Y') : '',
+                '',
+                '',
+                $r['student_name'] ?? '',
+                $r['center'] ?? '',
+                $course === '-' ? '' : $course,
+                $item === '-' ? '' : $item,
+                $this->formatMoney($r['tuition_fee'] ?? 0),
+                $this->formatMoney($r['inventory_fee'] ?? 0),
+                $this->formatMoney($r['total_amount'] ?? 0),
+                '',
+                $r['payment_method'] ?? '',
+                $r['recorded_by'] ?? '',
+                $r['note'] ?? '',
+            ]];
+        }
+
+        usort($rows, fn ($a, $b) => $b[0] <=> $a[0]);
+        foreach ($rows as [, $line]) {
+            fputcsv($handle, $line);
+        }
+    }
+
+    private function exportSupplies($handle, string $center): void
     {
         fputcsv($handle, [
             'Mã học cụ',
             'Tên học cụ',
+            'Phân loại',
             'Đơn vị tính',
+            'Trung tâm',
             'Giá nhập (VND)',
             'Giá bán (VND)',
             'Tồn kho',
+            'Giá trị tồn (VND)',
             'Ghi chú',
         ]);
 
-        $sampleSupplies = [
-            ['HC-01', 'Giáo trình Piano Alfred Tập 1', 'Quyển', '120.000', '180.000', 35, 'Giáo trình nhập khẩu'],
-            ['HC-02', 'Tập chép nhạc 5 dòng kẻ cao cấp', 'Cuốn', '25.000', '45.000', 120, 'Dành cho bé ghi bài'],
-            ['HC-03', 'Capo đàn Guitar Musedo', 'Cái', '60.000', '95.000', 28, 'Hợp kim nhôm'],
-            ['HC-04', 'Bộ dây đàn Guitar D\'Addario EJ13', 'Bộ', '130.000', '190.000', 15, 'Dây Phosphor Bronze'],
-            ['HC-05', 'Bộ cọ vẽ màu nước chuyên nghiệp (10 cây)', 'Bộ', '150.000', '220.000', 18, 'Lông mềm'],
-            ['HC-06', 'Giấy vẽ màu nước A4 Baohong 300gsm', 'Xấp (20 tờ)', '85.000', '130.000', 40, '100% Cotton'],
-            ['HC-07', 'Cặp dù đựng tài liệu & sách nhạc trung tâm', 'Cái', '70.000', '110.000', 65, 'In logo trung tâm'],
-        ];
-
-        foreach ($sampleSupplies as $sup) {
-            fputcsv($handle, $sup);
+        foreach ($this->readJson('inventory_data.json') as $it) {
+            if ($this->filtersCenter($center) && ($it['center'] ?? '') !== $center) {
+                continue;
+            }
+            fputcsv($handle, [
+                $it['code'] ?? '',
+                $it['name'] ?? '',
+                $it['category'] ?? '',
+                $it['unit'] ?? '',
+                $it['center'] ?? '',
+                $this->formatMoney($it['cost_price'] ?? 0),
+                $this->formatMoney($it['sell_price'] ?? 0),
+                (int) ($it['quantity'] ?? 0),
+                $this->formatMoney(($it['quantity'] ?? 0) * ($it['cost_price'] ?? 0)),
+                $it['note'] ?? '',
+            ]);
         }
     }
 }

@@ -25,7 +25,7 @@ const inventoryItems = ref([]);
 const availableSupplies = computed(() =>
   inventoryItems.value
     .filter((it) => !selectedCenter.value || it.center === selectedCenter.value)
-    .map((it) => ({ id: it.id, name: it.name, price: it.sell_price ?? 0, category: it.category })),
+    .map((it) => ({ id: it.id, name: it.name, price: it.sell_price ?? 0, category: it.category, stock: Number(it.quantity) || 0, unit: it.unit || '' })),
 );
 
 const loadInventory = async () => {
@@ -61,12 +61,24 @@ const filteredCatalog = computed(() => {
   );
 });
 
+// Đổi trung tâm thì bỏ các món đang chọn của trung tâm cũ (tồn kho tính theo từng trung tâm)
+watch(selectedCenter, (center, old) => {
+  if (old) selectedItems.value = [];
+});
+
 const toggleSelectSupply = (item) => {
+  if (item.stock <= 0 && !isItemSelected(item)) {
+    notify.warning(`${item.name} đã hết hàng trong kho`);
+    return;
+  }
   const existing = selectedItems.value.find((i) => i.name === item.name);
   if (existing) {
     selectedItems.value = selectedItems.value.filter((i) => i.name !== item.name);
   } else {
     selectedItems.value.push({
+      inventory_id: item.id,
+      stock: item.stock,
+      unit: item.unit,
       name: item.name,
       quantity: 1,
       price: item.price,
@@ -81,7 +93,11 @@ const isItemSelected = (item) => {
 const updateQuantity = (item, delta) => {
   const target = selectedItems.value.find((i) => i.name === item.name);
   if (target) {
-    target.quantity = Math.max(1, target.quantity + delta);
+    if (delta > 0 && target.quantity >= target.stock) {
+      notify.warning(`Trong kho chỉ còn ${target.stock} ${target.unit || ''} ${target.name}`.replace(/\s+/g, ' '));
+      return;
+    }
+    target.quantity = Math.max(1, Math.min(target.stock, target.quantity + delta));
   }
 };
 
@@ -100,7 +116,7 @@ const submitAddSupplies = async () => {
     await studentApi.addSupplies(props.student.id, {
       delivery_date: deliveryDate.value,
       center: selectedCenter.value,
-      items: selectedItems.value,
+      items: selectedItems.value.map(({ inventory_id, name, quantity, price }) => ({ inventory_id, name, quantity, price })),
     });
     emit('added');
     emit('close');
@@ -173,7 +189,9 @@ const submitAddSupplies = async () => {
             :class="[
               isItemSelected(item)
                 ? 'bg-red-50/70 border-red-200 text-red-950 font-semibold'
-                : 'bg-white border-slate-100 hover:bg-slate-50 text-slate-700'
+                : item.stock <= 0
+                  ? 'bg-slate-50 border-slate-100 text-slate-400 cursor-not-allowed'
+                  : 'bg-white border-slate-100 hover:bg-slate-50 text-slate-700'
             ]"
           >
             <div class="flex items-center gap-2 min-w-0">
@@ -185,8 +203,11 @@ const submitAddSupplies = async () => {
               </div>
               <span class="truncate">{{ item.name }}</span>
             </div>
-            <span class="text-[11px] font-mono font-bold text-slate-500 shrink-0 ml-2">
-              {{ formatVND(item.price) }}
+            <span class="flex items-center gap-2 shrink-0 ml-2">
+              <span :class="['text-[11px] font-semibold', item.stock <= 0 ? 'text-rose-600' : 'text-slate-400']">
+                {{ item.stock <= 0 ? 'Hết hàng' : `Còn ${item.stock}` }}
+              </span>
+              <span class="text-[11px] font-mono font-bold text-slate-500">{{ formatVND(item.price) }}</span>
             </span>
           </div>
 
@@ -210,11 +231,13 @@ const submitAddSupplies = async () => {
               >
                 <Minus class="h-3 w-3" />
               </button>
-              <span class="font-bold font-mono px-1">{{ sel.quantity }}</span>
+              <span class="font-bold font-mono px-1" :title="`Tồn kho: ${sel.stock}`">{{ sel.quantity }}<span class="font-normal text-slate-400">/{{ sel.stock }}</span></span>
               <button
                 type="button"
+                :disabled="sel.quantity >= sel.stock"
+                :title="sel.quantity >= sel.stock ? `Kho chỉ còn ${sel.stock}` : 'Tăng số lượng'"
                 @click="updateQuantity(sel, 1)"
-                class="h-5 w-5 rounded bg-white border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-100"
+                class="h-5 w-5 rounded bg-white border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Plus class="h-3 w-3" />
               </button>

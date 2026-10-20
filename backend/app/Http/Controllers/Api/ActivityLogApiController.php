@@ -17,6 +17,7 @@ class ActivityLogApiController extends Controller
         'lead' => 'Khách hàng tiềm năng',
         'center' => 'Trung tâm',
         'staff' => 'Nhân sự',
+        'teacher_checkin' => 'Check-in ca dạy',
         'message_template' => 'Mẫu tin nhắn',
         'settings' => 'Cài đặt',
         'account' => 'Tài khoản',

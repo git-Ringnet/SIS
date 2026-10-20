@@ -30,20 +30,26 @@
     </style>
 </head>
 <body>
+@php
+    $logoUrl = ! empty($center['logo_url']) ? $center['logo_url'] : ($brand['logo_url'] ?? '');
+    $centerName = ! empty($center['name']) ? $center['name'] : ($brand['brand_name'] ?? 'Trung tâm');
+    $centerAddress = ! empty($center['address']) ? $center['address'] : ($brand['address'] ?? '');
+    $centerPhone = ! empty($center['phone']) ? $center['phone'] : ($brand['phone'] ?? '');
+@endphp
     <table class="header">
         <tr>
             <td>
-                @if (! empty($brand['logo_url']))
-                    <img src="{{ $brand['logo_url'] }}" alt="" style="height: 40px; margin-bottom: 6px;">
+                @if (! empty($logoUrl))
+                    <img src="{{ $logoUrl }}" alt="" style="height: 40px; margin-bottom: 6px;">
                 @endif
-                <p class="brand">{{ $brand['brand_name'] }}</p>
+                <p class="brand">{{ $centerName }}</p>
                 @if (! empty($brand['category']))
                     <div class="muted">Trung tâm đào tạo {{ mb_strtolower($brand['category']) }}</div>
                 @endif
                 <div class="muted">
-                    @if (! empty($brand['address']))Địa chỉ: {{ $brand['address'] }}@endif
-                    @if (! empty($brand['address']) && ! empty($brand['phone'])) • @endif
-                    @if (! empty($brand['phone']))Hotline: {{ $brand['phone'] }}@endif
+                    @if (! empty($centerAddress))Địa chỉ: {{ $centerAddress }}@endif
+                    @if (! empty($centerAddress) && ! empty($centerPhone)) • @endif
+                    @if (! empty($centerPhone))Hotline: {{ $centerPhone }}@endif
                 </div>
             </td>
             <td class="right" style="vertical-align: top;">
@@ -101,19 +107,29 @@
         </tfoot>
     </table>
 
+    @if (! empty($center['bank_info']) || ! empty($center['qr_url']))
     <div class="bank">
         <h4>Thông tin chuyển khoản học phí</h4>
         <table>
             <tr>
-                <td style="width: 50%;">Ngân hàng: <strong>{{ $brand['bank_name'] ?: '—' }}</strong></td>
-                <td>Số tài khoản: <span class="code">{{ $brand['bank_account'] ?: '—' }}</span></td>
-            </tr>
-            <tr>
-                <td>Chủ tài khoản: <strong>{{ $brand['bank_holder'] ?: '—' }}</strong></td>
-                <td>Cú pháp: <span class="code">HP {{ $student->name }} {{ $student->parent_phone }}</span></td>
+                <td style="vertical-align: top;">
+                    @if (! empty($center['bank_info']))
+                        <div style="font-size: 11px; line-height: 1.6; white-space: pre-line; color: #1e293b;">{!! nl2br(e($center['bank_info'])) !!}</div>
+                    @endif
+                    <div style="margin-top: 6px; font-size: 10px;">
+                        Cú pháp: <span class="code">HP {{ $student->name }} {{ $student->parent_phone }}</span>
+                    </div>
+                </td>
+                @if (! empty($center['qr_url']))
+                    <td class="right" style="width: 100px; vertical-align: top; text-align: right;">
+                        <img src="{{ $center['qr_url'] }}" alt="QR" style="max-height: 90px; max-width: 90px; border: 1px solid #cbd5e1; border-radius: 6px; padding: 2px; background: #fff;" />
+                        <div class="light" style="font-size: 8px; text-align: center; margin-top: 2px;">Quét QR</div>
+                    </td>
+                @endif
             </tr>
         </table>
     </div>
+    @endif
 
     <table class="footer">
         <tr>

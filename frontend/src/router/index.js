@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import { isPathBlocked } from '../services/permissions';
+import { isPathBlocked, firstAllowedPath } from '../services/permissions';
 import DashboardView from '../views/DashboardView.vue';
 import RetentionView from '../views/RetentionView.vue';
 import StudentsView from '../views/StudentsView.vue';
@@ -20,15 +20,22 @@ import InventoryView from '../views/InventoryView.vue';
 import RevenueView from '../views/RevenueView.vue';
 import AbsencesView from '../views/AbsencesView.vue';
 import TeacherCheckinView from '../views/TeacherCheckinView.vue';
+import TeacherLeavesView from '../views/TeacherLeavesView.vue';
+import TeacherCheckinQrView from '../views/TeacherCheckinQrView.vue';
 import AttendanceView from '../views/AttendanceView.vue';
 import GenericModuleView from '../views/GenericModuleView.vue';
 import LoginView from '../views/LoginView.vue';
 import RegisterView from '../views/RegisterView.vue';
+import ParentPortalView from '../views/ParentPortalView.vue';
 
 const routes = [
   // Auth
-  { path: '/login', name: 'login', component: LoginView, meta: { public: true, title: 'Đăng nhập' } },
-  { path: '/register', name: 'register', component: RegisterView, meta: { public: true, title: 'Đăng ký tài khoản' } },
+  { path: '/login', name: 'login', component: LoginView, meta: { guestOnly: true, title: 'Đăng nhập' } },
+  { path: '/register', name: 'register', component: RegisterView, meta: { guestOnly: true, title: 'Đăng ký tài khoản' } },
+
+  // Cổng thông tin phụ huynh (Công khai cho phụ huynh tra cứu)
+  { path: '/portal/:id', name: 'parent-portal', component: ParentPortalView, props: true, meta: { public: true, title: 'Cổng thông tin phụ huynh' } },
+  { path: '/parent-portal/:id', redirect: (to) => `/portal/${to.params.id}` },
 
   // 1. Chính
   { path: '/', name: 'dashboard', component: DashboardView, meta: { title: 'Bảng điều khiển' } },
@@ -37,6 +44,8 @@ const routes = [
   { path: '/students/:id', name: 'student-detail', component: StudentDetailView, props: true, meta: { standalone: true, title: 'Hồ sơ học viên' } },
   { path: '/attendance', name: 'attendance', component: AttendanceView, meta: { title: 'Điểm danh' } },
   { path: '/teacher-checkin', name: 'teacher-checkin', component: TeacherCheckinView, meta: { title: 'Check-in ca dạy' } },
+  { path: '/teacher-checkin/qr', name: 'teacher-checkin-qr', component: TeacherCheckinQrView, meta: { title: 'QR check-in ca dạy', managerOnly: true } },
+  { path: '/teacher-checkin/leaves', name: 'teacher-leaves', component: TeacherLeavesView, meta: { title: 'Nghỉ phép & dạy thay', managerOnly: true } },
   { path: '/absences', name: 'absences', component: AbsencesView, meta: { title: 'Vắng liên tiếp' } },
 
   // 2. Vận hành
@@ -68,25 +77,33 @@ const router = createRouter({
 
 router.beforeEach((to, from, next) => {
   const token = localStorage.getItem('auth_token');
-  const isPublic = to.meta.public;
+  const isGuestOnly = to.meta.guestOnly;
+  const isPublic = to.meta.public || isGuestOnly;
 
   if (!token && !isPublic) {
-    return next('/login');
+    return next({ path: '/login', query: to.fullPath !== '/' ? { redirect: to.fullPath } : {} });
   }
 
-  if (token && isPublic) {
+  if (token && isGuestOnly) {
     return next('/');
   }
 
-  // Nhân sự bị chặn trang này (cấu hình ở màn Nhân sự) thì quay về Bảng điều khiển
+  // Nhân sự bị chặn trang này (cấu hình ở màn Nhân sự) thì chuyển sang trang đầu tiên được phép
+  // (giáo viên bị chặn Bảng điều khiển sẽ vào thẳng Điểm danh)
   let user = null;
   try {
     user = JSON.parse(localStorage.getItem('auth_user') || 'null');
   } catch {
     user = null;
   }
-  if (token && to.path !== '/' && isPathBlocked(user, to.path)) {
-    return next('/');
+  // Trang quản lý (nghỉ phép / dạy thay...) không dành cho giáo viên
+  if (token && to.meta.managerOnly && user?.is_teacher) {
+    return next('/teacher-checkin');
+  }
+
+  if (token && isPathBlocked(user, to.path)) {
+    const fallback = firstAllowedPath(user);
+    if (fallback !== to.path) return next(fallback);
   }
 
   next();

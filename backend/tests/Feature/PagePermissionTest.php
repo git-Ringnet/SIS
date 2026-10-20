@@ -137,7 +137,7 @@ class PagePermissionTest extends TestCase
 
         $this->postJson('/api/auth/login', ['email' => 'admin@khoaanhmusic.com', 'password' => 'password'])
             ->assertOk()->assertJsonPath('user.is_owner', false); // tài khoản đầu tiên là owner/teacher của setUp
-        $this->postJson('/api/auth/login', ['email' => 'system_admin@sis.local', 'password' => 'sys-secret-123'])
+        $this->postJson('/api/auth/login', ['email' => 'system_admin@mail.com', 'password' => 'sys-secret-123'])
             ->assertOk()->assertJsonPath('user.is_owner', true);
     }
 

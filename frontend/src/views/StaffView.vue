@@ -3,6 +3,7 @@ import { notify } from '../services/notify';
 import { confirmDialog } from '../services/useConfirm';
 import { ref, computed, onMounted } from 'vue';
 import { useAuth } from '../services/useAuth';
+import { ALL_PAGES } from '../services/permissions';
 import { staffApi } from '../services/api';
 import {
   Shield,
@@ -41,18 +42,8 @@ const creatingInvite = ref(false);
 // Permissions modal
 const showPermissionModal = ref(false);
 const selectedMember = ref(null);
-const allPages = [
-  'Doanh thu',
-  'Hóa đơn & Thu phí',
-  'Khách hàng tiềm năng',
-  'Cài đặt',
-  'Dữ liệu',
-  'Báo cáo',
-  'Học cụ',
-  'Khóa học',
-  'Nhân sự',
-  'Trung tâm',
-];
+// Đủ các trang trong menu, theo thứ tự menu (khớp backend PagePermissions)
+const allPages = ALL_PAGES;
 
 const showToast = (msg, type = 'success') => {
   if (type === 'success') {
@@ -212,7 +203,7 @@ const handleDeleteMember = async (member) => {
 </script>
 
 <template>
-  <div class="space-y-6 pb-12 max-w-6xl">
+  <div class="space-y-6 pb-12">
     <!-- Header -->
     <div>
       <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Nhân sự</h1>
@@ -223,50 +214,37 @@ const handleDeleteMember = async (member) => {
     <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
       <div>
         <h2 class="text-sm sm:text-base font-bold text-slate-900">Tạo tài khoản & Phân quyền nhân sự</h2>
-        <p class="text-xs text-slate-500 mt-0.5">Tạo tài khoản cho giáo viên, quản lý, lễ tân đăng nhập vào hệ thống và phân quyền truy cập theo vai trò.</p>
+        <p class="text-xs text-slate-500 mt-0.5">Tạo tài khoản cho giáo viên, quản lý, lễ tân đăng nhập vào hệ thống và
+          phân quyền truy cập theo vai trò.</p>
       </div>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <!-- Họ tên -->
         <div>
           <label class="block text-xs font-semibold text-slate-700 mb-1.5">Họ và tên</label>
-          <input
-            v-model="newInvite.name"
-            type="text"
-            placeholder="Cô Mai Hương"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
-          />
+          <input v-model="newInvite.name" type="text" placeholder="Cô Mai Hương"
+            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500" />
         </div>
 
         <!-- Email -->
         <div>
           <label class="block text-xs font-semibold text-slate-700 mb-1.5">Email đăng nhập</label>
-          <input
-            v-model="newInvite.email"
-            type="email"
-            placeholder="giaovien@khoaanhmusic.com"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
-          />
+          <input v-model="newInvite.email" type="email" placeholder="giaovien@khoaanhmusic.com"
+            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500" />
         </div>
 
         <!-- Mật khẩu khởi tạo -->
         <div>
           <label class="block text-xs font-semibold text-slate-700 mb-1.5">Mật khẩu ban đầu</label>
-          <input
-            v-model="newInvite.password"
-            type="text"
-            placeholder="123456"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 font-mono"
-          />
+          <input v-model="newInvite.password" type="text" placeholder="123456"
+            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 font-mono" />
         </div>
 
         <!-- Vai trò -->
         <div>
           <label class="block text-xs font-semibold text-slate-700 mb-1.5">Vai trò</label>
-          <select
-            v-model="newInvite.role"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
-          >
+          <select v-model="newInvite.role"
+            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500">
             <option v-for="r in roleOptions" :key="r" :value="r">{{ r }}</option>
           </select>
         </div>
@@ -274,22 +252,16 @@ const handleDeleteMember = async (member) => {
         <!-- Trung tâm -->
         <div>
           <label class="block text-xs font-semibold text-slate-700 mb-1.5">Cơ sở làm việc</label>
-          <select
-            v-model="newInvite.center"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
-          >
+          <select v-model="newInvite.center"
+            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500">
             <option v-for="c in centers" :key="c" :value="c">{{ c }}</option>
           </select>
         </div>
       </div>
 
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-        <button
-          type="button"
-          :disabled="creatingInvite"
-          @click="handleCreateInvite"
-          class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 px-5 py-2.5 text-xs sm:text-sm font-bold text-white shadow-xs transition-all active:scale-[0.98] inline-flex items-center gap-2 justify-center"
-        >
+        <button type="button" :disabled="creatingInvite" @click="handleCreateInvite"
+          class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 px-5 py-2.5 text-xs sm:text-sm font-bold text-white shadow-xs transition-all active:scale-[0.98] inline-flex items-center gap-2 justify-center">
           <span>{{ creatingInvite ? 'Đang tạo...' : '+ Tạo tài khoản & Cấp quyền' }}</span>
         </button>
         <p class="text-[11px] sm:text-xs text-slate-400">
@@ -329,12 +301,9 @@ const handleDeleteMember = async (member) => {
                 <span v-if="!canEditMember(m)" class="text-slate-800 font-semibold">
                   {{ m.is_owner ? ownerRole : m.role }}
                 </span>
-                <select
-                  v-else
-                  :value="m.is_owner ? ownerRole : m.role"
+                <select v-else :value="m.is_owner ? ownerRole : m.role"
                   @change="handleRoleChange(m, $event.target.value)"
-                  class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-800 focus:border-rose-500 focus:outline-none"
-                >
+                  class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-800 focus:border-rose-500 focus:outline-none">
                   <option v-for="r in roleOptions" :key="r" :value="r">{{ r }}</option>
                 </select>
               </td>
@@ -344,12 +313,11 @@ const handleDeleteMember = async (member) => {
                 <span v-if="m.is_owner" class="text-slate-700 font-medium">
                   Toàn quyền
                 </span>
-                <button
-                  v-else
-                  type="button"
-                  @click="openPermissions(m)"
-                  class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 shadow-2xs transition-all active:scale-[0.98]"
-                >
+                <span v-else-if="!isOwner" class="text-slate-600 text-xs">
+                  Chặn {{ (m.blocked_pages || []).length }} trang
+                </span>
+                <button v-else type="button" @click="openPermissions(m)"
+                  class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 shadow-2xs transition-all active:scale-[0.98]">
                   <Shield class="h-3 w-3 text-slate-500" />
                   <span>Chặn {{ (m.blocked_pages || []).length }} trang</span>
                 </button>
@@ -357,12 +325,9 @@ const handleDeleteMember = async (member) => {
 
               <!-- Trung tâm -->
               <td class="py-3.5 px-3 text-slate-600">
-                <select
-                  v-if="isOwner && !m.is_owner"
-                  :value="m.center === 'Tất cả' ? 'Tất cả trung tâm' : m.center"
+                <select v-if="isOwner && !m.is_owner" :value="m.center === 'Tất cả' ? 'Tất cả trung tâm' : m.center"
                   @change="handleCenterChange(m, $event.target.value)"
-                  class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-800 focus:border-rose-500 focus:outline-none"
-                >
+                  class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-800 focus:border-rose-500 focus:outline-none">
                   <option v-for="c in centers" :key="c" :value="c">{{ c }}</option>
                 </select>
                 <div v-else class="flex items-center gap-1.5">
@@ -378,22 +343,14 @@ const handleDeleteMember = async (member) => {
 
               <!-- Đặt lại mật khẩu / Xóa -->
               <td class="py-3.5 px-3 text-right whitespace-nowrap">
-                <button
-                  v-if="canEditMember(m)"
-                  type="button"
-                  @click="openResetPassword(m)"
+                <button v-if="canEditMember(m)" type="button" @click="openResetPassword(m)"
                   class="p-1 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
-                  title="Đặt lại mật khẩu"
-                >
+                  title="Đặt lại mật khẩu">
                   <KeyRound class="h-4 w-4" />
                 </button>
-                <button
-                  v-if="canEditMember(m)"
-                  type="button"
-                  @click="handleDeleteMember(m)"
+                <button v-if="canEditMember(m)" type="button" @click="handleDeleteMember(m)"
                   class="p-1 rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors"
-                  title="Xóa thành viên"
-                >
+                  title="Xóa thành viên">
                   <Trash2 class="h-4 w-4" />
                 </button>
               </td>
@@ -404,24 +361,17 @@ const handleDeleteMember = async (member) => {
     </div>
 
     <!-- MODAL ĐẶT LẠI MẬT KHẨU -->
-    <div
-      v-if="resetTarget"
-      class="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
-    >
-      <form
-        @submit.prevent="handleResetPassword"
-        class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200"
-      >
+    <div v-if="resetTarget"
+      class="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+      <form @submit.prevent="handleResetPassword"
+        class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
         <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/80">
           <div class="flex items-center gap-2 text-slate-900 font-bold text-sm">
             <KeyRound class="h-4.5 w-4.5 text-amber-600" />
             <span>Đặt lại mật khẩu</span>
           </div>
-          <button
-            type="button"
-            @click="resetTarget = null"
-            class="rounded-xl p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100"
-          >
+          <button type="button" @click="resetTarget = null"
+            class="rounded-xl p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100">
             <X class="h-5 w-5" />
           </button>
         </div>
@@ -431,30 +381,18 @@ const handleDeleteMember = async (member) => {
             Đặt mật khẩu mới cho <strong class="text-slate-800">{{ resetTarget.email }}</strong>.
             Nhân sự sẽ bị đăng xuất khỏi mọi thiết bị và đăng nhập lại bằng mật khẩu này.
           </p>
-          <input
-            v-model="resetPasswordValue"
-            type="text"
-            minlength="6"
-            required
-            autocomplete="off"
+          <input v-model="resetPasswordValue" type="text" minlength="6" required autocomplete="off"
             placeholder="Mật khẩu mới (ít nhất 6 ký tự)"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-800 font-mono focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
-          />
+            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-800 font-mono focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500" />
         </div>
 
         <div class="px-6 py-3 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            @click="resetTarget = null"
-            class="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700"
-          >
+          <button type="button" @click="resetTarget = null"
+            class="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700">
             Hủy
           </button>
-          <button
-            type="submit"
-            :disabled="resettingPassword"
-            class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 px-4 py-2 text-xs font-bold text-white shadow-xs"
-          >
+          <button type="submit" :disabled="resettingPassword"
+            class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 px-4 py-2 text-xs font-bold text-white shadow-xs">
             {{ resettingPassword ? 'Đang lưu...' : 'Đặt lại mật khẩu' }}
           </button>
         </div>
@@ -462,21 +400,16 @@ const handleDeleteMember = async (member) => {
     </div>
 
     <!-- MODAL PHÂN QUYỀN TRANG -->
-    <div
-      v-if="showPermissionModal"
-      class="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
-    >
+    <div v-if="showPermissionModal"
+      class="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
         <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/80">
           <div class="flex items-center gap-2 text-slate-900 font-bold text-sm">
             <Lock class="h-4.5 w-4.5 text-rose-600" />
             <span>Phân Quyền Truy Cập (Chặn trang)</span>
           </div>
-          <button
-            type="button"
-            @click="showPermissionModal = false"
-            class="rounded-xl p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100"
-          >
+          <button type="button" @click="showPermissionModal = false"
+            class="rounded-xl p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100">
             <X class="h-5 w-5" />
           </button>
         </div>
@@ -487,35 +420,22 @@ const handleDeleteMember = async (member) => {
           </p>
 
           <div class="grid grid-cols-2 gap-2.5 max-h-72 overflow-y-auto pr-1">
-            <label
-              v-for="p in allPages"
-              :key="p"
-              class="flex items-center gap-2 p-2 rounded-xl border border-slate-200 hover:bg-slate-50 cursor-pointer text-xs font-medium text-slate-700"
-            >
-              <input
-                type="checkbox"
-                :checked="selectedMember?.blocked_pages?.includes(p)"
-                @change="togglePageBlock(p)"
-                class="rounded border-slate-300 text-rose-600 focus:ring-rose-500"
-              />
+            <label v-for="p in allPages" :key="p"
+              class="flex items-center gap-2 p-2 rounded-xl border border-slate-200 hover:bg-slate-50 cursor-pointer text-xs font-medium text-slate-700">
+              <input type="checkbox" :checked="selectedMember?.blocked_pages?.includes(p)" @change="togglePageBlock(p)"
+                class="rounded border-slate-300 text-rose-600 focus:ring-rose-500" />
               <span>{{ p }}</span>
             </label>
           </div>
         </div>
 
         <div class="px-6 py-3 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            @click="showPermissionModal = false"
-            class="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700"
-          >
+          <button type="button" @click="showPermissionModal = false"
+            class="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700">
             Hủy
           </button>
-          <button
-            type="button"
-            @click="handleSavePermissions"
-            class="rounded-xl bg-rose-600 hover:bg-rose-700 px-4 py-2 text-xs font-bold text-white shadow-xs"
-          >
+          <button type="button" @click="handleSavePermissions"
+            class="rounded-xl bg-rose-600 hover:bg-rose-700 px-4 py-2 text-xs font-bold text-white shadow-xs">
             Lưu phân quyền
           </button>
         </div>

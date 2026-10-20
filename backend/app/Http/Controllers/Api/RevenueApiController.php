@@ -75,7 +75,7 @@ class RevenueApiController extends Controller
             $paidDate = $inv->paid_at ? Carbon::parse($inv->paid_at) : Carbon::parse($inv->created_at);
             $studentName = $inv->student ? $inv->student->name : 'Khách vãng lai';
             $courseName = $inv->course ? $inv->course->name : ($inv->student && $inv->student->course ? $inv->student->course->name : 'Học phí khóa học');
-            $invCenter = $inv->student && $inv->student->center ? $inv->student->center : CenterStore::defaultName();
+            $invCenter = $inv->center ?: ($inv->student?->center ?: CenterStore::defaultName());
 
             $methodName = match ($inv->payment_method) {
                 'bank_transfer' => 'Chuyển khoản',
@@ -95,6 +95,8 @@ class RevenueApiController extends Controller
 
             $transactions[] = [
                 'id' => 'inv_'.$inv->id,
+                'invoice_id' => $inv->id,
+                'invoice_code' => $inv->invoice_code,
                 'recorded_by' => $inv->recorded_by ?: 'Admin Thu Ngân',
                 'date' => $paidDate->format('Y-m-d'),
                 'date_formatted' => $paidDate->format('d/m/Y'),
@@ -247,6 +249,8 @@ class RevenueApiController extends Controller
         }
 
         $centers = CenterStore::names();
+        $students = Student::with('course')->where('status', 'active')->orderBy('name')->get(['id', 'name', 'code', 'center', 'course_id']);
+        $courses = Course::where('is_active', true)->orderBy('name')->get(['id', 'name', 'price', 'default_sessions']);
 
         $pagination = null;
         $pageTransactions = $filteredTransactions;
@@ -279,28 +283,32 @@ class RevenueApiController extends Controller
                 'deferred_revenue' => round($deferredRevenue),
             ],
             'centers' => $centers,
+            'students' => $students,
+            'courses' => $courses,
         ]);
     }
 
-    public function store(Request $request): JsonResponse
+    private function revenueRules(): array
     {
-        $validated = $request->validate([
+        return [
             'recorded_by' => 'required|string|max:100',
             'date' => 'required|date',
             'student_name' => 'nullable|string|max:255',
             'course_name' => 'nullable|string|max:255',
             'inventory_name' => 'nullable|string|max:255',
             'payment_method' => 'required|string',
-            'account_name' => 'required|string',
+            'account_name' => 'nullable|string|max:255',
             'tuition_fee' => 'nullable|numeric|min:0',
             'inventory_fee' => 'nullable|numeric|min:0',
             'center' => 'required|string',
             'note' => 'nullable|string',
-        ]);
+        ];
+    }
 
+    private function buildCustomRevenue(array $validated, string $id): array
+    {
         $tuition = (float) ($validated['tuition_fee'] ?? 0);
         $inventory = (float) ($validated['inventory_fee'] ?? 0);
-        $total = $tuition + $inventory;
 
         $type = 'both';
         if ($tuition > 0 && $inventory === 0.0) {
@@ -309,26 +317,57 @@ class RevenueApiController extends Controller
             $type = 'inventory';
         }
 
-        $customRevenues = $this->loadCustomRevenues();
-        $newTx = [
-            'id' => 'rev_custom_'.uniqid(),
+        return [
+            'id' => $id,
             'recorded_by' => $validated['recorded_by'],
             'date' => $validated['date'],
             'student_name' => ($validated['student_name'] ?? null) ?: 'Khách hàng',
             'course_name' => ($validated['course_name'] ?? null) ?: '-',
             'inventory_name' => ($validated['inventory_name'] ?? null) ?: '-',
             'payment_method' => $validated['payment_method'],
-            'account_name' => $validated['account_name'],
+            'account_name' => $validated['account_name'] ?? '',
             'tuition_fee' => $tuition,
             'inventory_fee' => $inventory,
-            'total_amount' => $total,
+            'total_amount' => $tuition + $inventory,
             'center' => $validated['center'],
             'type' => $type,
             'note' => $validated['note'] ?? '',
         ];
+    }
 
+    private function saveCustomRevenues(array $revenues): void
+    {
+        Storage::put($this->getCustomRevenuesPath(), json_encode(array_values($revenues), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    }
+
+    private function saveExpenses(array $expenses): void
+    {
+        Storage::put($this->getExpensesPath(), json_encode(array_values($expenses), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
+     * Dòng doanh thu sinh từ hoá đơn thì sửa / xoá ở màn Hóa đơn để số buổi của học viên khớp theo
+     */
+    private function invoiceRowResponse(string $id): ?JsonResponse
+    {
+        if (! str_starts_with($id, 'inv_')) {
+            return null;
+        }
+        $code = Invoice::whereKey((int) substr($id, 4))->value('invoice_code');
+
+        return response()->json([
+            'message' => 'Dòng này đến từ hóa đơn '.($code ?: '').'. Hãy sửa hoặc xóa ở màn Hóa đơn để số buổi của học viên cập nhật theo.',
+        ], 422);
+    }
+
+    public function store(Request $request): JsonResponse
+    {
+        $validated = $request->validate($this->revenueRules());
+
+        $newTx = $this->buildCustomRevenue($validated, 'rev_custom_'.uniqid());
+        $customRevenues = $this->loadCustomRevenues();
         $customRevenues[] = $newTx;
-        Storage::put($this->getCustomRevenuesPath(), json_encode($customRevenues, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        $this->saveCustomRevenues($customRevenues);
 
         return response()->json([
             'message' => 'Thêm doanh thu mới thành công!',
@@ -336,17 +375,88 @@ class RevenueApiController extends Controller
         ], 201);
     }
 
-    public function storeExpense(Request $request): JsonResponse
+    public function update(Request $request, string $id): JsonResponse
     {
-        $validated = $request->validate([
+        if ($blocked = $this->invoiceRowResponse($id)) {
+            return $blocked;
+        }
+        $validated = $request->validate($this->revenueRules());
+
+        $revenues = $this->loadCustomRevenues();
+        $index = array_search($id, array_column($revenues, 'id'), true);
+        if ($index === false) {
+            return response()->json(['message' => 'Không tìm thấy khoản doanh thu!'], 404);
+        }
+        $revenues[$index] = $this->buildCustomRevenue($validated, $id);
+        $this->saveCustomRevenues($revenues);
+
+        return response()->json([
+            'message' => 'Đã cập nhật khoản doanh thu!',
+            'transaction' => $revenues[$index],
+        ]);
+    }
+
+    public function destroy(string $id): JsonResponse
+    {
+        if ($blocked = $this->invoiceRowResponse($id)) {
+            return $blocked;
+        }
+
+        $revenues = $this->loadCustomRevenues();
+        $remaining = array_filter($revenues, fn ($r) => ($r['id'] ?? null) !== $id);
+        if (count($remaining) === count($revenues)) {
+            return response()->json(['message' => 'Không tìm thấy khoản doanh thu!'], 404);
+        }
+        $this->saveCustomRevenues($remaining);
+
+        return response()->json(['message' => 'Đã xóa khoản doanh thu!']);
+    }
+
+    private function expenseRules(): array
+    {
+        return [
             'date' => 'required|date',
             'category' => 'required|string|max:100',
             'spender' => 'required|string|max:100',
             'content' => 'required|string|max:255',
-            'account' => 'required|string|max:100',
+            'account' => 'nullable|string|max:100',
             'amount' => 'required|numeric|min:0',
             'center' => 'required|string|max:100',
-        ]);
+        ];
+    }
+
+    public function updateExpense(Request $request, int $id): JsonResponse
+    {
+        $validated = $request->validate($this->expenseRules());
+
+        $expenses = $this->loadExpenses();
+        foreach ($expenses as &$ex) {
+            if ((int) ($ex['id'] ?? 0) === $id) {
+                $ex = [...$ex, ...$validated, 'account' => $validated['account'] ?? '', 'amount' => (float) $validated['amount']];
+                $this->saveExpenses($expenses);
+
+                return response()->json(['message' => 'Đã cập nhật khoản chi!', 'expense' => $ex]);
+            }
+        }
+
+        return response()->json(['message' => 'Không tìm thấy khoản chi!'], 404);
+    }
+
+    public function destroyExpense(int $id): JsonResponse
+    {
+        $expenses = $this->loadExpenses();
+        $remaining = array_filter($expenses, fn ($ex) => (int) ($ex['id'] ?? 0) !== $id);
+        if (count($remaining) === count($expenses)) {
+            return response()->json(['message' => 'Không tìm thấy khoản chi!'], 404);
+        }
+        $this->saveExpenses($remaining);
+
+        return response()->json(['message' => 'Đã xóa khoản chi!']);
+    }
+
+    public function storeExpense(Request $request): JsonResponse
+    {
+        $validated = $request->validate($this->expenseRules());
 
         $expenses = $this->loadExpenses();
         $newId = count($expenses) > 0 ? max(array_column($expenses, 'id')) + 1 : 1;
@@ -357,7 +467,7 @@ class RevenueApiController extends Controller
             'category' => $validated['category'],
             'spender' => $validated['spender'],
             'content' => $validated['content'],
-            'account' => $validated['account'],
+            'account' => $validated['account'] ?? '',
             'amount' => (float) $validated['amount'],
             'center' => $validated['center'],
         ];

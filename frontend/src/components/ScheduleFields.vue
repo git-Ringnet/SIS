@@ -1,28 +1,26 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
+import { Plus, Trash2 } from 'lucide-vue-next';
 import { staffApi } from '../services/api';
 import { useCenters } from '../services/useCenters';
 
-// Lịch học cố định hằng tuần của học viên:
-// { class_days: [1, 3], class_start_time: '17:30', class_end_time: '18:30', teacher: '', room: '' }
-const schedule = defineModel({ type: Object, required: true });
+// Lịch học nhiều ca của học viên: model.schedules = [{ id, day, start, end, teacher, room }]
+// Một ngày có thể nhiều ca, mỗi ca giờ / giáo viên / phòng riêng.
+const model = defineModel({ type: Object, required: true });
 
 const props = defineProps({
   // Trung tâm của học viên, dùng để gợi ý phòng học của đúng trung tâm
-  center: {
-    type: String,
-    default: '',
-  },
+  center: { type: String, default: '' },
 });
 
 // Theo Carbon::dayOfWeek ở backend: 0 = Chủ nhật, 1 = Thứ 2 ...
 const WEEKDAYS = [
-  { value: 1, label: 'T2' },
-  { value: 2, label: 'T3' },
-  { value: 3, label: 'T4' },
-  { value: 4, label: 'T5' },
-  { value: 5, label: 'T6' },
-  { value: 6, label: 'T7' },
+  { value: 1, label: 'Thứ 2' },
+  { value: 2, label: 'Thứ 3' },
+  { value: 3, label: 'Thứ 4' },
+  { value: 4, label: 'Thứ 5' },
+  { value: 5, label: 'Thứ 6' },
+  { value: 6, label: 'Thứ 7' },
   { value: 0, label: 'CN' },
 ];
 
@@ -32,6 +30,7 @@ const uid = Math.random().toString(36).slice(2, 8);
 
 onMounted(async () => {
   loadCenters();
+  if (!Array.isArray(model.value.schedules)) model.value.schedules = [];
   try {
     const res = await staffApi.getStaff();
     teachers.value = (res.data?.members || [])
@@ -43,66 +42,74 @@ onMounted(async () => {
 });
 
 const rooms = computed(() => roomNames(props.center || 'all'));
+const slots = computed(() => model.value.schedules || []);
 
-const isSelected = (day) => (schedule.value.class_days || []).includes(day);
-
-const toggleDay = (day) => {
-  const days = schedule.value.class_days || [];
-  schedule.value.class_days = isSelected(day) ? days.filter((d) => d !== day) : [...days, day];
+const addSlot = () => {
+  const last = slots.value[slots.value.length - 1];
+  // Dòng mới lấy sẵn giờ / giáo viên / phòng của dòng trước cho nhanh
+  model.value.schedules = [
+    ...slots.value,
+    { id: '', day: '', start: last?.start || '', end: last?.end || '', teacher: last?.teacher || '', room: last?.room || '' },
+  ];
 };
 
+const removeSlot = (i) => {
+  model.value.schedules = slots.value.filter((_, idx) => idx !== i);
+};
+
+// Tên giáo viên phải trùng tên tài khoản Giáo viên ở màn Nhân sự thì giáo viên mới thấy ca dạy để tự check-in
+const normalizeName = (v) => (v || '').trim().replace(/\s+/g, ' ').toLowerCase();
+const teacherUnmatched = (name) => normalizeName(name) !== '' && !teachers.value.some((t) => normalizeName(t) === normalizeName(name));
+
 const inputClass =
-  'w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500';
+  'w-full rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500';
 </script>
 
 <template>
   <div class="rounded-xl border border-slate-200 bg-slate-50/50 p-4 space-y-3">
-    <div>
-      <p class="text-xs font-bold text-slate-800">Lịch học cố định hằng tuần</p>
-      <p class="text-[11px] text-slate-500 mt-0.5">Học viên sẽ hiện ở màn Điểm danh vào các thứ đã chọn.</p>
-    </div>
-
-    <div class="flex flex-wrap gap-1.5">
+    <div class="flex items-start justify-between gap-3">
+      <div>
+        <p class="text-xs font-bold text-slate-800">Lịch học</p>
+        <p class="text-[11px] text-slate-500 mt-0.5">
+          Mỗi dòng là một ca học. Một ngày có thể nhiều ca, mỗi ca giờ, giáo viên, phòng riêng. Học viên hiện ở màn Điểm danh theo từng ca.
+        </p>
+      </div>
       <button
-        v-for="d in WEEKDAYS"
-        :key="d.value"
         type="button"
-        @click="toggleDay(d.value)"
-        :class="[
-          isSelected(d.value)
-            ? 'bg-rose-600 border-rose-600 text-white'
-            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50',
-          'h-9 min-w-11 rounded-lg border px-2.5 text-xs font-bold transition-colors',
-        ]"
-        :aria-pressed="isSelected(d.value)"
+        @click="addSlot"
+        class="inline-flex shrink-0 items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
       >
-        {{ d.label }}
+        <Plus class="h-3.5 w-3.5" /> Thêm ca
       </button>
     </div>
 
-    <div class="grid grid-cols-2 gap-3">
-      <div>
-        <label class="block text-[11px] font-semibold text-slate-600 mb-1">Giờ bắt đầu</label>
-        <input v-model="schedule.class_start_time" type="time" :class="inputClass" />
+    <p v-if="slots.length === 0" class="text-xs text-slate-400">Chưa có ca học nào. Bấm "Thêm ca" để xếp lịch.</p>
+
+    <datalist :id="`teachers-${uid}`">
+      <option v-for="t in teachers" :key="t" :value="t" />
+    </datalist>
+    <datalist :id="`rooms-${uid}`">
+      <option v-for="r in rooms" :key="r" :value="r" />
+    </datalist>
+
+    <div v-for="(slot, i) in slots" :key="i" class="space-y-1">
+      <div class="grid grid-cols-2 sm:grid-cols-[6.5rem_6rem_6rem_1fr_1fr_auto] gap-2 items-center">
+        <select v-model="slot.day" :class="inputClass" aria-label="Thứ">
+          <option value="" disabled>Thứ</option>
+          <option v-for="d in WEEKDAYS" :key="d.value" :value="d.value">{{ d.label }}</option>
+        </select>
+        <input v-model="slot.start" type="time" :class="inputClass" aria-label="Giờ bắt đầu" title="Giờ bắt đầu" />
+        <input v-model="slot.end" type="time" :min="slot.start || undefined" :class="inputClass" aria-label="Giờ kết thúc" title="Giờ kết thúc" />
+        <input v-model="slot.teacher" :list="`teachers-${uid}`" placeholder="Giáo viên" :class="inputClass" aria-label="Giáo viên" />
+        <input v-model="slot.room" :list="`rooms-${uid}`" placeholder="Phòng" :class="inputClass" aria-label="Phòng học" />
+        <button type="button" @click="removeSlot(i)" class="justify-self-start p-1.5 rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600" title="Xoá ca">
+          <Trash2 class="h-4 w-4" />
+        </button>
       </div>
-      <div>
-        <label class="block text-[11px] font-semibold text-slate-600 mb-1">Giờ kết thúc</label>
-        <input v-model="schedule.class_end_time" type="time" :min="schedule.class_start_time || undefined" :class="inputClass" />
-      </div>
-      <div>
-        <label class="block text-[11px] font-semibold text-slate-600 mb-1">Giáo viên</label>
-        <input v-model="schedule.teacher" :list="`teachers-${uid}`" placeholder="Chọn hoặc nhập tên" :class="inputClass" />
-        <datalist :id="`teachers-${uid}`">
-          <option v-for="t in teachers" :key="t" :value="t" />
-        </datalist>
-      </div>
-      <div>
-        <label class="block text-[11px] font-semibold text-slate-600 mb-1">Phòng học</label>
-        <input v-model="schedule.room" :list="`rooms-${uid}`" placeholder="Chọn hoặc nhập phòng" :class="inputClass" />
-        <datalist :id="`rooms-${uid}`">
-          <option v-for="r in rooms" :key="r" :value="r" />
-        </datalist>
-      </div>
+      <p v-if="slot.day === '' || !slot.start" class="text-[11px] text-amber-700">Ca này chưa có thứ hoặc giờ bắt đầu nên sẽ không được lưu.</p>
+      <p v-else-if="teacherUnmatched(slot.teacher)" class="text-[11px] text-amber-700">
+        "{{ slot.teacher }}" không trùng tài khoản giáo viên nào ở màn Nhân sự, giáo viên sẽ không tự thấy ca dạy để check-in.
+      </p>
     </div>
   </div>
 </template>

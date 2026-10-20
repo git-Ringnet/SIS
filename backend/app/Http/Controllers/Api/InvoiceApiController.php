@@ -7,6 +7,7 @@ use App\Models\Course;
 use App\Models\Invoice;
 use App\Models\Student;
 use App\Support\BrandSettings;
+use App\Support\CenterStore;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -64,21 +65,24 @@ class InvoiceApiController extends Controller
             'payment_method' => 'required|string|in:bank_transfer,cash,pos,momo',
             'paid_at' => 'required|date',
             'note' => 'nullable|string',
+            'invoice_pdf' => 'nullable|file|mimetypes:application/pdf|max:10240',
         ]);
 
         $student = Student::find($validated['student_id']);
-        $invoiceCode = Invoice::uniqueCode('HD-'.date('Ym').'-'.str_pad($student->id, 3, '0', STR_PAD_LEFT));
+        $invoiceCode = Invoice::nextInvoiceCodeForCenter($student?->center);
 
         $invoice = Invoice::create([
             'invoice_code' => $invoiceCode,
             'student_id' => $student->id,
             'course_id' => $validated['course_id'] ?? $student->course_id,
+            'center' => $student?->center,
             'amount' => $validated['amount'],
             'sessions_added' => $validated['sessions_added'],
             'payment_method' => $validated['payment_method'],
             'status' => 'paid',
             'paid_at' => $validated['paid_at'],
             'note' => $validated['note'] ?? 'Thu học phí trực tiếp',
+            'invoice_file_path' => $request->hasFile('invoice_pdf') ? $request->file('invoice_pdf')->store('invoices', 'public') : null,
             'recorded_by' => 'Admin',
         ]);
 
@@ -109,9 +113,10 @@ class InvoiceApiController extends Controller
             'payment_method' => 'required|string|in:bank_transfer,cash,pos,momo',
             'paid_at' => 'required|date',
             'note' => 'nullable|string',
+            'invoice_pdf' => 'nullable|file|mimetypes:application/pdf|max:10240',
         ]);
 
-        DB::transaction(function () use ($invoice, $validated): void {
+        DB::transaction(function () use ($invoice, $request, $validated): void {
             $delta = $validated['sessions_added'] - $invoice->sessions_added;
             $student = $invoice->student;
 
@@ -128,6 +133,7 @@ class InvoiceApiController extends Controller
                 'payment_method' => $validated['payment_method'],
                 'paid_at' => $validated['paid_at'],
                 'note' => $validated['note'] ?? null,
+                'invoice_file_path' => $request->hasFile('invoice_pdf') ? $request->file('invoice_pdf')->store('invoices', 'public') : $invoice->invoice_file_path,
             ]);
         });
 
@@ -167,9 +173,11 @@ class InvoiceApiController extends Controller
     public function pdf(Invoice $invoice): Response
     {
         $invoice->load(['student', 'course']);
+        $center = CenterStore::findByName($invoice->center ?: $invoice->student?->center);
 
         $pdf = Pdf::loadView('pdf.payment-receipt', [
             'invoice' => $invoice,
+            'center' => $center,
             'brand' => BrandSettings::brand(),
         ])->setPaper('a4')->setOption('isFontSubsettingEnabled', true);
 

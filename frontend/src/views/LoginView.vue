@@ -2,13 +2,14 @@
 import { useBrand } from '../services/useBrand';
 import BrandLogo from '../components/BrandLogo.vue';
 import { ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import { useAuth } from '../services/useAuth';
 import { Lock, Mail, Eye, EyeOff, LogIn } from 'lucide-vue-next';
 
 const { nameParts } = useBrand();
 
 const router = useRouter();
+const route = useRoute();
 const { login } = useAuth();
 
 const email = ref('');
@@ -30,7 +31,9 @@ const handleLogin = async () => {
       email: email.value,
       password: password.value,
     });
-    router.push('/');
+    // Quay lại trang đang mở trước khi đăng nhập (vd giáo viên quét QR check-in khi chưa đăng nhập)
+    const redirect = route.query.redirect;
+    router.push(typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : '/');
   } catch (err) {
     error.value = err.response?.data?.message || 'Đăng nhập không thành công. Vui lòng kiểm tra lại.';
   } finally {

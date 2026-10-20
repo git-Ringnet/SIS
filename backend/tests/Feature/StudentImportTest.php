@@ -8,6 +8,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Laravel\Sanctum\Sanctum;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 use Tests\TestCase;
 
 class StudentImportTest extends TestCase
@@ -20,27 +21,62 @@ class StudentImportTest extends TestCase
         Sanctum::actingAs(User::factory()->create());
     }
 
-    public function test_can_download_student_excel_template(): void
+    public function test_can_download_student_excel_template_with_guide(): void
     {
         $response = $this->get('/api/students/template');
 
         $response->assertStatus(200);
-        $response->assertHeader('Content-Disposition', 'attachment; filename=students_template.xlsx');
+        $response->assertHeader('Content-Disposition', 'attachment; filename=mau_nhap_hoc_vien.xlsx');
+
+        $path = tempnam(sys_get_temp_dir(), 'tpl');
+        file_put_contents($path, $response->streamedContent());
+        $book = IOFactory::load($path);
+
+        // Mở file là thấy sheet hướng dẫn; sheet nhập liệu chỉ có tiêu đề (không có dòng mẫu bị import nhầm)
+        $this->assertSame(['Hướng dẫn', 'Học viên'], $book->getSheetNames());
+        $data = $book->getSheetByName('Học viên');
+        $this->assertSame('Họ tên học viên *', $data->getCell('A1')->getValue());
+        $this->assertSame('SĐT phụ huynh *', $data->getCell('B1')->getValue());
+        $this->assertSame('', (string) $data->getCell('A2')->getValue());
+        $this->assertStringContainsString('BẮT BUỘC', $data->getComment('A1')->getText()->getPlainText());
     }
 
-    public function test_can_import_students_from_downloaded_excel_template(): void
+    public function test_can_import_filled_excel_template_and_reports_skipped_rows(): void
     {
-        $content = $this->get('/api/students/template')->streamedContent();
-        $file = UploadedFile::fake()->createWithContent('students_template.xlsx', $content);
+        Course::create(['code' => 'G', 'name' => 'Guitar cơ bản', 'price' => 2000000, 'default_sessions' => 16, 'is_active' => true]);
 
-        $response = $this->postJson('/api/students/import', ['csv_file' => $file]);
+        $path = tempnam(sys_get_temp_dir(), 'tpl');
+        file_put_contents($path, $this->get('/api/students/template')->streamedContent());
+        $book = IOFactory::load($path);
+        $sheet = $book->getSheetByName('Học viên');
+        // Họ tên, SĐT PH, Tên PH, Giới tính, Ngày sinh, Email, Zalo, Địa chỉ, Cơ sở, Khóa học, Số buổi, Ngày nhập học, Trạng thái, Lịch học, GV, Phòng, Ghi chú
+        $sheet->fromArray([
+            ['Bé An', '0908168815', 'Chị Lan', 'Nữ', '15/03/2015', '', '', '', '', 'guitar cơ bản', '', '01/10/2026', 'Tạm dừng', 'Thu 6 17:30-19:00; CN 08:00-09:30', 'Cô Mai', 'G1', ''],
+            ['Bé Bình', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+            ['', '0901111111', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+        ], null, 'A2', true);
+        IOFactory::createWriter($book, 'Xlsx')->save($path);
 
-        $response->assertStatus(200)->assertJson(['imported_count' => 1]);
-        $this->assertDatabaseHas('students', [
-            'name' => 'VÕ MINH AN',
-            'parent_phone' => '0908168815',
-            'dob' => '2015-03-15',
+        $response = $this->postJson('/api/students/import', [
+            'csv_file' => UploadedFile::fake()->createWithContent('mau.xlsx', file_get_contents($path)),
         ]);
+
+        $response->assertOk()
+            ->assertJsonPath('imported_count', 1)
+            ->assertJsonPath('skipped.0.row', 3)
+            ->assertJsonPath('skipped.0.reason', 'Thiếu SĐT phụ huynh')
+            ->assertJsonPath('skipped.1.reason', 'Thiếu Họ tên học viên');
+
+        $an = Student::where('name', 'Bé An')->first();
+        $this->assertSame('Nữ', $an->gender);
+        $this->assertSame('paused', $an->status);
+        $this->assertSame(16, $an->total_sessions); // số buổi mặc định của khóa
+        $this->assertSame([5, 0], $an->class_days); // Thứ 6 + CN (không bị hiểu nhầm thành Thứ 5), sắp T2 → CN
+        $this->assertSame(['17:30', '08:00'], collect($an->schedules)->pluck('start')->all()); // mỗi ca giờ riêng
+        $this->assertSame('17:30', $an->class_start_time);
+        $this->assertSame('19:00', $an->class_end_time);
+        $this->assertSame('Cô Mai', $an->teacher);
+        $this->assertSame('2015-03-15', $an->dob->toDateString());
     }
 
     public function test_can_import_students_from_csv(): void

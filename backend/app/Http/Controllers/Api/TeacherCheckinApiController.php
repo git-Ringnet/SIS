@@ -3,65 +3,80 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Attendance;
+use App\Models\Course;
 use App\Models\Student;
+use App\Support\ActivityLogger;
 use App\Support\CenterStore;
+use App\Support\CheckinToken;
+use App\Support\PagePermissions;
 use App\Support\ShiftTime;
+use App\Support\StudentSchedule;
+use App\Support\TeacherLeaves;
+use App\Support\TeacherName;
+use App\Support\TeacherRates;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class TeacherCheckinApiController extends Controller
 {
-    private function getCheckinsPath(): string
-    {
-        return 'teacher_checkins.json';
-    }
+    // Check-in muộn hơn giờ vào ca quá số phút này thì tính là đi trễ
+    private const LATE_GRACE_MINUTES = 5;
 
-    private function getRatesPath(): string
-    {
-        return 'shift_rates.json';
-    }
+    // Trạng thái được tính công (có thù lao)
+    private const PAID_STATUSES = ['checked_in', 'late', 'substitute'];
+
+    private const PATH = 'teacher_checkins.json';
 
     /**
      * Sinh ca dạy của ngày từ lịch học cố định của học viên (giáo viên + giờ + phòng + trung tâm).
-     * Ca chưa check-in được cập nhật lại theo danh sách học viên hiện tại (thêm / bớt học viên,
-     * đổi loại ca, đơn giá), ca không còn học viên thì bỏ. Ca đã check-in / báo vắng giữ nguyên làm lịch sử.
+     * Ca chưa check-in được cập nhật lại theo danh sách học viên hiện tại (thêm / bớt học viên, đổi loại ca),
+     * ca không còn học viên thì bỏ. Ca đã check-in / báo vắng giữ nguyên làm lịch sử.
      */
-    private function syncScheduledShifts(string $date, array $shifts, array $rates): array
+    private function syncScheduledShifts(string $date, array $shifts): array
     {
         $carbonDate = Carbon::parse($date);
         $students = Student::with('course')
             ->where('status', 'active')
-            ->whereNotNull('teacher')
-            ->whereNotNull('class_start_time')
             ->whereJsonContains('class_days', $carbonDate->dayOfWeek)
             ->orderBy('name')
             ->get();
 
-        // Ca cần có trong ngày, theo schedule_key
-        $planned = [];
-        foreach ($students->groupBy(fn ($st) => implode('|', [$st->teacher, $st->class_start_time, $st->room, $st->center])) as $group) {
-            $first = $group->first();
-            $isOneOnOne = $group->count() === 1;
-            $time = $first->class_start_time.($first->class_end_time ? ' - '.$first->class_end_time : '');
-            $courseName = $first->course?->name ?? 'Lớp học';
+        // Từng ca của học viên trong ngày; ca có giáo viên mới sinh ca dạy
+        $entries = $students->flatMap(fn ($st) => array_map(
+            fn ($slot) => ['student' => $st, 'slot' => $slot],
+            array_filter(StudentSchedule::slotsOn($st, $carbonDate->dayOfWeek), fn ($slot) => ! empty($slot['teacher'])),
+        ));
 
-            $planned[$date.'|'.implode('|', [$first->teacher, $first->class_start_time, $first->room, $first->center])] = [
+        // Ca dạy = gom các học viên cùng giáo viên + giờ + phòng + cơ sở
+        $planned = [];
+        foreach ($entries->groupBy(fn ($e) => implode('|', [$e['slot']['teacher'], $e['slot']['start'], $e['slot']['room'], $e['student']->center])) as $group) {
+            $first = $group->first();
+            $slot = $first['slot'];
+            $st = $first['student'];
+            $isOneOnOne = $group->count() === 1;
+            $item = StudentSchedule::courseItemForSlot($st, $slot['id']);
+            $courseName = $item['course_name'] ?? $st->course?->name ?? 'Lớp học';
+
+            $planned[$date.'|'.implode('|', [$slot['teacher'], $slot['start'], $slot['room'], $st->center])] = [
                 'date' => $date,
                 'day_of_week' => $carbonDate->dayOfWeek === 0 ? 'CN' : 'Thứ '.($carbonDate->dayOfWeek + 1),
-                'teacher_name' => $first->teacher,
-                'shift_name' => ShiftTime::label($first->class_start_time).' '.$time,
-                'start_time' => $first->class_start_time,
-                'end_time' => $first->class_end_time,
+                'teacher_name' => $slot['teacher'],
+                'shift_name' => ShiftTime::label($slot['start']).' '.StudentSchedule::timeLabel($slot),
+                'start_time' => $slot['start'],
+                'end_time' => $slot['end'],
                 'class_name' => $isOneOnOne
-                    ? "{$courseName} 1:1 - {$first->name}"
+                    ? "{$courseName} 1:1 - {$st->name}"
                     : "{$courseName} nhóm ({$group->count()} bạn)",
-                'room' => $first->room,
+                'room' => $slot['room'],
                 'type' => $isOneOnOne ? 'Ca 1-1' : 'Ca nhóm',
-                'center' => $first->center ?: CenterStore::defaultName(),
-                'rate' => $isOneOnOne ? ($rates['one_on_one'] ?? 0) : ($rates['group'] ?? 0),
+                'center' => $st->center ?: CenterStore::defaultName(),
+                'course_id' => $item['course_id'] ?? $st->course_id,
+                'student_ids' => $group->map(fn ($e) => $e['student']->id)->values()->all(),
             ];
         }
 
@@ -109,42 +124,120 @@ class TeacherCheckinApiController extends Controller
         return $result;
     }
 
-    private function loadRates(): array
+    /**
+     * Áp nghỉ phép / dạy thay theo khoảng ngày lên các ca chưa check-in (chỉ để hiển thị, không lưu).
+     * Dạy thay ưu tiên hơn nghỉ phép: giáo viên gốc nghỉ, người dạy thay vào ca.
+     */
+    private function withPeriods(array $shift, array $periods): array
     {
-        $path = $this->getRatesPath();
-        if (Storage::exists($path)) {
-            $data = json_decode(Storage::get($path), true);
-            if (is_array($data)) {
-                return $data;
-            }
+        if (($shift['status'] ?? 'not_checked_in') !== 'not_checked_in') {
+            return $shift;
         }
 
-        $default = [
-            'one_on_one' => 150000, // Ca 1-1 (60 phút): 150.000 đ
-            'group' => 220000,      // Ca nhóm (90 phút): 220.000 đ
-            'trial' => 100000,      // Ca dạy thử / test: 100.000 đ
-        ];
-        Storage::put($path, json_encode($default, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        if (empty($shift['substitute_teacher'])
+            && $sub = TeacherLeaves::substitutionFor($shift['teacher_name'], $shift['date'], $periods)) {
+            return [...$shift, 'substitute_teacher' => $sub['substitute'], 'period_note' => $sub['reason'] ?: 'Phân công dạy thay'];
+        }
 
-        return $default;
+        if (empty($shift['substitute_teacher'])
+            && $leave = TeacherLeaves::leaveFor($shift['teacher_name'], $shift['date'], $periods)) {
+            return [...$shift, 'status' => 'excused_absence', 'on_leave' => true, 'period_note' => $leave['reason'] ?: 'Nghỉ phép'];
+        }
+
+        return $shift;
+    }
+
+    /**
+     * Người được trả thù lao cho ca: người dạy thay nếu có, ngược lại giáo viên gốc.
+     */
+    private function earner(array $shift): ?string
+    {
+        return ($shift['substitute_teacher'] ?? null) ?: ($shift['teacher_name'] ?? null);
+    }
+
+    /**
+     * Thù lao của một ca đã tính công. Kiểu "theo lượt HV" = đơn giá × số học viên có mặt (theo Điểm danh).
+     */
+    private function amount(array $shift, array $presentByDate): float
+    {
+        if (! in_array($shift['status'] ?? null, self::PAID_STATUSES, true)) {
+            return 0;
+        }
+        if (! isset($shift['unit_rate'])) {
+            return (float) ($shift['rate'] ?? 0); // ca cũ, trước khi có đơn giá theo giáo viên
+        }
+        $present = count(array_intersect($shift['student_ids'] ?? [], $presentByDate[$shift['date']] ?? []));
+        if (($shift['pay_mode'] ?? 'per_shift') === 'per_student') {
+            return $shift['unit_rate'] * $present;
+        }
+        if (($shift['pay_mode'] ?? null) === 'free') {
+            return TeacherRates::freeAmount($shift, $present);
+        }
+
+        return (float) $shift['unit_rate'];
+    }
+
+    /**
+     * Học viên có mặt theo ngày (để tính ca "theo lượt HV").
+     *
+     * @return array<string, list<int>>
+     */
+    private function presentByDate(array $shifts): array
+    {
+        $dates = collect($shifts)->filter(fn ($s) => in_array($s['pay_mode'] ?? null, ['per_student', 'free'], true))->pluck('date')->unique();
+        if ($dates->isEmpty()) {
+            return [];
+        }
+
+        return Attendance::where('status', 'present')
+            ->where(function ($q) use ($dates) {
+                foreach ($dates as $d) {
+                    $q->orWhereDate('attended_at', $d);
+                }
+            })
+            ->get(['student_id', 'attended_at'])
+            ->groupBy(fn ($a) => $a->attended_at->toDateString())
+            ->map(fn ($g) => $g->pluck('student_id')->all())
+            ->all();
     }
 
     private function loadCheckins(): array
     {
-        $path = $this->getCheckinsPath();
-        if (Storage::exists($path)) {
-            $data = json_decode(Storage::get($path), true);
-            if (is_array($data)) {
-                return $data;
-            }
-        }
+        $data = Storage::exists(self::PATH) ? json_decode(Storage::get(self::PATH), true) : null;
 
-        return [];
+        return is_array($data) ? $data : [];
     }
 
     private function saveCheckins(array $shifts): void
     {
-        Storage::put($this->getCheckinsPath(), json_encode($shifts, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        Storage::put(self::PATH, json_encode($shifts, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
+     * Tên giáo viên (theo màn Nhân sự) nếu tài khoản đang đăng nhập là giáo viên, ngược lại null.
+     */
+    private function ownTeacherName(Request $request): ?string
+    {
+        return PagePermissions::isTeacher($request->user())
+            ? (PagePermissions::member($request->user())['name'] ?? '')
+            : null;
+    }
+
+    /**
+     * Ca có liên quan tới giáo viên: là giáo viên gốc (không bị thay) hoặc là người dạy thay.
+     */
+    private function belongsTo(array $shift, string $teacher): bool
+    {
+        return ! empty($shift['substitute_teacher'])
+            ? TeacherName::same($shift['substitute_teacher'], $teacher)
+            : TeacherName::same($shift['teacher_name'], $teacher);
+    }
+
+    private function forbidTeacher(Request $request): ?JsonResponse
+    {
+        return PagePermissions::isTeacher($request->user())
+            ? response()->json(['message' => 'Giáo viên không thể thực hiện thao tác này. Vui lòng báo quản lý.'], 403)
+            : null;
     }
 
     public function index(Request $request): JsonResponse
@@ -155,76 +248,47 @@ class TeacherCheckinApiController extends Controller
         $shiftType = $request->input('shift_type', 'all');
         $shiftTime = $request->input('shift_time', 'all');
         $teacherName = $request->input('teacher_name', 'all');
+        // Giáo viên chỉ xem ca dạy của chính mình (kể cả ca được phân công dạy thay)
+        $ownName = $this->ownTeacherName($request);
+        if ($ownName !== null) {
+            $teacherName = $ownName;
+        }
 
-        $rates = $this->loadRates();
-        $shifts = $this->syncScheduledShifts($date, $this->loadCheckins(), $rates);
+        $periods = TeacherLeaves::all();
+        $shifts = array_map(
+            fn ($s) => $this->withPeriods($s, $periods),
+            $this->syncScheduledShifts($date, $this->loadCheckins()),
+        );
 
-        // Tên thứ theo ngày
         $carbonDate = Carbon::parse($date);
-        $dayOfWeekVi = match ($carbonDate->dayOfWeek) {
-            0 => 'CN',
-            1 => 'Thứ 2',
-            2 => 'Thứ 3',
-            3 => 'Thứ 4',
-            4 => 'Thứ 5',
-            5 => 'Thứ 6',
-            6 => 'Thứ 7',
-        };
+        $dayOfWeekVi = $carbonDate->dayOfWeek === 0 ? 'CN' : 'Thứ '.($carbonDate->dayOfWeek + 1);
 
-        // Lọc các ca dạy trong ngày được chọn
-        $todayShifts = array_filter($shifts, function ($s) use ($date, $center, $shiftType, $shiftTime, $teacherName) {
-            if ($s['date'] !== $date) {
-                return false;
-            }
-            if ($center !== 'all' && $s['center'] !== $center) {
-                return false;
-            }
-            if ($shiftType !== 'all' && $s['type'] !== $shiftType) {
-                return false;
-            }
-            if ($teacherName !== 'all' && $s['teacher_name'] !== $teacherName) {
-                return false;
-            }
-            if ($shiftTime !== 'all' && ShiftTime::of($s['start_time'] ?? null) !== $shiftTime) {
-                return false;
-            }
+        $todayShifts = array_values(array_filter($shifts, function ($s) use ($date, $center, $shiftType, $shiftTime, $teacherName) {
+            return $s['date'] === $date
+                && ($center === 'all' || $s['center'] === $center)
+                && ($shiftType === 'all' || $s['type'] === $shiftType)
+                && ($teacherName === 'all' || $this->belongsTo($s, $teacherName) || TeacherName::same($s['teacher_name'], $teacherName))
+                && ($shiftTime === 'all' || ShiftTime::of($s['start_time'] ?? null) === $shiftTime);
+        }));
 
-            return true;
-        });
-        $todayShifts = array_values($todayShifts);
-
-        // Đếm các chỉ số trong ngày
         $todayStats = [
             'total' => count($todayShifts),
-            'checked_in' => count(array_filter($todayShifts, fn ($s) => in_array($s['status'], ['checked_in', 'late']))),
+            'checked_in' => count(array_filter($todayShifts, fn ($s) => in_array($s['status'], ['checked_in', 'late', 'substitute']))),
             'skipped' => count(array_filter($todayShifts, fn ($s) => $s['status'] === 'skipped')),
             'excused_absence' => count(array_filter($todayShifts, fn ($s) => $s['status'] === 'excused_absence')),
-            'late' => count(array_filter($todayShifts, fn ($s) => $s['status'] === 'late')),
-            'substitute' => count(array_filter($todayShifts, fn ($s) => $s['status'] === 'substitute')),
+            'late' => count(array_filter($todayShifts, fn ($s) => ($s['minutes_late'] ?? 0) > 0)),
+            'substitute' => count(array_filter($todayShifts, fn ($s) => ! empty($s['substitute_teacher']))),
         ];
 
-        // Lọc ca dạy trong tháng cho bảng tổng kết tháng
-        $monthlyShifts = array_filter($shifts, function ($s) use ($month, $center) {
-            if (! str_starts_with($s['date'], $month)) {
-                return false;
-            }
-            if ($center !== 'all' && $s['center'] !== $center) {
-                return false;
-            }
-
-            return in_array($s['status'], ['checked_in', 'late', 'substitute']);
-        });
-        $monthlyShifts = array_values($monthlyShifts);
-
-        // Tính tổng tiền trả giáo viên trong tháng
-        $totalSalary = array_reduce($monthlyShifts, function ($carry, $s) {
-            return $carry + ($s['rate'] ?? 0);
-        }, 0);
-
-        // Giáo viên có ca dạy (kể cả ca sinh từ lịch học viên)
-        $teachers = collect($shifts)->pluck('teacher_name')->filter()->unique()->sort()->values()->all();
-
-        $centers = CenterStore::names();
+        // Bảng tổng kết tháng: các ca đã tính công, thù lao tính cho người thực dạy
+        $monthlyShifts = array_values(array_filter($shifts, function ($s) use ($month, $center, $ownName) {
+            return str_starts_with($s['date'], $month)
+                && in_array($s['status'], self::PAID_STATUSES, true)
+                && ($center === 'all' || $s['center'] === $center)
+                && ($ownName === null || TeacherName::same($this->earner($s), $ownName));
+        }));
+        $present = $this->presentByDate($monthlyShifts);
+        $monthlyShifts = array_map(fn ($s) => [...$s, 'earner' => $this->earner($s), 'amount' => $this->amount($s, $present)], $monthlyShifts);
 
         return response()->json([
             'date' => $date,
@@ -233,75 +297,180 @@ class TeacherCheckinApiController extends Controller
             'today_shifts' => $todayShifts,
             'monthly_summary' => [
                 'month' => $month,
-                'total_salary' => $totalSalary,
+                'total_salary' => array_sum(array_column($monthlyShifts, 'amount')),
                 'total_shifts' => count($monthlyShifts),
                 'shifts' => $monthlyShifts,
             ],
-            'rates' => $rates,
-            'teachers' => $teachers,
-            'centers' => $centers,
+            'teachers' => $ownName !== null ? [$ownName] : TeacherName::all(),
+            'centers' => CenterStore::names(),
         ]);
+    }
+
+    /**
+     * Số phút check-in muộn hơn giờ vào ca (0 nếu đến sớm / đúng giờ hoặc ca không có giờ).
+     */
+    private function minutesLate(?string $startTime, string $checkTime): int
+    {
+        if (! $startTime) {
+            return 0;
+        }
+        [$sh, $sm] = array_map('intval', explode(':', $startTime) + [0, 0]);
+        [$ch, $cm] = array_map('intval', explode(':', $checkTime) + [0, 0]);
+
+        return max(0, ($ch * 60 + $cm) - ($sh * 60 + $sm));
     }
 
     public function checkin(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'shift_id' => 'required|integer',
-            'checkin_time' => 'nullable|string',
-            'is_late' => 'nullable|boolean',
-            'minutes_late' => 'nullable|integer',
+            'checkin_time' => 'nullable|date_format:H:i',
+            // Mã QR đang hiện ở quầy của cơ sở (bắt buộc với giáo viên tự check-in)
+            'qr_token' => 'nullable|string|max:64',
+            'qr_center' => 'nullable|string|max:255',
         ]);
 
         $shifts = $this->loadCheckins();
-        $found = false;
+        $periods = TeacherLeaves::all();
+        $ownName = $this->ownTeacherName($request);
+        $logged = null;
 
-        foreach ($shifts as &$s) {
-            if ($s['id'] === $validated['shift_id']) {
-                $checkTime = ($validated['checkin_time'] ?? null) ?: Carbon::now()->format('H:i');
-                $isLate = $validated['is_late'] ?? false;
-                $mins = $validated['minutes_late'] ?? ($isLate ? 15 : 0);
-
-                $s['status'] = $isLate ? 'late' : 'checked_in';
-                $s['checkin_time'] = $checkTime;
-                $s['minutes_late'] = $mins;
-                $found = true;
-                break;
+        foreach ($shifts as &$stored) {
+            if ($stored['id'] !== $validated['shift_id']) {
+                continue;
             }
-        }
 
-        if (! $found) {
+            $s = $this->withPeriods($stored, $periods);
+            $isToday = Carbon::parse($s['date'])->isToday();
+            if ($ownName !== null && (! $isToday || ! $this->belongsTo($s, $ownName))) {
+                return response()->json(['message' => 'Bạn chỉ có thể check-in ca dạy của mình trong ngày hôm nay.'], 403);
+            }
+            // Giáo viên tự check-in phải quét mã QR còn hạn của đúng cơ sở dạy (chống check-in từ xa).
+            // Quản lý / lễ tân check-in hộ thì không cần mã. Cơ sở có thể bỏ bắt buộc QR cho giáo viên "Dạy tự do".
+            $isFreeTeacher = (TeacherRates::forTeacher($ownName)['mode'] ?? null) === 'free' && ($s['type'] ?? '') !== 'Ca 1-1';
+            $needsQr = ! ($isFreeTeacher && ! TeacherRates::freeRequiresQr($s['center'] ?? null));
+            if ($ownName !== null && $needsQr) {
+                if (! CheckinToken::isValid($validated['qr_center'] ?? null, $validated['qr_token'] ?? null)) {
+                    return response()->json(['message' => 'Mã QR không hợp lệ hoặc đã hết hạn. Hãy quét lại mã QR đang hiện tại quầy của trung tâm.'], 403);
+                }
+                if (($s['center'] ?? null) !== $validated['qr_center']) {
+                    return response()->json(['message' => "Ca này dạy tại {$s['center']}, bạn đang quét mã QR của {$validated['qr_center']}."], 403);
+                }
+            }
+            if (! empty($s['on_leave'])) {
+                return response()->json(['message' => "{$s['teacher_name']} đang nghỉ phép ngày này, không check-in được ca này."], 422);
+            }
+            if ($s['status'] !== 'not_checked_in') {
+                return response()->json(['message' => 'Ca dạy này đã được ghi nhận trước đó.'], 422);
+            }
+
+            // Ghi bù cho ngày đã qua (không biết giờ đến thật) thì tính đúng giờ vào ca
+            $checkTime = ($validated['checkin_time'] ?? null)
+                ?: ($isToday ? Carbon::now()->format('H:i') : ($s['start_time'] ?? Carbon::now()->format('H:i')));
+            $mins = $this->minutesLate($s['start_time'] ?? null, $checkTime);
+            $isLate = $mins > self::LATE_GRACE_MINUTES;
+            $substitute = $s['substitute_teacher'] ?? null;
+            $earner = $substitute ?: $s['teacher_name'];
+
+            // Chốt đơn giá tại thời điểm check-in: đổi đơn giá sau này không ảnh hưởng ca đã tính
+            $stored = [
+                ...$stored,
+                ...TeacherRates::quote($earner, $s['course_id'] ?? null, ($s['type'] ?? '') === 'Ca 1-1', $s['center'] ?? null),
+                'status' => $substitute ? 'substitute' : ($isLate ? 'late' : 'checked_in'),
+                'substitute_teacher' => $substitute,
+                'checkin_time' => $checkTime,
+                'minutes_late' => $isLate ? $mins : 0,
+                'checked_in_by' => $request->user()?->name,
+                'checkin_method' => $ownName === null ? 'manual' : ($needsQr ? 'qr' : 'self'),
+                'checked_in_at' => Carbon::now()->toDateTimeString(),
+            ];
+            $logged = $stored;
+            break;
+        }
+        unset($stored);
+
+        if (! $logged) {
             return response()->json(['message' => 'Không tìm thấy ca dạy!'], 404);
         }
 
         $this->saveCheckins($shifts);
 
+        $who = $this->earner($logged);
+        $timing = $logged['minutes_late'] > 0 ? "trễ {$logged['minutes_late']} phút" : 'đúng giờ';
+        ActivityLogger::log('updated', 'teacher_checkin', "{$who} – {$logged['shift_name']}", $logged['id'],
+            ActivityLogger::diff(['status' => 'Chưa check-in'], [
+                'status' => ($logged['status'] === 'substitute' ? 'Dạy thay, ' : '').$timing,
+                'note' => "Check-in lúc {$logged['checkin_time']} ngày {$logged['date']}",
+            ]), $logged['center'] ?? null);
+
         return response()->json([
-            'message' => 'Check-in ca dạy thành công!',
+            'message' => "Đã check-in {$who} lúc {$logged['checkin_time']}, {$timing}.",
         ]);
     }
 
+    /**
+     * Mã QR hiện tại của một cơ sở, cho màn hình QR đặt ở quầy (quản lý / lễ tân mở).
+     */
+    public function qrToken(Request $request): JsonResponse
+    {
+        if ($denied = $this->forbidTeacher($request)) {
+            return $denied;
+        }
+
+        $centers = CenterStore::names();
+        $center = $request->input('center') ?: CenterStore::defaultName();
+        if (! in_array($center, $centers, true)) {
+            return response()->json(['message' => 'Không tìm thấy cơ sở.'], 404);
+        }
+
+        return response()->json([
+            'center' => $center,
+            'centers' => $centers,
+            'window_seconds' => CheckinToken::WINDOW_SECONDS,
+            ...CheckinToken::current($center),
+        ]);
+    }
+
+    /**
+     * Ghi nhận cho từng ca: bỏ dạy, vắng có phép, hoặc đổi người dạy thay cho riêng ca này.
+     */
     public function recordAbsence(Request $request): JsonResponse
     {
+        if ($denied = $this->forbidTeacher($request)) {
+            return $denied;
+        }
+
         $validated = $request->validate([
             'shift_id' => 'required|integer',
             'status' => 'required|string|in:skipped,excused_absence,substitute',
-            'substitute_teacher' => 'nullable|string',
-            'reason' => 'nullable|string',
+            'substitute_teacher' => 'required_if:status,substitute|nullable|string|max:255',
+            'reason' => 'nullable|string|max:255',
         ]);
 
         $shifts = $this->loadCheckins();
         $found = false;
 
         foreach ($shifts as &$s) {
-            if ($s['id'] === $validated['shift_id']) {
-                $s['status'] = $validated['status'];
-                if ($validated['status'] === 'substitute' && ! empty($validated['substitute_teacher'])) {
-                    $s['substitute_teacher'] = $validated['substitute_teacher'];
-                }
-                $found = true;
-                break;
+            if ($s['id'] !== $validated['shift_id']) {
+                continue;
             }
+            if (! in_array($s['status'] ?? 'not_checked_in', ['not_checked_in', 'skipped', 'excused_absence'], true)) {
+                return response()->json(['message' => 'Ca dạy này đã check-in, không đổi được.'], 422);
+            }
+
+            if ($validated['status'] === 'substitute') {
+                // Người dạy thay sẽ tự check-in ca này; tiền ca tính theo đơn giá của người dạy thay
+                $s['status'] = 'not_checked_in';
+                $s['substitute_teacher'] = $validated['substitute_teacher'];
+            } else {
+                $s['status'] = $validated['status'];
+                $s['substitute_teacher'] = null;
+            }
+            $s['note'] = $validated['reason'] ?? null;
+            $found = true;
+            break;
         }
+        unset($s);
 
         if (! $found) {
             return response()->json(['message' => 'Không tìm thấy ca dạy!'], 404);
@@ -310,58 +479,134 @@ class TeacherCheckinApiController extends Controller
         $this->saveCheckins($shifts);
 
         return response()->json([
-            'message' => 'Cập nhật trạng thái vắng / dạy thay thành công!',
+            'message' => $validated['status'] === 'substitute'
+                ? "Đã phân công {$validated['substitute_teacher']} dạy thay ca này."
+                : 'Đã cập nhật trạng thái ca dạy.',
         ]);
+    }
+
+    /**
+     * Cấu hình đơn giá: mỗi giáo viên một kiểu tính + đơn giá chung + đơn giá theo khoá học được gán.
+     */
+    public function rates(Request $request): JsonResponse
+    {
+        if ($denied = $this->forbidTeacher($request)) {
+            return $denied;
+        }
+
+        $saved = TeacherRates::all();
+        $courses = Course::pluck('name', 'id');
+
+        $teachers = array_map(function ($name) use ($saved, $courses) {
+            $cfg = $saved[TeacherName::key($name)] ?? [];
+            // Khoá học được gán = khoá của các học viên có giáo viên này trong lịch học
+            $courseIds = Student::whereNotNull('teacher')->get(['teacher', 'course_id'])
+                ->filter(fn ($st) => TeacherName::same($st->teacher, $name))
+                ->pluck('course_id')->unique()->filter()->values();
+
+            return [
+                'name' => $name,
+                'mode' => $cfg['mode'] ?? 'per_shift',
+                'group' => (float) ($cfg['group'] ?? 0),
+                'one_on_one' => (float) ($cfg['one_on_one'] ?? 0),
+                'free' => [
+                    'threshold' => $cfg['free']['threshold'] ?? null,
+                    'per_student' => $cfg['free']['per_student'] ?? null,
+                    'per_shift' => $cfg['free']['per_shift'] ?? null,
+                ],
+                'courses' => $courseIds->map(fn ($id) => [
+                    'course_id' => $id,
+                    'name' => $courses[$id] ?? "Khoá #{$id}",
+                    'group' => $cfg['courses'][(string) $id]['group'] ?? null,
+                    'one_on_one' => $cfg['courses'][(string) $id]['one_on_one'] ?? null,
+                ])->all(),
+            ];
+        }, TeacherName::all());
+
+        return response()->json(['teachers' => $teachers]);
     }
 
     public function updateRates(Request $request): JsonResponse
     {
+        if ($denied = $this->forbidTeacher($request)) {
+            return $denied;
+        }
+
         $validated = $request->validate([
-            'one_on_one' => 'required|numeric|min:0',
-            'group' => 'required|numeric|min:0',
-            'trial' => 'required|numeric|min:0',
+            'teachers' => 'present|array',
+            'teachers.*.name' => 'required|string|max:255',
+            'teachers.*.mode' => ['required', Rule::in(TeacherRates::MODES)],
+            'teachers.*.group' => 'nullable|numeric|min:0',
+            'teachers.*.one_on_one' => 'nullable|numeric|min:0',
+            'teachers.*.free.threshold' => 'nullable|integer|min:1',
+            'teachers.*.free.per_student' => 'nullable|numeric|min:0',
+            'teachers.*.free.per_shift' => 'nullable|numeric|min:0',
+            'teachers.*.courses' => 'nullable|array',
+            'teachers.*.courses.*.course_id' => 'required|integer',
+            'teachers.*.courses.*.group' => 'nullable|numeric|min:0',
+            'teachers.*.courses.*.one_on_one' => 'nullable|numeric|min:0',
         ]);
 
-        Storage::put($this->getRatesPath(), json_encode($validated, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        $before = TeacherRates::all();
+        $teachers = $before;
+        foreach ($validated['teachers'] as $t) {
+            $courses = [];
+            foreach ($t['courses'] ?? [] as $c) {
+                if (($c['group'] ?? null) !== null || ($c['one_on_one'] ?? null) !== null) {
+                    $courses[(string) $c['course_id']] = [
+                        'group' => isset($c['group']) ? (float) $c['group'] : null,
+                        'one_on_one' => isset($c['one_on_one']) ? (float) $c['one_on_one'] : null,
+                    ];
+                }
+            }
+            $teachers[TeacherName::key($t['name'])] = [
+                'name' => $t['name'],
+                'mode' => $t['mode'],
+                'group' => (float) ($t['group'] ?? 0),
+                'one_on_one' => (float) ($t['one_on_one'] ?? 0),
+                'free' => [
+                    'threshold' => isset($t['free']['threshold']) ? (int) $t['free']['threshold'] : null,
+                    'per_student' => isset($t['free']['per_student']) ? (float) $t['free']['per_student'] : null,
+                    'per_shift' => isset($t['free']['per_shift']) ? (float) $t['free']['per_shift'] : null,
+                ],
+                'courses' => $courses,
+            ];
+        }
 
-        return response()->json([
-            'message' => 'Cập nhật đơn giá ca dạy thành công!',
-            'rates' => $validated,
-        ]);
+        TeacherRates::save($teachers);
+        ActivityLogger::log('updated', 'teacher_checkin', 'Đơn giá ca dạy', null, ActivityLogger::diff(
+            ['note' => count($before).' giáo viên đã cấu hình'],
+            ['note' => count($teachers).' giáo viên đã cấu hình'],
+        ));
+
+        return response()->json(['message' => 'Đã lưu đơn giá ca dạy. Đơn giá mới áp dụng cho các ca check-in từ bây giờ.']);
     }
 
     public function exportMonthly(Request $request): StreamedResponse
     {
         $month = $request->input('month', Carbon::now()->format('Y-m'));
-        $shifts = $this->loadCheckins();
+        $ownName = $this->ownTeacherName($request);
 
-        $monthlyShifts = array_filter($shifts, function ($s) use ($month) {
-            return str_starts_with($s['date'], $month);
-        });
+        $monthlyShifts = array_values(array_filter($this->loadCheckins(), function ($s) use ($month, $ownName) {
+            return str_starts_with($s['date'], $month)
+                && ($ownName === null || TeacherName::same($this->earner($s), $ownName));
+        }));
+        $present = $this->presentByDate($monthlyShifts);
 
         $fileName = 'cham_cong_ca_day_'.str_replace('-', '', $month).'_'.date('Ymd_His').'.csv';
 
-        return response()->streamDownload(function () use ($monthlyShifts) {
+        return response()->streamDownload(function () use ($monthlyShifts, $present) {
             $output = fopen('php://output', 'w');
             fwrite($output, "\xEF\xBB\xBF");
 
             fputcsv($output, [
-                'Ngày',
-                'Giáo viên',
-                'Ca dạy',
-                'Loại ca',
-                'Phòng',
-                'Cơ sở',
-                'Trạng thái',
-                'Giờ check-in',
-                'Trễ (phút)',
-                'Dạy thay bởi',
-                'Thù lao ca dạy (VNĐ)',
+                'Ngày', 'Giáo viên gốc', 'Người dạy', 'Ca dạy', 'Loại ca', 'Phòng', 'Cơ sở', 'Trạng thái',
+                'Giờ check-in', 'Trễ (phút)', 'Kiểu tính', 'Đơn giá (VNĐ)', 'Thù lao ca dạy (VNĐ)',
             ]);
 
             foreach ($monthlyShifts as $s) {
                 $statusVi = match ($s['status']) {
-                    'checked_in' => 'Đã check-in đúng giờ',
+                    'checked_in' => 'Đúng giờ',
                     'late' => 'Đi trễ',
                     'skipped' => 'Bỏ dạy không phép',
                     'excused_absence' => 'Vắng có phép',
@@ -372,6 +617,7 @@ class TeacherCheckinApiController extends Controller
                 fputcsv($output, [
                     Carbon::parse($s['date'])->format('d/m/Y'),
                     $s['teacher_name'],
+                    $this->earner($s),
                     $s['shift_name'],
                     $s['type'],
                     $s['room'],
@@ -379,15 +625,19 @@ class TeacherCheckinApiController extends Controller
                     $statusVi,
                     $s['checkin_time'] ?: '-',
                     $s['minutes_late'] ?: 0,
-                    $s['substitute_teacher'] ?: '-',
-                    $s['rate'],
+                    match ($s['pay_mode'] ?? 'per_shift') {
+                        'per_student' => 'Theo lượt HV',
+                        'free' => 'Dạy tự do (> '.($s['free_threshold'] ?? '-').' HV tính theo lượt)',
+                        default => 'Theo ca',
+                    },
+                    $s['unit_rate'] ?? ($s['rate'] ?? 0),
+                    $this->amount($s, $present),
                 ]);
             }
 
             fclose($output);
         }, $fileName, [
             'Content-Type' => 'text/csv; charset=UTF-8',
-            'Content-Disposition' => 'attachment; filename="'.$fileName.'"',
         ]);
     }
 }

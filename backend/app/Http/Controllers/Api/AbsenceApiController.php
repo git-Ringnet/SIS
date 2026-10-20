@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Attendance;
 use App\Models\MessageTemplate;
 use App\Models\RetentionLog;
 use App\Models\Student;
@@ -10,6 +11,7 @@ use App\Support\CenterStore;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 
 class AbsenceApiController extends Controller
 {
@@ -51,6 +53,9 @@ class AbsenceApiController extends Controller
                     'name' => $s->course->name,
                     'color' => $s->course->color,
                 ] : null,
+                'teacher' => $s->teacher,
+                'room' => $s->room,
+                'assigned_class' => $s->assigned_class,
                 'latest_attendance_date' => $latestAttDate,
                 'notes' => $s->notes,
                 'latest_log' => $s->latestRetentionLog ? [
@@ -79,13 +84,66 @@ class AbsenceApiController extends Controller
 
         $centers = CenterStore::names();
 
+        // Lấy danh sách phòng học theo trung tâm hoặc toàn bộ cơ sở
+        $rooms = array_values(array_unique(array_filter(array_merge(
+            CenterStore::roomNames($center !== 'all' ? $center : null),
+            Student::whereNotNull('room')->where('room', '!=', '')->distinct()->pluck('room')->toArray()
+        ))));
+        if (empty($rooms)) {
+            $rooms = CenterStore::roomNames();
+        }
+
+        // Lấy danh sách giáo viên từ bảng students và staff_data.json
+        $teachers = Student::whereNotNull('teacher')->where('teacher', '!=', '')->distinct()->pluck('teacher')
+            ->flatMap(fn ($t) => array_map('trim', explode(',', $t)))->filter()->unique()->values()->toArray();
+        if (Storage::exists('staff_data.json')) {
+            $staffData = json_decode(Storage::get('staff_data.json'), true);
+            if (! empty($staffData['members'])) {
+                foreach ($staffData['members'] as $m) {
+                    if (! empty($m['name']) && str_contains($m['role'] ?? '', 'Giáo viên')) {
+                        $teachers[] = $m['name'];
+                    }
+                }
+            }
+        }
+        $teachers = array_values(array_unique(array_filter($teachers)));
+
+        // Danh sách đơn xin nghỉ phép từ Cổng phụ huynh
+        $parentLeaveRequests = Attendance::with(['student.course'])
+            ->where('status', 'absent_with_leave')
+            ->where(function ($q) {
+                $q->where('marked_by', 'Phụ huynh (Cổng PH)')
+                    ->orWhere('note', 'like', '%Cổng phụ huynh%');
+            })
+            ->orderBy('attended_at', 'desc')
+            ->limit(30)
+            ->get()
+            ->map(fn ($att) => [
+                'id' => $att->id,
+                'student_id' => $att->student_id,
+                'student_name' => $att->student?->name,
+                'student_code' => $att->student?->code,
+                'teacher' => $att->student?->teacher,
+                'room' => $att->student?->room,
+                'parent_phone' => $att->student?->parent_phone,
+                'parent_name' => $att->student?->parent_name,
+                'course_name' => $att->course?->name ?? $att->student?->course?->name,
+                'leave_date' => $att->attended_at?->format('d/m/Y'),
+                'leave_date_raw' => $att->attended_at?->toDateString(),
+                'reason' => str_replace('PH xin nghỉ qua Cổng phụ huynh: ', '', $att->note ?? ''),
+                'created_at' => $att->created_at?->format('d/m/Y H:i'),
+            ]);
+
         return response()->json([
             'threshold' => $threshold,
             'center' => $center,
             'total' => $studentsFormatted->count(),
             'students' => $studentsFormatted,
+            'parent_leave_requests' => $parentLeaveRequests,
             'templates' => $templates,
             'centers' => $centers,
+            'rooms' => $rooms,
+            'teachers' => $teachers,
         ]);
     }
 

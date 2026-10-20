@@ -38,15 +38,11 @@ const centers = ref([]);
 const rooms = ref([]);
 const days = ref([]);
 
-// Tooltip state for charts
-const hoverActivePoint = ref(null);
-const hoverBarGroup = ref(null);
-const hoverRatePoint = ref(null);
-
 const fetchData = async () => {
   try {
     loading.value = true;
     const res = await reportApi.getReports({
+      period: selectedPeriod.value,
       year: selectedYear.value,
       month: selectedMonth.value,
       center: selectedCenter.value,
@@ -71,6 +67,27 @@ const fetchData = async () => {
 };
 
 onMounted(fetchData);
+
+// ---- Biểu đồ vẽ từ dữ liệu: trục X theo mốc (tháng / ngày), trục Y co giãn theo giá trị lớn nhất ----
+const CHART_W = 1100;
+const CHART_H = 190;
+const niceTop = (max) => Math.max(1, Math.ceil(max / 4)) * 4;
+const yTicks = (top) => [4, 3, 2, 1, 0].map((i) => (top * i) / 4);
+const xPercent = (i, n) => (n <= 1 ? 50 : (i / (n - 1)) * 100);
+// Mốc chưa tới (tương lai) trả về null: không vẽ điểm
+const linePoints = (rows, key, top) =>
+  rows
+    .map((r, i) => ({ i, label: r.label ?? r.month, value: r[key], x: xPercent(i, rows.length) }))
+    .filter((pt) => pt.value !== null && pt.value !== undefined)
+    .map((pt) => ({ ...pt, y: 100 - (pt.value / top) * 100 }));
+const linePath = (pts) => pts.map((pt, i) => `${i ? 'L' : 'M'} ${(pt.x / 100) * CHART_W},${(pt.y / 100) * CHART_H}`).join(' ');
+// Nhiều mốc (theo ngày) thì chỉ hiện nhãn cách quãng cho dễ đọc
+const showXLabel = (i, n) => n <= 12 || i % 2 === 0 || i === n - 1;
+
+const activeTop = computed(() => niceTop(Math.max(0, ...activeTrend.value.map((r) => r.count || 0))));
+const activePoints = computed(() => linePoints(activeTrend.value, 'count', activeTop.value));
+const barTop = computed(() => niceTop(Math.max(0, ...newVsDrop.value.flatMap((r) => [r.new_students || 0, r.drop_students || 0]))));
+const ratePoints = computed(() => linePoints(attendanceRateTrend.value, 'rate', 100));
 
 // Client-side filtering for room slots (instant reactivity)
 const displayedRoomSlots = computed(() => {
@@ -151,8 +168,9 @@ const getBadgeText = (slot) => {
           <label class="block text-xs font-semibold text-slate-700 mb-1.5">Tháng</label>
           <select
             v-model="selectedMonth"
+            :disabled="selectedPeriod === 'year'"
             @change="fetchData"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs sm:text-sm text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            class="disabled:bg-slate-50 disabled:text-slate-400 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs sm:text-sm text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
           >
             <option value="current">Tháng hiện tại</option>
             <option v-for="m in 12" :key="m" :value="m">Tháng {{ m }}</option>
@@ -190,60 +208,37 @@ const getBadgeText = (slot) => {
 
       <!-- Line Chart Container -->
       <div class="relative w-full overflow-x-auto pt-4 pb-2">
-        <div class="min-w-[650px] h-[220px] relative">
-          <!-- Y-Axis labels (0 to 4) -->
-          <div class="absolute left-0 top-0 bottom-6 w-8 flex flex-col justify-between text-[11px] text-slate-400 font-mono select-none">
-            <span>4</span>
-            <span>3</span>
-            <span>2</span>
-            <span>1</span>
-            <span>0</span>
+        <div class="min-w-[650px] relative">
+          <div class="absolute left-0 top-0 h-[190px] w-8 flex flex-col justify-between text-[11px] text-slate-400 font-mono select-none -translate-y-1.5">
+            <span v-for="t in yTicks(activeTop)" :key="t">{{ t }}</span>
           </div>
-
-          <!-- Chart Area -->
           <div class="ml-8 h-[190px] relative border-b border-l border-slate-200">
-            <!-- Grid Lines -->
             <div class="absolute inset-0 flex flex-col justify-between pointer-events-none">
-              <div class="border-b border-dashed border-slate-100 w-full h-0"></div>
-              <div class="border-b border-dashed border-slate-100 w-full h-0"></div>
-              <div class="border-b border-dashed border-slate-100 w-full h-0"></div>
-              <div class="border-b border-dashed border-slate-100 w-full h-0"></div>
+              <div v-for="n in 4" :key="n" class="border-b border-dashed border-slate-100 w-full h-0"></div>
               <div class="w-full h-0"></div>
             </div>
-
-            <!-- SVG Line Graph -->
-            <svg class="w-full h-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 1100 190">
-              <!-- Grid line segments -->
-              <path
-                d="M 0,190 L 700,190 C 750,190 770,30 825,30 L 1100,30"
-                fill="none"
-                stroke="#2563eb"
-                stroke-width="3"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-
-              <!-- Points -->
-              <!-- Month 1-8: count 0 -->
-              <circle cx="0" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="100" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="200" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="300" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="400" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="500" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="600" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="700" cy="190" r="4.5" fill="#2563eb" />
-              <!-- Month 9-12: count 4 -->
-              <circle cx="825" cy="30" r="5" fill="#2563eb" />
-              <circle cx="915" cy="30" r="5" fill="#2563eb" />
-              <circle cx="1005" cy="30" r="5" fill="#2563eb" />
-              <circle cx="1100" cy="30" r="5" fill="#2563eb" />
+            <svg class="absolute inset-0 w-full h-full overflow-visible" preserveAspectRatio="none" :viewBox="`0 0 ${CHART_W} ${CHART_H}`">
+              <path :d="linePath(activePoints)" fill="none" stroke="#2563eb" stroke-width="3" vector-effect="non-scaling-stroke" stroke-linejoin="round" />
             </svg>
+            <div
+              v-for="pt in activePoints"
+              :key="pt.i"
+              class="group absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-600"
+              :style="{ left: `${pt.x}%`, top: `${pt.y}%` }"
+            >
+              <span class="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-0.5 text-[11px] text-white opacity-0 group-hover:opacity-100">
+                {{ pt.label }}: {{ pt.value }} học viên
+              </span>
+            </div>
           </div>
-
-          <!-- X-Axis Labels (Th1 - Th12) -->
-          <div class="ml-8 mt-2 flex justify-between text-[11px] text-slate-500 font-medium select-none px-1">
-            <span v-for="m in 12" :key="m" class="w-8 text-center">Th{{ m }}</span>
+          <div class="ml-8 mt-2 relative h-4 text-[11px] text-slate-500 font-medium select-none">
+            <span
+              v-for="(r, i) in activeTrend"
+              v-show="showXLabel(i, activeTrend.length)"
+              :key="i"
+              class="absolute -translate-x-1/2"
+              :style="{ left: `${xPercent(i, activeTrend.length)}%` }"
+            >{{ r.label ?? r.month }}</span>
           </div>
         </div>
       </div>
@@ -265,60 +260,29 @@ const getBadgeText = (slot) => {
 
       <!-- Bar Chart Container -->
       <div class="relative w-full overflow-x-auto pt-4 pb-2">
-        <div class="min-w-[650px] h-[240px] relative">
-          <!-- Y-Axis labels (0 to 4) -->
-          <div class="absolute left-0 top-0 bottom-10 w-8 flex flex-col justify-between text-[11px] text-slate-400 font-mono select-none">
-            <span>4</span>
-            <span>3</span>
-            <span>2</span>
-            <span>1</span>
-            <span>0</span>
+        <div class="min-w-[650px] relative">
+          <div class="absolute left-0 top-0 h-[190px] w-8 flex flex-col justify-between text-[11px] text-slate-400 font-mono select-none -translate-y-1.5">
+            <span v-for="t in yTicks(barTop)" :key="t">{{ t }}</span>
           </div>
-
-          <!-- Bar Chart Columns -->
-          <div class="ml-8 h-[190px] relative border-b border-l border-slate-200 flex items-end justify-between px-3">
-            <!-- Grid Lines -->
+          <div class="ml-8 h-[190px] relative border-b border-l border-slate-200 flex items-end justify-around px-1">
             <div class="absolute inset-0 flex flex-col justify-between pointer-events-none">
-              <div class="border-b border-dashed border-slate-100 w-full h-0"></div>
-              <div class="border-b border-dashed border-slate-100 w-full h-0"></div>
-              <div class="border-b border-dashed border-slate-100 w-full h-0"></div>
-              <div class="border-b border-dashed border-slate-100 w-full h-0"></div>
+              <div v-for="n in 4" :key="n" class="border-b border-dashed border-slate-100 w-full h-0"></div>
               <div class="w-full h-0"></div>
             </div>
-
-            <!-- Month 1 to 12 bars -->
-            <div
-              v-for="item in newVsDrop"
-              :key="item.month_num"
-              class="flex flex-col items-center justify-end h-full z-10 w-10 group relative"
-            >
-              <!-- Bar Columns Group -->
-              <div class="flex items-end gap-1 h-full w-full justify-center">
-                <!-- Blue: Học viên mới -->
-                <div
-                  :style="{ height: `${(item.new_students / 4) * 100}%` }"
-                  class="w-4 bg-blue-600 rounded-t-xs transition-all hover:bg-blue-700 min-h-[0px]"
-                ></div>
-                <!-- Red: Học viên đã nghỉ -->
-                <div
-                  :style="{ height: `${(item.drop_students / 4) * 100}%` }"
-                  class="w-4 bg-rose-500 rounded-t-xs transition-all hover:bg-rose-600 min-h-[0px]"
-                ></div>
-              </div>
-
-              <!-- Tooltip on hover -->
+            <div v-for="item in newVsDrop" :key="item.month_num" class="group relative z-10 flex h-full flex-1 items-end justify-center gap-0.5">
+              <div :style="{ height: `${(item.new_students / barTop) * 100}%` }" class="w-full max-w-4 bg-blue-600 rounded-t-xs hover:bg-blue-700"></div>
+              <div :style="{ height: `${(item.drop_students / barTop) * 100}%` }" class="w-full max-w-4 bg-rose-500 rounded-t-xs hover:bg-rose-600"></div>
               <div
-                v-if="item.new_students > 0 || item.drop_students > 0"
-                class="absolute -top-10 bg-slate-900 text-white text-[11px] rounded-lg px-2 py-1 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap shadow-md z-30"
+                class="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[11px] rounded-lg px-2 py-1 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap shadow-md z-30"
               >
-                Mới: {{ item.new_students }} &bull; Nghỉ: {{ item.drop_students }}
+                {{ item.label ?? item.month }} · Mới: {{ item.new_students }} &bull; Nghỉ: {{ item.drop_students }}
               </div>
             </div>
           </div>
-
-          <!-- X-Axis Labels (Th1 - Th12) -->
-          <div class="ml-8 mt-2 flex justify-between text-[11px] text-slate-500 font-medium select-none px-4">
-            <span v-for="m in 12" :key="m" class="w-8 text-center">Th{{ m }}</span>
+          <div class="ml-8 mt-2 flex justify-around px-1 text-[11px] text-slate-500 font-medium select-none">
+            <span v-for="(item, i) in newVsDrop" :key="item.month_num" class="flex-1 text-center">
+              {{ showXLabel(i, newVsDrop.length) ? item.label ?? item.month : '' }}
+            </span>
           </div>
 
           <!-- Legend -->
@@ -352,59 +316,37 @@ const getBadgeText = (slot) => {
 
       <!-- Rate Chart Container -->
       <div class="relative w-full overflow-x-auto pt-4 pb-2">
-        <div class="min-w-[650px] h-[220px] relative">
-          <!-- Y-Axis labels (0% to 100%) -->
-          <div class="absolute left-0 top-0 bottom-6 w-10 flex flex-col justify-between text-[11px] text-slate-400 font-mono select-none">
-            <span>100%</span>
-            <span>75%</span>
-            <span>50%</span>
-            <span>25%</span>
-            <span>0%</span>
+        <div class="min-w-[650px] relative">
+          <div class="absolute left-0 top-0 h-[190px] w-10 flex flex-col justify-between text-[11px] text-slate-400 font-mono select-none -translate-y-1.5">
+            <span v-for="t in yTicks(100)" :key="t">{{ t }}%</span>
           </div>
-
-          <!-- Chart Area -->
           <div class="ml-10 h-[190px] relative border-b border-l border-slate-200">
-            <!-- Grid Lines -->
             <div class="absolute inset-0 flex flex-col justify-between pointer-events-none">
-              <div class="border-b border-dashed border-slate-100 w-full h-0"></div>
-              <div class="border-b border-dashed border-slate-100 w-full h-0"></div>
-              <div class="border-b border-dashed border-slate-100 w-full h-0"></div>
-              <div class="border-b border-dashed border-slate-100 w-full h-0"></div>
+              <div v-for="n in 4" :key="n" class="border-b border-dashed border-slate-100 w-full h-0"></div>
               <div class="w-full h-0"></div>
             </div>
-
-            <!-- SVG Rate Curve -->
-            <svg class="w-full h-full overflow-visible" preserveAspectRatio="none" viewBox="0 0 1100 190">
-              <!-- Curved Rate Peak at Th9 (75%) -->
-              <path
-                d="M 0,190 L 700,190 C 740,190 770,47 825,47 C 880,47 910,190 950,190 L 1100,190"
-                fill="none"
-                stroke="#2563eb"
-                stroke-width="3"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-
-              <!-- Points -->
-              <circle cx="0" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="100" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="200" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="300" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="400" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="500" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="600" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="700" cy="190" r="4.5" fill="#2563eb" />
-              <!-- Month 9 Peak (75%) -->
-              <circle cx="825" cy="47" r="5.5" fill="#2563eb" />
-              <circle cx="950" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="1025" cy="190" r="4.5" fill="#2563eb" />
-              <circle cx="1100" cy="190" r="4.5" fill="#2563eb" />
+            <svg class="absolute inset-0 w-full h-full overflow-visible" preserveAspectRatio="none" :viewBox="`0 0 ${CHART_W} ${CHART_H}`">
+              <path :d="linePath(ratePoints)" fill="none" stroke="#2563eb" stroke-width="3" vector-effect="non-scaling-stroke" stroke-linejoin="round" />
             </svg>
+            <div
+              v-for="pt in ratePoints"
+              :key="pt.i"
+              class="group absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-600"
+              :style="{ left: `${pt.x}%`, top: `${pt.y}%` }"
+            >
+              <span class="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-0.5 text-[11px] text-white opacity-0 group-hover:opacity-100">
+                {{ pt.label }}: {{ pt.value }}% ({{ attendanceRateTrend[pt.i]?.attended || 0 }} có mặt / {{ attendanceRateTrend[pt.i]?.absent || 0 }} vắng)
+              </span>
+            </div>
           </div>
-
-          <!-- X-Axis Labels (Th1 - Th12) -->
-          <div class="ml-10 mt-2 flex justify-between text-[11px] text-slate-500 font-medium select-none px-1">
-            <span v-for="m in 12" :key="m" class="w-8 text-center">Th{{ m }}</span>
+          <div class="ml-10 mt-2 relative h-4 text-[11px] text-slate-500 font-medium select-none">
+            <span
+              v-for="(r, i) in attendanceRateTrend"
+              v-show="showXLabel(i, attendanceRateTrend.length)"
+              :key="i"
+              class="absolute -translate-x-1/2"
+              :style="{ left: `${xPercent(i, attendanceRateTrend.length)}%` }"
+            >{{ r.label ?? r.month }}</span>
           </div>
         </div>
       </div>

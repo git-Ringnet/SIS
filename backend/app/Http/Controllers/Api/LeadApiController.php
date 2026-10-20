@@ -15,7 +15,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class LeadApiController extends Controller
 {
-    public function index(Request $request): JsonResponse
+    private function filteredQuery(Request $request)
     {
         $status = $request->input('status', 'all');
         $courseId = $request->input('course_id');
@@ -55,7 +55,12 @@ class LeadApiController extends Controller
             });
         }
 
-        $query->orderBy('created_at', 'desc')->orderBy('id', 'desc');
+        return $query->orderBy('created_at', 'desc')->orderBy('id', 'desc');
+    }
+
+    public function index(Request $request): JsonResponse
+    {
+        $query = $this->filteredQuery($request);
         $pagination = null;
         if ($this->wantsPagination($request)) {
             $paginator = $query->paginate($this->perPage($request));
@@ -86,9 +91,9 @@ class LeadApiController extends Controller
         ]);
     }
 
-    public function store(Request $request): JsonResponse
+    private function leadRules(): array
     {
-        $validated = $request->validate([
+        return [
             'parent_name' => 'required|string|max:255',
             'student_name' => 'nullable|string|max:255',
             'phone' => 'required|string|max:20',
@@ -102,7 +107,28 @@ class LeadApiController extends Controller
             'assigned_to' => 'nullable|string|max:255',
             'center' => 'nullable|string|max:255',
             'image_url' => 'nullable|string|max:1000',
+        ];
+    }
+
+    public function update(Request $request, Lead $lead): JsonResponse
+    {
+        $validated = $request->validate($this->leadRules());
+        $lead->update([
+            ...$validated,
+            'expected_revenue' => $validated['expected_revenue'] ?? $lead->expected_revenue ?? 0,
+            'assigned_to' => $validated['assigned_to'] ?? $lead->assigned_to,
+            'center' => $validated['center'] ?? $lead->center,
         ]);
+
+        return response()->json([
+            'message' => "Đã cập nhật khách hàng {$lead->parent_name}!",
+            'lead' => $lead->load('course'),
+        ]);
+    }
+
+    public function store(Request $request): JsonResponse
+    {
+        $validated = $request->validate($this->leadRules());
 
         $lead = Lead::create([
             'parent_name' => $validated['parent_name'],
@@ -187,9 +213,10 @@ class LeadApiController extends Controller
 
         $amount = $validated['price'] ?? $course->price;
         Invoice::create([
-            'invoice_code' => Invoice::uniqueCode('HD-'.date('Ym').'-'.str_pad($student->id, 3, '0', STR_PAD_LEFT)),
+            'invoice_code' => Invoice::nextInvoiceCodeForCenter($student->center),
             'student_id' => $student->id,
             'course_id' => $student->course_id,
+            'center' => $student->center,
             'amount' => $amount,
             'sessions_added' => $student->total_sessions,
             'payment_method' => 'bank_transfer',
@@ -222,7 +249,7 @@ class LeadApiController extends Controller
 
     public function export(Request $request): StreamedResponse
     {
-        $leads = Lead::with('course')->orderBy('created_at', 'desc')->get();
+        $leads = $this->filteredQuery($request)->get();
         $fileName = 'khach_hang_tiem_nang_'.date('Ymd_His').'.csv';
 
         return response()->streamDownload(function () use ($leads) {

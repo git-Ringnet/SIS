@@ -110,9 +110,10 @@ class RetentionApiController extends Controller
             $student->total_sessions += $sessionsToAdd;
 
             Invoice::create([
-                'invoice_code' => Invoice::uniqueCode('HD-RENEW-'.date('Ymd').'-'.str_pad($student->id, 3, '0', STR_PAD_LEFT)),
+                'invoice_code' => Invoice::nextInvoiceCodeForCenter($student->center),
                 'student_id' => $student->id,
                 'course_id' => $student->course_id,
+                'center' => $student->center,
                 'amount' => $amount,
                 'sessions_added' => $sessionsToAdd,
                 'payment_method' => $payMethod,

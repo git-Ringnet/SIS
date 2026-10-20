@@ -14,19 +14,67 @@ class CenterStore
 
     public static function all(): array
     {
+        $centers = [];
         if (Storage::exists(self::PATH)) {
             $data = json_decode(Storage::get(self::PATH), true);
             if (is_array($data)) {
-                return $data;
+                $centers = $data;
             }
+        } else {
+            $centers = self::seed();
         }
 
-        return self::seed();
+        return array_map(function ($c) {
+            return array_merge([
+                'invoice_prefix' => '',
+                'logo_url' => '',
+                'bank_info' => '',
+                'qr_url' => '',
+                'free_threshold' => null,
+                'free_per_student' => null,
+                'free_per_shift' => null,
+                'free_require_qr' => true,
+            ], $c);
+        }, $centers);
     }
 
     public static function save(array $centers): void
     {
         Storage::put(self::PATH, json_encode(array_values($centers), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
+     * Tìm trung tâm theo tên. Nếu không tìm thấy, trả về trung tâm mặc định (hoặc trung tâm đầu tiên).
+     */
+    public static function findByName(?string $name): ?array
+    {
+        $centers = self::all();
+        if ($name) {
+            foreach ($centers as $center) {
+                if ($center['name'] === $name) {
+                    return $center;
+                }
+            }
+        }
+
+        foreach ($centers as $center) {
+            if (! empty($center['is_main'])) {
+                return $center;
+            }
+        }
+
+        return $centers[0] ?? null;
+    }
+
+    /**
+     * Tiền tố hoá đơn của trung tâm. Mặc định 'INV' nếu để trống.
+     */
+    public static function prefixForCenter(?string $centerName = null): string
+    {
+        $center = self::findByName($centerName);
+        $prefix = trim($center['invoice_prefix'] ?? '');
+
+        return $prefix !== '' ? $prefix : 'INV';
     }
 
     /**
@@ -81,36 +129,12 @@ class CenterStore
                 'name' => 'Khoa Anh Music Hóc Môn',
                 'address' => '123 Tô Ký, Xã Thới Tam Thôn, Hóc Môn, TP.HCM',
                 'phone' => '0792324514',
+                'invoice_prefix' => 'INV',
+                'logo_url' => '',
+                'bank_info' => '',
+                'qr_url' => '',
                 'is_main' => true,
-                'rooms' => [
-                    ['id' => 101, 'name' => 'GROUP', 'capacity' => 6, 'description' => 'Phòng học nhóm hòa tấu / nhạc lý'],
-                    ['id' => 102, 'name' => 'PIANO 01', 'capacity' => 1, 'description' => 'Phòng Piano cơ 1-1 chuyên sâu'],
-                    ['id' => 103, 'name' => 'PIANO 02', 'capacity' => 1, 'description' => 'Phòng Piano điện thực hành'],
-                    ['id' => 104, 'name' => 'GUITAR 01', 'capacity' => 4, 'description' => 'Phòng Guitar đệm hát & Classic'],
-                    ['id' => 105, 'name' => 'VOCAL 01', 'capacity' => 5, 'description' => 'Phòng Thanh nhạc cách âm'],
-                    ['id' => 106, 'name' => 'DRUM 01', 'capacity' => 2, 'description' => 'Phòng Trống jazz tiêu âm'],
-                ],
-            ],
-            [
-                'id' => 2,
-                'name' => 'Khoa Anh Music Quận 12',
-                'address' => '45 Lê Văn Khương, Phường Thới An, Quận 12, TP.HCM',
-                'phone' => '0912345678',
-                'is_main' => false,
-                'rooms' => [
-                    ['id' => 201, 'name' => 'PIANO Q12', 'capacity' => 2, 'description' => 'Phòng Piano 1:2'],
-                    ['id' => 202, 'name' => 'GUITAR Q12', 'capacity' => 4, 'description' => 'Phòng Guitar nhóm'],
-                ],
-            ],
-            [
-                'id' => 3,
-                'name' => 'Khoa Anh Music Gò Vấp',
-                'address' => '78 Quang Trung, Phường 10, Gò Vấp, TP.HCM',
-                'phone' => '0987654321',
-                'is_main' => false,
-                'rooms' => [
-                    ['id' => 301, 'name' => 'STUDIO GV', 'capacity' => 6, 'description' => 'Phòng đa năng'],
-                ],
+                'rooms' => [],
             ],
         ];
     }

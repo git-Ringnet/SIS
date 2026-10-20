@@ -88,6 +88,18 @@ const progressPercent = computed(() => {
   return Math.min(100, Math.round((attendedSessions.value / student.value.total_sessions) * 100));
 });
 
+// Học viên đã được điểm danh có mặt trong hôm nay thì khoá nút (mỗi ngày chỉ điểm danh 1 lần)
+// Ca học hôm nay (một ngày có thể nhiều ca) và số ca đã điểm danh có mặt
+const todaySlots = computed(() => (student.value?.schedule_slots || []).filter((slot) => Number(slot.day) === new Date().getDay()));
+const presentToday = computed(() => {
+  const today = toLocalDateString();
+  return (student.value?.attendances || []).filter(
+    (a) => a.status === 'present' && a.attended_at && toLocalDateString(new Date(a.attended_at)) === today,
+  ).length;
+});
+// Đã điểm danh đủ các ca hôm nay (không có lịch hôm nay thì 1 lần / ngày) → khoá nút
+const attendedToday = computed(() => presentToday.value >= Math.max(1, todaySlots.value.length));
+
 const handleQuickAttendance = async () => {
   if (!student.value) return;
   try {
@@ -157,15 +169,31 @@ const saveAllowedAbsences = async () => {
   }
 };
 
+// Lớp học của các khóa học viên đang học (tạo ở màn Khóa học → Lớp học)
+const classOptions = computed(() => {
+  const s = student.value;
+  if (!s) return [];
+  const courseIds = new Set([s.course_id, ...(s.registered_courses_list || []).map((c) => c.course_id)].filter(Boolean).map(Number));
+  return (courses.value || [])
+    .filter((c) => courseIds.has(Number(c.id)))
+    .flatMap((c) => (c.classes || []).map((k) => ({
+      ...k,
+      courseName: c.name,
+      isFull: !!k.capacity && k.students_count >= k.capacity && k.name !== s.assigned_class,
+    })));
+});
+
 const saveAssignedClass = async () => {
   try {
     isSubmitting.value = true;
     await studentApi.updateProgress(student.value.id, {
-      assigned_class: assignedClassInput.value,
+      assigned_class: assignedClassInput.value || null,
     });
+    notify.success(assignedClassInput.value ? `Đã gán vào lớp ${assignedClassInput.value}` : 'Đã bỏ gán lớp');
     fetchData();
   } catch (err) {
-    console.error(err);
+    notify.apiError(err, 'Không gán được lớp');
+    assignedClassInput.value = student.value.assigned_class || '';
   } finally {
     isSubmitting.value = false;
   }
@@ -207,7 +235,7 @@ const copyPlaceholder = () => {
 };
 
 const parentPortalUrl = computed(() => {
-  return `${window.location.origin}/students/${student.value?.id}`;
+  return `${window.location.origin}/portal/${student.value?.id}`;
 });
 
 const openParentPortalModal = () => {
@@ -353,10 +381,15 @@ const openParentPortalInNewTab = () => {
             <!-- Red button: [ Điểm danh hôm nay ] -->
             <button
               @click="handleQuickAttendance"
-              :disabled="isSubmitting || student.remaining_sessions <= 0"
-              class="rounded-lg bg-red-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-red-700 transition-colors shadow-xs disabled:opacity-50"
+              :disabled="isSubmitting || attendedToday || student.remaining_sessions <= 0"
+              :title="attendedToday ? 'Học viên đã được điểm danh hôm nay' : student.remaining_sessions <= 0 ? 'Học viên đã hết buổi' : ''"
+              class="rounded-lg bg-red-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-red-700 transition-colors shadow-xs disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-slate-400"
             >
-              Điểm danh hôm nay
+              {{ attendedToday
+                ? 'Đã điểm danh hôm nay ✓'
+                : todaySlots.length > 1
+                  ? `Điểm danh hôm nay (${presentToday}/${todaySlots.length} ca)`
+                  : 'Điểm danh hôm nay' }}
             </button>
           </div>
 
@@ -396,64 +429,74 @@ const openParentPortalInNewTab = () => {
           </div>
 
           <!-- Inline Sessions Editors matching Screenshot -->
-          <div class="flex flex-wrap items-center gap-3 text-xs pt-1">
-            <!-- [ 3 ] [ Lưu ] (Blue) -->
-            <div class="flex items-center gap-1">
+          <div class="flex flex-wrap items-end gap-3 text-xs pt-1">
+            <!-- Số buổi đã học -->
+            <div class="space-y-0.5" title="Số buổi học viên đã học thực tế của khóa này. Sửa khi cần điều chỉnh tay (ví dụ chuyển từ sổ cũ sang); số buổi còn lại tự tính = Tổng buổi − Đã học.">
+              <span class="text-[10px] font-semibold text-slate-500">Đã học (buổi)</span>
+              <div class="flex items-center gap-1">
               <input
                 type="number"
                 v-model="attendedSessionsInput"
+                aria-label="Số buổi đã học"
                 min="0"
                 class="w-12 rounded-lg border border-slate-300 bg-white px-2 py-1 text-center font-bold text-slate-900 focus:border-red-500 focus:outline-none"
               />
               <button
                 @click="saveAttendedSessions"
+                title="Lưu số buổi đã học"
                 class="rounded-lg bg-sky-500 px-3 py-1 font-bold text-white hover:bg-sky-600 transition-colors"
               >
                 Lưu
               </button>
+              </div>
             </div>
 
-            <!-- [ 12 ] [ Lưu ] (Green) -->
-            <div class="flex items-center gap-1">
+            <!-- Tổng số buổi đã mua -->
+            <div class="space-y-0.5" title="Tổng số buổi học viên đã mua / đăng ký cho khóa này.">
+              <span class="text-[10px] font-semibold text-slate-500">Tổng buổi đã mua</span>
+              <div class="flex items-center gap-1">
               <input
                 type="number"
                 v-model="totalSessionsInput"
+                aria-label="Tổng số buổi đã mua"
                 min="1"
                 class="w-12 rounded-lg border border-slate-300 bg-white px-2 py-1 text-center font-bold text-slate-900 focus:border-red-500 focus:outline-none"
               />
               <button
                 @click="saveTotalSessions"
+                title="Lưu tổng số buổi"
                 class="rounded-lg bg-emerald-500 px-3 py-1 font-bold text-white hover:bg-emerald-600 transition-colors"
               >
                 Lưu
               </button>
+              </div>
             </div>
-
-            <button class="p-1 text-slate-400 hover:text-slate-600">
-              <Calendar class="h-4 w-4" />
-            </button>
-            <button class="p-1 text-slate-400 hover:text-rose-600">
-              <Trash2 class="h-4 w-4" />
-            </button>
           </div>
 
           <!-- Absences row: Đã vắng có phép 1/3 [ 3 ] [ Lưu ] matching Screenshot -->
-          <div class="flex items-center gap-2 text-xs pt-1">
-            <span class="rounded-md bg-red-50 border border-red-200 px-2 py-1 font-bold text-red-700 text-[11px]">
-              Đã vắng có phép {{ student.absences_used || 1 }}/{{ student.allowed_absences || 3 }}
+          <div class="flex items-end gap-2 text-xs pt-1">
+            <span class="rounded-md bg-red-50 border border-red-200 px-2 py-1 font-bold text-red-700 text-[11px]" title="Đã dùng / tối đa số buổi vắng có phép">
+              Đã vắng có phép {{ student.absences_used || 0 }}/{{ student.allowed_absences ?? 3 }}
             </span>
+            <div class="space-y-0.5" title="Số buổi được phép vắng có phép tối đa của khóa này. Nhãn bên cạnh cho biết đã dùng bao nhiêu buổi.">
+              <span class="text-[10px] font-semibold text-slate-500">Số buổi được vắng có phép</span>
+              <div class="flex items-center gap-1">
             <input
               type="number"
               v-model="allowedAbsencesInput"
+              aria-label="Số buổi được vắng có phép"
               min="0"
               class="w-12 rounded-lg border border-slate-300 bg-white px-2 py-1 text-center font-bold text-slate-900 focus:border-red-500 focus:outline-none"
             />
             <button
               @click="saveAllowedAbsences"
+              title="Lưu số buổi được vắng có phép"
               class="rounded-lg bg-sky-500 px-3 py-1 font-bold text-white hover:bg-sky-600 transition-colors"
             >
               Lưu
             </button>
+              </div>
+            </div>
           </div>
 
           <!-- Class selector dropdown matching Screenshot -->
@@ -465,13 +508,14 @@ const openParentPortalInNewTab = () => {
                 class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 focus:border-red-500 focus:outline-none"
               >
                 <option value="">&mdash; Chưa gán lớp học &mdash;</option>
-                <option value="piano_t3_t5">Piano T3-T5 (18:00 - 19:00)</option>
-                <option value="piano_t7_cn">Piano T7-CN (09:00 - 10:00)</option>
-                <option value="guitar_t2_t4">Guitar T2-T4 (19:00 - 20:00)</option>
+                <option v-for="k in classOptions" :key="k.id" :value="k.name" :disabled="k.isFull">
+                  {{ k.name }} · {{ k.courseName }}{{ k.room ? ` · ${k.room}` : '' }}
+                  ({{ k.students_count }}{{ k.capacity ? `/${k.capacity}` : '' }}){{ k.isFull ? ' – đã đầy' : '' }}
+                </option>
               </select>
             </div>
-            <p class="text-[11px] font-bold text-red-600">
-              Bắt buộc chọn ít nhất 1 khung giờ cho học viên này
+            <p v-if="classOptions.length === 0" class="text-[11px] text-slate-500">
+              Khóa học của học viên chưa có lớp nào. Tạo lớp ở màn Khóa học → cột Lớp học.
             </p>
           </div>
         </div>

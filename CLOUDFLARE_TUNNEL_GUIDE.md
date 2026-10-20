@@ -60,7 +60,7 @@ Mất khoảng 10–20 phút. Script hỏi 3 câu:
 |---|---|
 | Tên miền truy cập | `sis.khoaanhmusic.com` (bỏ trống nếu chưa có, sửa sau ở Bước 5) |
 | Email chủ trung tâm | Enter để dùng `admin@khoaanhmusic.com` |
-| Mật khẩu system_admin | Tự gõ, hoặc Enter để tự sinh |
+| Mật khẩu system_admin | Enter để dùng `password@123`, hoặc tự gõ mật khẩu khác |
 
 Script tự động:
 
@@ -77,13 +77,13 @@ Script tự động:
 
 ```text
 Đã tạo tài khoản: admin@khoaanhmusic.com / password
-Đã tạo tài khoản: system_admin@sis.local / xxxxxxxxxxxxxxxx
+Đã tạo tài khoản: system_admin@mail.com / password@123
 ```
 
 | Tài khoản | Dùng cho | Ghi chú |
 |---|---|---|
 | `admin@khoaanhmusic.com` / `password` | Chủ trung tâm (khách) | **Khách đổi mật khẩu ngay** ở Cài đặt → Đổi mật khẩu |
-| `system_admin@sis.local` | Bên triển khai hỗ trợ kỹ thuật | Toàn quyền, không hiện ở màn Nhân sự nên khách không xoá / đổi được. **Lưu mật khẩu này lại** |
+| `system_admin@mail.com` / `password@123` | Bên triển khai hỗ trợ kỹ thuật | Toàn quyền, không hiện ở màn Nhân sự nên khách không xoá / đổi được |
 
 Nhân viên do chủ trung tâm tạo ở màn **Nhân sự** (trang tự đăng ký đã bị khoá).
 

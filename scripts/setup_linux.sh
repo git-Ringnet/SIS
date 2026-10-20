@@ -75,8 +75,8 @@ if [ ! -f .env ]; then
     if [ -n "$ADMIN_EMAIL_INPUT" ]; then
         sed -i "s|^ADMIN_EMAIL=.*|ADMIN_EMAIL=${ADMIN_EMAIL_INPUT}|" .env
     fi
-    # Mật khẩu tài khoản kỹ thuật system_admin (Enter để tự sinh ngẫu nhiên, in ra ở bước seed)
-    read -r -s -p "Mật khẩu system_admin@sis.local [tự sinh]: " SYSTEM_PASSWORD_INPUT
+    # Mật khẩu tài khoản kỹ thuật system_admin (Enter để dùng mặc định password@123)
+    read -r -s -p "Mật khẩu system_admin@mail.com [password@123]: " SYSTEM_PASSWORD_INPUT
     echo
     if [ -n "$SYSTEM_PASSWORD_INPUT" ]; then
         ESCAPED_PASSWORD=$(printf '%s' "$SYSTEM_PASSWORD_INPUT" | sed -e 's/[\/&|\\]/\\&/g')

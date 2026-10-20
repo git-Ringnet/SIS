@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Models\Concerns\LogsActivity;
+use App\Support\StudentSchedule;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -22,12 +23,15 @@ class Student extends Model
         'progress_percent',
         'attendance_dots',
         'attendance_status',
+        'registered_courses_list',
+        'schedule_slots',
     ];
 
     protected $casts = [
         'dob' => 'date:Y-m-d',
         'join_date' => 'date:Y-m-d',
         'end_date' => 'date:Y-m-d',
+        'paused_until' => 'date:Y-m-d',
         'last_retention_contact_at' => 'datetime',
         'total_sessions' => 'integer',
         'remaining_sessions' => 'integer',
@@ -36,6 +40,9 @@ class Student extends Model
         'absences_used' => 'integer',
         'supplies' => 'array',
         'class_days' => 'array',
+        'schedules' => 'array',
+        'registered_courses' => 'array',
+        'birthday_gift_years' => 'array',
     ];
 
     /**
@@ -75,6 +82,14 @@ class Student extends Model
             : '';
 
         return $days.$time;
+    }
+
+    /**
+     * Danh sách ca học (nhiều ca / ngày), xem App\Support\StudentSchedule.
+     */
+    public function getScheduleSlotsAttribute(): array
+    {
+        return StudentSchedule::slots($this);
     }
 
     public function course(): BelongsTo
@@ -203,5 +218,37 @@ class Student extends Model
 
         // 5. Chuyên cần tốt
         return 'good';
+    }
+
+    /**
+     * Danh sách các khóa học đã đăng ký của học viên.
+     */
+    public function getRegisteredCoursesListAttribute(): array
+    {
+        if (! empty($this->registered_courses) && is_array($this->registered_courses)) {
+            return $this->registered_courses;
+        }
+
+        if ($this->course_id) {
+            return [
+                [
+                    'id' => 1,
+                    'course_id' => (int) $this->course_id,
+                    'course_name' => $this->course?->name ?? 'Khóa học',
+                    'total_sessions' => (int) $this->total_sessions,
+                    'attended_sessions' => max(0, (int) $this->total_sessions - (int) $this->remaining_sessions),
+                    'remaining_sessions' => (int) $this->remaining_sessions,
+                    'start_date' => $this->join_date ? Carbon::parse($this->join_date)->format('Y-m-d') : null,
+                    'end_date' => $this->end_date ? Carbon::parse($this->end_date)->format('Y-m-d') : null,
+                    'schedule_info' => $this->schedule_info ?? '1 buổi/tuần',
+                    'sessions_per_week' => '1 buổi/tuần',
+                    'allowed_absences' => (int) ($this->allowed_absences ?? 3),
+                    'absences_used' => (int) ($this->absences_used ?? 0),
+                    'status' => $this->remaining_sessions <= 0 ? 'completed' : 'active',
+                ],
+            ];
+        }
+
+        return [];
     }
 }

@@ -1,13 +1,11 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { birthdayApi } from '../services/api';
+import { notify } from '../services/notify';
 import MessageTemplateModal from '../components/MessageTemplateModal.vue';
 import {
-  Cake,
   Gift,
-  Calendar,
-  Users,
-  Sparkles,
+  Check,
 } from 'lucide-vue-next';
 
 const loading = ref(true);
@@ -40,6 +38,23 @@ const fetchData = async () => {
   }
 };
 
+const handleToggleGift = async (student) => {
+  try {
+    student.toggling = true;
+    const res = await birthdayApi.toggleGift(student.id, { year: selectedYear.value });
+    student.is_gifted = res.data.is_gifted;
+    if (res.data.is_gifted) {
+      notify.success(`Đã tặng quà sinh nhật cho học viên ${student.name}!`);
+    } else {
+      notify.info(`Đã hủy trạng thái tặng quà của học viên ${student.name}`);
+    }
+  } catch (err) {
+    notify.apiError(err, 'Không thể cập nhật trạng thái tặng quà');
+  } finally {
+    student.toggling = false;
+  }
+};
+
 onMounted(() => {
   const currentMonth = new Date().getMonth() + 1;
   selectedMonth.value = currentMonth || 10;
@@ -54,14 +69,14 @@ const openGreetingModal = (student) => {
 </script>
 
 <template>
-  <div class="space-y-6 pb-12 max-w-6xl">
+  <div class="space-y-6 pb-12">
     <!-- Header -->
     <div>
       <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Sinh nhật</h1>
     </div>
 
     <!-- Card: SINH NHẬT THÁNG NÀY -->
-    <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-5">
+    <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <!-- Title & Year -->
         <div>
@@ -72,79 +87,62 @@ const openGreetingModal = (student) => {
         <!-- Filter Dropdowns -->
         <div class="flex flex-wrap items-center gap-3">
           <!-- Chọn Tháng -->
-          <select
-            v-model.number="selectedMonth"
-            @change="fetchData"
-            class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
-          >
+          <select v-model.number="selectedMonth" @change="fetchData"
+            class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none cursor-pointer">
             <option v-for="m in 12" :key="m" :value="m">Tháng {{ m }}</option>
           </select>
 
           <!-- Chọn Trung tâm -->
-          <select
-            v-model="selectedCenter"
-            @change="fetchData"
-            class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
-          >
+          <select v-model="selectedCenter" @change="fetchData"
+            class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none cursor-pointer">
             <option value="all">Tất cả trung tâm</option>
             <option v-for="c in centers" :key="c" :value="c">{{ c }}</option>
           </select>
         </div>
       </div>
 
-      <!-- Empty State matching competitor screenshot -->
-      <div
-        v-if="students.length === 0"
-        class="py-10 text-xs sm:text-sm text-slate-500"
-      >
+      <!-- Empty State -->
+      <div v-if="students.length === 0" class="py-10 text-xs sm:text-sm text-slate-500">
         Không có sinh nhật trong các tháng gần đây
       </div>
 
       <!-- Students Birthdays List -->
-      <div v-else class="divide-y divide-slate-100 pt-1 space-y-3">
-        <div
-          v-for="s in students"
-          :key="s.id"
-          class="pt-3 first:pt-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs sm:text-sm"
-        >
-          <!-- Left: Birthday badge & Student info -->
-          <div class="flex items-start gap-3">
-            <div class="flex flex-col items-center justify-center rounded-xl bg-rose-50 border border-rose-200/80 px-2.5 py-1.5 text-rose-700 shrink-0 min-w-13">
-              <Cake class="h-4 w-4 mb-0.5 text-rose-500" />
-              <span class="font-bold text-xs">{{ s.birthday_date }}</span>
-            </div>
-
-            <div>
-              <div class="flex items-center gap-2 flex-wrap">
-                <router-link
-                  :to="`/students/${s.id}`"
-                  class="font-bold text-slate-900 hover:text-blue-600 uppercase text-xs sm:text-sm"
-                >
-                  {{ s.name }}
-                </router-link>
-                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                  {{ s.age }} tuổi
-                </span>
-                <span class="text-slate-400 font-mono text-xs">({{ s.code }})</span>
-              </div>
-              <p class="text-xs text-slate-500 mt-0.5">
-                [{{ s.course?.name || 'Khóa học' }}] &bull; PH: {{ s.parent_name || 'N/A' }} ({{ s.parent_phone }})
-              </p>
-              <p class="text-[11px] text-slate-400 mt-0.5">
-                Cơ sở: {{ s.center }}
-              </p>
-            </div>
+      <div v-else class="divide-y divide-slate-100 pt-2">
+        <div v-for="s in students" :key="s.id"
+          class="py-3.5 first:pt-1 last:pb-1 flex items-center justify-between gap-4 text-xs sm:text-sm">
+          <!-- Left: Tên học viên & Phụ huynh (Khớp hình tham khảo) -->
+          <div>
+            <router-link :to="`/students/${s.id}`"
+              class="font-bold text-slate-900 hover:text-blue-600 text-sm sm:text-base tracking-tight">
+              {{ s.name }}
+            </router-link>
+            <p class="text-xs text-slate-400 mt-0.5">
+              Phụ huynh: {{ s.parent_name || 'Phi' }}
+            </p>
           </div>
 
-          <!-- Right: Action Buttons -->
-          <div class="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              @click="openGreetingModal(s)"
-              class="inline-flex items-center gap-1.5 rounded-lg bg-rose-500 hover:bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white shadow-2xs transition-all active:scale-[0.98]"
-            >
-              <Gift class="h-3.5 w-3.5" />
-              <span>Gửi lời chúc</span>
+          <!-- Right: Nút Tặng quà / Đã tặng quà + Badge Ngày sinh (Khớp hình tham khảo) -->
+          <div class="flex items-center gap-2.5 shrink-0">
+            <!-- Nút Tặng quà / Đã tặng quà -->
+            <button type="button" @click="handleToggleGift(s)" :disabled="s.toggling"
+              class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-all active:scale-95 cursor-pointer"
+              :class="s.is_gifted
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 hover:border-slate-400 shadow-2xs'">
+              <Check v-if="s.is_gifted" class="w-3.5 h-3.5 text-emerald-600 stroke-[2.5]" />
+              <span>{{ s.is_gifted ? 'Đã tặng quà' : 'Tặng quà' }}</span>
+            </button>
+
+            <!-- Blue pill ngày sinh: VD 01-10 -->
+            <span
+              class="inline-flex items-center justify-center rounded-full bg-blue-600 text-white font-bold text-xs px-2.5 py-0.5 shadow-2xs min-w-12 text-center">
+              {{ s.birthday_date }}
+            </span>
+
+            <!-- Nút Gửi lời chúc -->
+            <button type="button" @click="openGreetingModal(s)" title="Gửi lời chúc mừng"
+              class="inline-flex items-center justify-center rounded-full p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer ml-0.5">
+              <Gift class="h-4 w-4" />
             </button>
           </div>
         </div>
@@ -152,11 +150,7 @@ const openGreetingModal = (student) => {
     </div>
 
     <!-- MODAL MẪU TIN NHẮN CHÚC MỪNG SINH NHẬT -->
-    <MessageTemplateModal
-      :show="showTemplateModal"
-      :student="selectedStudent"
-      :templates="templates"
-      @close="showTemplateModal = false"
-    />
+    <MessageTemplateModal :show="showTemplateModal" :student="selectedStudent" :templates="templates"
+      @close="showTemplateModal = false" />
   </div>
 </template>

@@ -142,7 +142,7 @@ return [
     // Tài khoản kỹ thuật của bên triển khai: toàn quyền như chủ trung tâm, không hiện ở màn Nhân sự.
     // Để trống SYSTEM_ADMIN_EMAIL thì không tạo.
     'system_admin' => [
-        'email' => env('SYSTEM_ADMIN_EMAIL', 'system_admin@sis.local'),
+        'email' => env('SYSTEM_ADMIN_EMAIL', 'system_admin@mail.com'),
         'password' => env('SYSTEM_ADMIN_PASSWORD'),
     ],
 

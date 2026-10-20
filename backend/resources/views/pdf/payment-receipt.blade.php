@@ -33,20 +33,26 @@
     </style>
 </head>
 <body>
+@php
+    $logoUrl = ! empty($center['logo_url']) ? $center['logo_url'] : ($brand['logo_url'] ?? '');
+    $centerName = ! empty($center['name']) ? $center['name'] : ($brand['brand_name'] ?? 'Trung tâm');
+    $centerAddress = ! empty($center['address']) ? $center['address'] : ($brand['address'] ?? '');
+    $centerPhone = ! empty($center['phone']) ? $center['phone'] : ($brand['phone'] ?? '');
+@endphp
     <table class="header">
         <tr>
             <td>
-                @if (! empty($brand['logo_url']))
-                    <img src="{{ $brand['logo_url'] }}" alt="" style="height: 40px; margin-bottom: 6px;">
+                @if (! empty($logoUrl))
+                    <img src="{{ $logoUrl }}" alt="" style="height: 40px; margin-bottom: 6px;">
                 @endif
-                <p class="brand">{{ $brand['brand_name'] }}</p>
+                <p class="brand">{{ $centerName }}</p>
                 @if (! empty($brand['category']))
                     <div class="muted">Trung tâm đào tạo {{ mb_strtolower($brand['category']) }}</div>
                 @endif
                 <div class="muted">
-                    @if (! empty($brand['address']))Địa chỉ: {{ $brand['address'] }}@endif
-                    @if (! empty($brand['address']) && ! empty($brand['phone'])) • @endif
-                    @if (! empty($brand['phone']))Hotline: {{ $brand['phone'] }}@endif
+                    @if (! empty($centerAddress))Địa chỉ: {{ $centerAddress }}@endif
+                    @if (! empty($centerAddress) && ! empty($centerPhone)) • @endif
+                    @if (! empty($centerPhone))Hotline: {{ $centerPhone }}@endif
                 </div>
             </td>
             <td class="right" style="vertical-align: top;">

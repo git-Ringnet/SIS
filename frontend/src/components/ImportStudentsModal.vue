@@ -30,12 +30,15 @@ const previewRows = ref([]);
 const previewHeaders = ref([]);
 const isDragging = ref(false);
 const errorMessage = ref('');
+// Kết quả import: các dòng bị bỏ qua (kèm lý do) và cảnh báo, hiện lại để người dùng sửa file
+const importResult = ref(null);
 
 const resetState = () => {
   selectedFile.value = null;
   previewRows.value = [];
   previewHeaders.value = [];
   errorMessage.value = '';
+  importResult.value = null;
   isUploading.value = false;
   if (fileInput.value) {
     fileInput.value.value = '';
@@ -136,12 +139,12 @@ const downloadTemplate = async () => {
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', 'students_template.xlsx');
+    link.setAttribute('download', 'mau_nhap_hoc_vien.xlsx');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     window.URL.revokeObjectURL(url);
-    notify.success('Đã tải xuống file mẫu students_template.xlsx!');
+    notify.success('Đã tải file mẫu. Mở file xem sheet "Hướng dẫn" trước khi điền.');
   } catch (err) {
     console.error('Error downloading template:', err);
     notify.error('Không thể tải file mẫu. Vui lòng thử lại!');
@@ -162,9 +165,18 @@ const submitImport = async () => {
     formData.append('csv_file', selectedFile.value);
 
     const res = await studentApi.importCsv(formData);
-    notify.success(res.data.message || `Đã nhập thành công ${res.data.imported_count} học viên!`);
     emit('imported');
-    handleClose();
+    const { skipped = [], warnings = [] } = res.data;
+    if (skipped.length === 0 && warnings.length === 0) {
+      notify.success(res.data.message || `Đã nhập thành công ${res.data.imported_count} học viên!`);
+      handleClose();
+      return;
+    }
+    // Có dòng bị bỏ qua / cảnh báo: giữ hộp mở để xem chi tiết
+    importResult.value = res.data;
+    selectedFile.value = null;
+    previewRows.value = [];
+    if (fileInput.value) fileInput.value.value = '';
   } catch (err) {
     console.error('Import error:', err);
     errorMessage.value = err.response?.data?.message || 'Có lỗi xảy ra khi import danh sách học viên. Vui lòng kiểm tra lại cấu trúc file!';
@@ -201,7 +213,9 @@ const submitImport = async () => {
         <div class="flex items-start gap-2.5">
           <HelpCircle class="h-4 w-4 text-indigo-600 mt-0.5 shrink-0" />
           <div class="text-xs text-slate-600 leading-relaxed">
-            Hỗ trợ định dạng 13 cột chuẩn SenyApp (<code class="bg-white px-1 py-0.5 rounded border border-slate-200 text-indigo-600 font-mono">full_name</code>, <code class="bg-white px-1 py-0.5 rounded border border-slate-200 font-mono">birthday</code>, <code class="bg-white px-1 py-0.5 rounded border border-slate-200 font-mono">parent_name</code>, <code class="bg-white px-1 py-0.5 rounded border border-slate-200 font-mono">schedules</code>, ...).
+            Tải file mẫu, mở sheet <strong>Hướng dẫn</strong> để xem cách điền từng cột, rồi điền ở sheet <strong>Học viên</strong>.
+            Bắt buộc: <strong class="text-rose-600">Họ tên học viên</strong> và <strong class="text-rose-600">SĐT phụ huynh</strong>
+            (cột tiêu đề màu đỏ). Các cột khác có thể để trống.
           </div>
         </div>
         <button
@@ -275,6 +289,26 @@ const submitImport = async () => {
       <div v-if="errorMessage" class="mt-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2.5">
         <AlertCircle class="h-4 w-4 shrink-0 mt-0.5" />
         <span class="leading-relaxed">{{ errorMessage }}</span>
+      </div>
+
+      <!-- Kết quả import: dòng bị bỏ qua và cảnh báo -->
+      <div v-if="importResult" class="mt-4 space-y-3">
+        <div class="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-start gap-2.5">
+          <CheckCircle2 class="h-4 w-4 shrink-0 mt-0.5" />
+          <span class="leading-relaxed font-semibold">{{ importResult.message }}</span>
+        </div>
+        <div v-if="importResult.skipped.length" class="rounded-xl border border-rose-200 bg-rose-50/60 p-3.5 text-xs text-rose-800 space-y-1.5">
+          <p class="font-bold">Các dòng bị bỏ qua (sửa trong file rồi import lại riêng các dòng này):</p>
+          <ul class="list-disc pl-5 space-y-0.5 max-h-40 overflow-auto">
+            <li v-for="s in importResult.skipped" :key="s.row">Dòng {{ s.row }}: {{ s.reason }}</li>
+          </ul>
+        </div>
+        <div v-if="importResult.warnings.length" class="rounded-xl border border-amber-200 bg-amber-50/60 p-3.5 text-xs text-amber-800 space-y-1.5">
+          <p class="font-bold">Lưu ý (học viên vẫn đã được nhập):</p>
+          <ul class="list-disc pl-5 space-y-0.5 max-h-40 overflow-auto">
+            <li v-for="(w, i) in importResult.warnings" :key="i">{{ w }}</li>
+          </ul>
+        </div>
       </div>
 
       <!-- Preview bảng dữ liệu -->

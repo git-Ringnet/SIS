@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Support\ActivityLogger;
 use App\Support\CenterStore;
 use App\Support\OwnerGuard;
+use App\Support\PagePermissions;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,11 +25,7 @@ class StaffApiController extends Controller
      */
     private function defaultBlockedPages(string $role): array
     {
-        return match ($role) {
-            self::OWNER_ROLE => [],
-            'Quản lý / Lễ tân' => ['Cài đặt', 'Dữ liệu'],
-            default => ['Doanh thu', 'Hóa đơn & Thu phí', 'Khách hàng tiềm năng', 'Cài đặt', 'Dữ liệu'],
-        };
+        return PagePermissions::defaultBlockedPages($role);
     }
 
     /**

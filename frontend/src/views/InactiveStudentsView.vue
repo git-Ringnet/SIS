@@ -136,8 +136,8 @@ const openEditModal = (student) => {
     id: student.id,
     name: student.name,
     status: student.status,
-    end_date: student.end_date || '',
-    notes: student.notes || '',
+    end_date: student.paused_until || '',
+    notes: student.pause_note || '',
   };
   showEditModal.value = true;
 };
@@ -190,7 +190,7 @@ const formatDate = (val) => {
 </script>
 
 <template>
-  <div class="space-y-6 pb-12 max-w-6xl">
+  <div class="space-y-6 pb-12">
     <!-- Header -->
     <div>
       <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">HV Tạm dừng - Nghỉ</h1>
@@ -206,7 +206,8 @@ const formatDate = (val) => {
           Liên hệ phụ huynh để mời học viên quay lại.
         </p>
         <p class="text-[11px] sm:text-xs text-slate-400 mt-1">
-          <strong class="text-slate-600">Lưu ý:</strong> Tạm dừng = học viên còn buổi học trong khoá; Đã nghỉ = học viên đã hoàn thành các khoá học.
+          <strong class="text-slate-600">Lưu ý:</strong> Tạm dừng = học viên còn buổi học trong khoá; Đã nghỉ = học viên
+          đã hoàn thành các khoá học.
         </p>
       </div>
 
@@ -215,11 +216,8 @@ const formatDate = (val) => {
         <!-- Trung tâm -->
         <div class="flex items-center gap-2">
           <label class="text-xs font-semibold text-slate-700 whitespace-nowrap">Trung tâm</label>
-          <select
-            v-model="selectedCenter"
-            @change="applyFilters"
-            class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
-          >
+          <select v-model="selectedCenter" @change="applyFilters"
+            class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none">
             <option value="all">Tất cả trung tâm</option>
             <option v-for="c in centers" :key="c" :value="c">{{ c }}</option>
           </select>
@@ -228,11 +226,8 @@ const formatDate = (val) => {
         <!-- Trạng thái -->
         <div class="flex items-center gap-2">
           <label class="text-xs font-semibold text-slate-700 whitespace-nowrap">Trạng thái</label>
-          <select
-            v-model="selectedStatus"
-            @change="applyFilters"
-            class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
-          >
+          <select v-model="selectedStatus" @change="applyFilters"
+            class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none">
             <option value="all">Tất cả</option>
             <option value="paused">Tạm dừng</option>
             <option value="inactive">Đã nghỉ</option>
@@ -247,11 +242,8 @@ const formatDate = (val) => {
             Sắp đi học lại ({{ upcomingReturnStudents.length }})
           </span>
 
-          <select
-            v-model="upcomingDays"
-            @change="fetchData"
-            class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-800 focus:border-rose-500 focus:outline-none"
-          >
+          <select v-model="upcomingDays" @change="fetchData"
+            class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-800 focus:border-rose-500 focus:outline-none">
             <option :value="7">Sắp học lại 7 ngày</option>
             <option :value="14">Sắp học lại 14 ngày</option>
             <option :value="30">Sắp học lại 30 ngày</option>
@@ -268,22 +260,16 @@ const formatDate = (val) => {
         </div>
 
         <div v-else class="divide-y divide-slate-200/60 pt-1">
-          <div
-            v-for="st in upcomingReturnStudents"
-            :key="st.id"
-            class="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs"
-          >
+          <div v-for="st in upcomingReturnStudents" :key="st.id"
+            class="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
             <div>
               <span class="font-bold text-slate-900">{{ st.name }}</span>
               <span class="ml-2 text-slate-500">({{ st.course?.name }})</span>
-              <span class="ml-2 text-amber-700 font-medium">Hạn bảo lưu đến: {{ formatDate(st.end_date) }}</span>
+              <span class="ml-2 text-amber-700 font-medium">Hạn bảo lưu đến: {{ formatDate(st.paused_until) }}</span>
             </div>
             <div class="flex items-center gap-2">
-              <button
-                type="button"
-                @click="handleReactivate(st)"
-                class="inline-flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 px-2.5 py-1 text-xs font-semibold text-white shadow-2xs"
-              >
+              <button type="button" @click="handleReactivate(st)"
+                class="inline-flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 px-2.5 py-1 text-xs font-semibold text-white shadow-2xs">
                 <Play class="h-3 w-3" />
                 <span>Kích hoạt học lại</span>
               </button>
@@ -293,7 +279,8 @@ const formatDate = (val) => {
       </div>
 
       <!-- MAIN TABLE: DANH SÁCH HỌC VIÊN TẠM DỪNG / ĐÃ NGHỈ -->
-      <div v-if="students.length === 0" class="py-12 text-center text-xs sm:text-sm text-slate-500 flex items-center justify-center gap-2">
+      <div v-if="students.length === 0"
+        class="py-12 text-center text-xs sm:text-sm text-slate-500 flex items-center justify-center gap-2">
         <span>Không có học viên đã nghỉ</span>
         <span>🎉</span>
       </div>
@@ -345,66 +332,52 @@ const formatDate = (val) => {
 
               <!-- Trạng thái -->
               <td class="py-3 px-3 text-center">
-                <span
-                  :class="[
-                    s.status === 'paused' ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800',
-                    'inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold'
-                  ]"
-                >
+                <span :class="[
+                  s.status === 'paused' ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800',
+                  'inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold'
+                ]">
                   {{ s.status === 'paused' ? 'Tạm dừng' : 'Đã nghỉ' }}
                 </span>
               </td>
 
               <!-- Hạn bảo lưu -->
               <td class="py-3 px-3 text-slate-600 text-xs">
-                {{ s.status === 'paused' ? formatDate(s.end_date) : '—' }}
+                {{ s.status === 'paused' && s.paused_until ? formatDate(s.paused_until) : '—' }}
               </td>
 
               <!-- Ghi chú -->
-              <td class="py-3 px-3 text-slate-500 text-xs max-w-xs truncate" :title="s.notes">
-                {{ s.notes || '—' }}
+              <td class="py-3 px-3 text-slate-500 text-xs max-w-xs truncate" :title="s.pause_note || s.notes">
+                {{ s.pause_note || s.notes || '—' }}
               </td>
 
               <!-- Thao tác -->
               <td class="py-3 px-3 text-right">
                 <div class="inline-flex items-center gap-1.5 justify-end">
                   <!-- Mẫu tin nhắn -->
-                  <button
-                    type="button"
-                    @click="openTemplateModal(s)"
+                  <button type="button" @click="openTemplateModal(s)"
                     class="p-1.5 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                    title="Mẫu tin nhắn"
-                  >
+                    title="Mẫu tin nhắn">
                     <MessageSquare class="h-4 w-4" />
                   </button>
 
                   <!-- Kích hoạt học lại -->
-                  <button
-                    type="button"
-                    @click="handleReactivate(s)"
+                  <button type="button" @click="handleReactivate(s)"
                     class="p-1.5 rounded-lg text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 transition-colors"
-                    title="Kích hoạt học lại"
-                  >
+                    title="Kích hoạt học lại">
                     <Play class="h-4 w-4" />
                   </button>
 
                   <!-- Sửa -->
-                  <button
-                    type="button"
-                    @click="openEditModal(s)"
+                  <button type="button" @click="openEditModal(s)"
                     class="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
-                    title="Sửa ngày hẹn & lý do"
-                  >
+                    title="Sửa ngày hẹn & lý do">
                     <Edit2 class="h-4 w-4" />
                   </button>
 
                   <!-- Xóa -->
-                  <button
-                    type="button"
-                    @click="handleDeleteStudent(s)"
+                  <button type="button" @click="handleDeleteStudent(s)"
                     class="p-1.5 rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 transition-colors"
-                    title="Xóa hồ sơ học viên"
-                  >
+                    title="Xóa hồ sơ học viên">
                     <Trash2 class="h-4 w-4" />
                   </button>
                 </div>
@@ -417,21 +390,16 @@ const formatDate = (val) => {
     </div>
 
     <!-- MODAL SỬA THỜI HẠN / GHI CHÚ -->
-    <div
-      v-if="showEditModal"
-      class="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
-    >
+    <div v-if="showEditModal"
+      class="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
         <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/80">
           <div class="flex items-center gap-2 text-slate-900 font-bold text-sm">
             <PauseCircle class="h-4.5 w-4.5 text-amber-500" />
             <span>Cập Nhật Học Viên Tạm Dừng / Nghỉ</span>
           </div>
-          <button
-            type="button"
-            @click="showEditModal = false"
-            class="rounded-xl p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100"
-          >
+          <button type="button" @click="showEditModal = false"
+            class="rounded-xl p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100">
             <X class="h-5 w-5" />
           </button>
         </div>
@@ -439,49 +407,34 @@ const formatDate = (val) => {
         <div class="p-6 space-y-4">
           <div>
             <label class="block text-xs font-semibold text-slate-700 mb-1.5">Trạng thái</label>
-            <select
-              v-model="editForm.status"
-              class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
-            >
+            <select v-model="editForm.status"
+              class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none">
               <option value="paused">Tạm dừng (Còn bảo lưu số buổi)</option>
               <option value="inactive">Đã nghỉ (Kết thúc khóa học)</option>
             </select>
           </div>
 
           <div v-if="editForm.status === 'paused'">
-            <label class="block text-xs font-semibold text-slate-700 mb-1.5">Hạn bảo lưu đến ngày (Dự kiến học lại)</label>
-            <input
-              v-model="editForm.end_date"
-              type="date"
-              class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
-            />
+            <label class="block text-xs font-semibold text-slate-700 mb-1.5">Hạn bảo lưu đến ngày (Dự kiến học
+              lại)</label>
+            <input v-model="editForm.end_date" type="date"
+              class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none" />
           </div>
 
           <div>
             <label class="block text-xs font-semibold text-slate-700 mb-1.5">Lý do / Ghi chú</label>
-            <textarea
-              v-model="editForm.notes"
-              rows="3"
-              placeholder="Nhập lý do học viên tạm dừng hoặc nghỉ học..."
-              class="w-full rounded-xl border border-slate-200 bg-white p-3 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"
-            ></textarea>
+            <textarea v-model="editForm.notes" rows="3" placeholder="Nhập lý do học viên tạm dừng hoặc nghỉ học..."
+              class="w-full rounded-xl border border-slate-200 bg-white p-3 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none"></textarea>
           </div>
         </div>
 
         <div class="px-6 py-3 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            @click="showEditModal = false"
-            class="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700"
-          >
+          <button type="button" @click="showEditModal = false"
+            class="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700">
             Hủy
           </button>
-          <button
-            type="button"
-            :disabled="savingEdit"
-            @click="handleSaveEdit"
-            class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 px-4 py-2 text-xs font-bold text-white shadow-xs"
-          >
+          <button type="button" :disabled="savingEdit" @click="handleSaveEdit"
+            class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 px-4 py-2 text-xs font-bold text-white shadow-xs">
             {{ savingEdit ? 'Đang lưu...' : 'Lưu cập nhật' }}
           </button>
         </div>
@@ -489,11 +442,7 @@ const formatDate = (val) => {
     </div>
 
     <!-- MODAL MẪU TIN NHẮN -->
-    <MessageTemplateModal
-      :show="showTemplateModal"
-      :student="selectedStudent"
-      :templates="templates"
-      @close="showTemplateModal = false"
-    />
+    <MessageTemplateModal :show="showTemplateModal" :student="selectedStudent" :templates="templates"
+      @close="showTemplateModal = false" />
   </div>
 </template>

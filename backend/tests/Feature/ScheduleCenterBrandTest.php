@@ -91,6 +91,8 @@ class ScheduleCenterBrandTest extends TestCase
     public function test_room_report_is_built_from_real_schedules_and_center_capacity(): void
     {
         $center = CenterStore::defaultName();
+        $centerId = CenterStore::all()[0]['id'];
+        $this->postJson("/api/centers/{$centerId}/rooms", ['name' => 'GROUP', 'capacity' => 6])->assertSuccessful();
         foreach (range(1, 2) as $i) {
             $this->createStudent(['center' => $center, 'class_days' => [1], 'class_start_time' => '18:00', 'room' => 'GROUP']);
         }

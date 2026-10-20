@@ -63,14 +63,23 @@ const removeVietnameseTones = (str) => {
   return str.toLowerCase().trim();
 };
 
+const normalizedOptions = computed(() => {
+  return (props.options || []).map((opt) => {
+    if (typeof opt === 'string' || typeof opt === 'number') {
+      return { [props.valueKey]: opt, [props.labelKey]: String(opt) };
+    }
+    return opt;
+  });
+});
+
 const selectedOption = computed(() => {
-  return props.options.find((opt) => String(opt[props.valueKey]) === String(props.modelValue));
+  return normalizedOptions.value.find((opt) => String(opt[props.valueKey]) === String(props.modelValue));
 });
 
 const filteredOptions = computed(() => {
-  if (!searchQuery.value) return props.options;
+  if (!searchQuery.value) return normalizedOptions.value;
   const q = removeVietnameseTones(searchQuery.value);
-  return props.options.filter((opt) => {
+  return normalizedOptions.value.filter((opt) => {
     const label = removeVietnameseTones(opt[props.labelKey]);
     const sublabel = props.sublabelKey ? removeVietnameseTones(opt[props.sublabelKey]) : '';
     const code = opt.code ? removeVietnameseTones(opt.code) : '';

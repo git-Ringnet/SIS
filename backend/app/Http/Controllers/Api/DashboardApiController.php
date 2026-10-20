@@ -10,6 +10,7 @@ use App\Models\Lead;
 use App\Models\MessageTemplate;
 use App\Models\Student;
 use App\Support\PagePermissions;
+use App\Support\StudentSchedule;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -137,10 +138,23 @@ class DashboardApiController extends Controller
         // 8. Việc cần xử lý hôm nay (Today's Urgent Actions)
         $todoDebtInvoices = $debtInvoicesCount;
         $todoTuitionDue = $expiringEndDateStudents->count();
-        $attendedStudentIdsToday = Attendance::whereDate('attended_at', $today)->pluck('student_id');
+        // Học viên có ca học hôm nay mà còn ca chưa điểm danh (một ngày có thể nhiều ca)
+        $todayRecords = Attendance::whereDate('attended_at', $today)->get(['student_id', 'slot_id'])->groupBy('student_id');
         $todoNotAttendedToday = Student::where('status', 'active')
             ->when($centerFilter, fn ($q) => $q->where('center', 'like', "%{$centerFilter}%"))
-            ->whereNotIn('id', $attendedStudentIdsToday)
+            ->whereJsonContains('class_days', $today->dayOfWeek)
+            ->get()
+            ->filter(function ($st) use ($todayRecords, $today) {
+                $slots = StudentSchedule::slotsOn($st, $today->dayOfWeek);
+                $marked = $todayRecords->get($st->id, collect())->pluck('slot_id')->all();
+                foreach ($slots as $i => $slot) {
+                    if (! in_array($slot['id'], $marked, true) && ! ($i === 0 && in_array(null, $marked, true))) {
+                        return true;
+                    }
+                }
+
+                return false;
+            })
             ->count();
         $todoConsecutiveAbsences = $absenceAlerts->count();
         $todoBirthdaysThisMonth = Student::where('status', 'active')
