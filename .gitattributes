@@ -9,3 +9,7 @@
 /.github export-ignore
 CHANGELOG.md export-ignore
 .styleci.yml export-ignore
+
+# Script Windows: giữ CRLF (PowerShell / cmd); file .ps1 lưu UTF-8 có BOM để PowerShell 5.1 đọc đúng tiếng Việt
+*.ps1 text eol=crlf
+*.bat text eol=crlf

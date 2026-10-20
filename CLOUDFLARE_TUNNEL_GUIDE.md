@@ -1,6 +1,7 @@
 # Hướng dẫn cài đặt SIS trên laptop Linux + Cloudflare Tunnel
 
 Tài liệu cho người cài đặt / bảo trì hệ thống. Làm lần lượt từ trên xuống, mỗi bước có phần kiểm tra.
+(Cài trên máy Windows xem `WINDOWS_INSTALL_GUIDE.md`.)
 
 ## Mô hình
 
