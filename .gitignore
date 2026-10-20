@@ -84,3 +84,6 @@ backend/public/storage
 # ==========================================
 .DS_Store
 Thumbs.db
+
+# Lối tắt artisan do scripts\setup_windows.ps1 tạo trên máy Windows (chứa đường dẫn PHP của máy đó)
+/sis.bat

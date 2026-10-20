@@ -70,6 +70,7 @@ Mất khoảng 10–20 phút (tải khoảng 150MB). Script hỏi 4 câu:
 
 Script tự động:
 
+- Tạo lối tắt **`C:\SIS\sis.bat`** để chạy lệnh hệ thống (sao lưu, đổi mật khẩu...) mà không cần nhớ PHP nằm ở đâu.
 - Cài Visual C++ Redistributable (PHP cần), tải PHP 8.4, Composer, Node.js LTS, Caddy, cloudflared, rclone vào `C:\SIS-runtime`.
 - Tạo `backend\.env` ở chế độ chạy thật (`APP_ENV=production`, `APP_DEBUG=false`).
 - Tạo database, bảng và **2 tài khoản** (in ra màn hình, xem bên dưới).
@@ -144,9 +145,8 @@ BACKUP_RCLONE_REMOTE=gdrive:SIS-Backups
 (`BACKUP_RCLONE_BINARY` và `BACKUP_RCLONE_CONFIG` script đã điền sẵn.) Lưu lại rồi chạy trong PowerShell (Admin):
 
 ```powershell
-cd C:\SIS\backend
-C:\SIS-runtime\php\php.exe artisan config:cache
-C:\SIS-runtime\php\php.exe artisan sis:backup     # chạy thử 1 bản sao lưu
+C:\SIS\sis.bat config:cache
+C:\SIS\sis.bat sis:backup     # chạy thử 1 bản sao lưu
 powershell -ExecutionPolicy Bypass -File C:\SIS\scripts\windows\sis-control.ps1 restart
 ```
 
@@ -157,8 +157,7 @@ powershell -ExecutionPolicy Bypass -File C:\SIS\scripts\windows\sis-control.ps1 
 File cấu hình: `C:\SIS\backend\.env` (mở bằng Notepad). **Mỗi lần sửa xong phải chạy** trong PowerShell (Admin):
 
 ```powershell
-cd C:\SIS\backend
-C:\SIS-runtime\php\php.exe artisan config:cache
+C:\SIS\sis.bat config:cache
 powershell -ExecutionPolicy Bypass -File C:\SIS\scripts\windows\sis-control.ps1 restart
 ```
 
@@ -224,8 +223,7 @@ Cách 1: **Cài đặt → Sao lưu dữ liệu** → chọn bản → Khôi ph�
 Cách 2: trên máy (ví dụ file tải về từ Google Drive):
 
 ```powershell
-cd C:\SIS\backend
-C:\SIS-runtime\php\php.exe artisan sis:backup:restore C:\Users\<tên>\Downloads\sis-backup-20261020-020000.zip
+C:\SIS\sis.bat sis:backup:restore C:\Users\<tên>\Downloads\sis-backup-20261020-020000.zip
 ```
 
 Khôi phục sẽ **ghi đè toàn bộ dữ liệu hiện tại**.
@@ -236,9 +234,8 @@ Khôi phục sẽ **ghi đè toàn bộ dữ liệu hiện tại**.
 - Chủ trung tâm hoặc system_admin quên:
 
   ```powershell
-  cd C:\SIS\backend
-  C:\SIS-runtime\php\php.exe artisan sis:reset-password admin@khoaanhmusic.com                   # tự sinh mật khẩu
-  C:\SIS-runtime\php\php.exe artisan sis:reset-password admin@khoaanhmusic.com --password=MatKhauMoi
+  C:\SIS\sis.bat sis:reset-password admin@khoaanhmusic.com                   # tự sinh mật khẩu
+  C:\SIS\sis.bat sis:reset-password admin@khoaanhmusic.com --password=MatKhauMoi
   ```
 
 ### Cập nhật phiên bản mới
@@ -268,7 +265,7 @@ Windows tự khởi động lại sau khi cập nhật thì hệ thống cũng t
 | Mở `localhost` **không vào được** | Chạy `sis-control.ps1 status`. Có dòng "KHÔNG chạy" thì `sis-control.ps1 restart`, vẫn lỗi thì xem log `C:\SIS-runtime\logs\` |
 | Trang mở được nhưng **lỗi khi thao tác** | Xem log Laravel: `C:\SIS\backend\storage\logs\laravel.log` (mở bằng Notepad, xem cuối file) |
 | Ngoài mạng **không vào được**, `localhost` vẫn được | `Get-Service cloudflared` phải *Running*; tunnel trên Cloudflare Zero Trust phải *Healthy*; URL trong Public Hostname đúng cổng |
-| **Không có bản sao lưu mới** | `sis-control.ps1 status` dòng *Lịch sao lưu* phải "đang chạy"; chạy thử `php.exe artisan sis:backup` |
-| Sửa `.env` nhưng **không có tác dụng** | Chưa chạy `artisan config:cache` và `sis-control.ps1 restart` |
+| **Không có bản sao lưu mới** | `sis-control.ps1 status` dòng *Lịch sao lưu* phải "đang chạy"; chạy thử `C:\SIS\sis.bat sis:backup` |
+| Sửa `.env` nhưng **không có tác dụng** | Chưa chạy `sis.bat config:cache` và `sis-control.ps1 restart` |
 | Máy **tự ngủ** | Đang chạy pin? Cắm sạc. Kiểm tra lại: *Settings → System → Power* đặt *Sleep: Never* khi cắm sạc |
 | Mất điện, **máy không tự bật lại** | Bật máy bằng tay. Nếu BIOS có tuỳ chọn *Restore on AC power loss / Power on AC* thì bật lên để máy tự khởi động khi có điện |

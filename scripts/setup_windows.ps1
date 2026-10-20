@@ -342,6 +342,11 @@ Artisan @('config:cache')
 Artisan @('route:cache')
 Artisan @('view:cache')
 
+# Lối tắt chạy lệnh artisan không cần nhớ đường dẫn PHP: <source>\sis.bat sis:backup
+$shortcut = "@echo off`r`nrem Tao tu dong boi scripts\setup_windows.ps1. Vi du: sis.bat sis:backup`r`ncd /d `"%~dp0backend`"`r`n`"$Php`" artisan %*`r`n"
+[IO.File]::WriteAllText((Join-Path $Root 'sis.bat'), $shortcut, [Text.Encoding]::ASCII)
+Info "Lối tắt lệnh hệ thống: $Root\sis.bat (ví dụ: $Root\sis.bat sis:backup)"
+
 # ------------------------------------------------------------------------------
 Step '[6/9] Build giao diện'
 $env:Path = "$NodeDir;$env:Path"
