@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Models\Attendance;
 use App\Models\Student;
+use Carbon\Carbon;
 
 /**
  * Lịch học nhiều ca của học viên (students.schedules):
@@ -242,5 +243,62 @@ class StudentSchedule
         }
 
         return [null, true];
+    }
+
+    /**
+     * Ngày học dự kiến của $count buổi tiếp theo, đi lần lượt theo các ca trong lịch tuần.
+     * Bắt đầu từ hôm nay (bỏ các ca hôm nay đã điểm danh), học viên tạm dừng thì từ ngày hết bảo lưu,
+     * và không sớm hơn ngày nhập học. Học viên đã nghỉ / chưa có lịch thì không có ngày dự kiến.
+     * $slotIds: chỉ tính các ca của một khoá (null = mọi ca). $from: ngày bắt đầu khoá nếu muộn hơn hôm nay.
+     *
+     * @return list<array{date: Carbon, slot: array}>
+     */
+    public static function upcomingSessions(Student $student, int $count, ?array $slotIds = null, ?string $from = null): array
+    {
+        $slots = self::slots($student);
+        if ($slotIds) {
+            $slots = array_values(array_filter($slots, fn ($s) => in_array($s['id'], $slotIds, true)));
+        }
+        if ($count <= 0 || $slots === [] || in_array($student->status, ['inactive', 'dropped'], true)) {
+            return [];
+        }
+        $slotsOn = fn (int $dow) => array_values(array_filter($slots, fn ($s) => (int) $s['day'] === $dow));
+
+        $day = now()->startOfDay();
+        foreach ([$student->join_date, $from] as $start) {
+            if ($start && Carbon::parse($start)->gt($day)) {
+                $day = Carbon::parse($start)->startOfDay();
+            }
+        }
+        if ($student->status === 'paused' && $student->paused_until && Carbon::parse($student->paused_until)->gt($day)) {
+            $day = Carbon::parse($student->paused_until)->startOfDay();
+        }
+
+        // Ca hôm nay đã điểm danh (có mặt / vắng) thì không còn là buổi sắp tới
+        $markedToday = [];
+        if ($day->isToday()) {
+            $marked = Attendance::where('student_id', $student->id)->whereDate('attended_at', $day->toDateString())->pluck('slot_id')->all();
+            foreach (self::slotsOn($student, $day->dayOfWeek) as $i => $slot) {
+                if (in_array($slot['id'], $marked, true) || ($i === 0 && in_array(null, $marked, true))) {
+                    $markedToday[] = $slot['id'];
+                }
+            }
+        }
+
+        $result = [];
+        // Giới hạn 2 năm để không lặp vô hạn khi lịch lỗi
+        for ($i = 0; $i < 730 && count($result) < $count; $i++, $day = $day->copy()->addDay()) {
+            foreach ($slotsOn($day->dayOfWeek) as $slot) {
+                if ($i === 0 && in_array($slot['id'], $markedToday, true)) {
+                    continue;
+                }
+                $result[] = ['date' => $day->copy(), 'slot' => $slot];
+                if (count($result) >= $count) {
+                    break;
+                }
+            }
+        }
+
+        return $result;
     }
 }

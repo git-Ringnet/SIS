@@ -96,6 +96,63 @@ class TeacherPayAndLeaveTest extends TestCase
         $this->assertEquals(370000, $m['total_salary']);
     }
 
+    public function test_rates_list_courses_from_schedule_slots_and_checkin_uses_that_course_rate(): void
+    {
+        // Khoá chính của học viên là Guitar, nhưng ca Thứ 3 (Cô Mai dạy) thuộc khoá Piano
+        Student::create([
+            'code' => 'HV-D', 'name' => 'D', 'gender' => 'Nam', 'parent_name' => 'PH', 'parent_phone' => '09',
+            'course_id' => $this->guitar->id, 'total_sessions' => 24, 'remaining_sessions' => 24, 'status' => 'active',
+            'class_days' => [2], 'teacher' => 'Cô Mai',
+            'schedules' => [['id' => 'd2', 'day' => 2, 'start' => '17:30', 'end' => '18:30', 'teacher' => 'Cô Mai', 'room' => 'P1']],
+            'registered_courses' => [
+                ['id' => 1, 'course_id' => $this->guitar->id, 'total_sessions' => 12, 'remaining_sessions' => 12],
+                ['id' => 2, 'course_id' => $this->piano->id, 'total_sessions' => 12, 'remaining_sessions' => 12, 'schedule_ids' => ['d2']],
+            ],
+        ]);
+
+        $teachers = collect($this->getJson('/api/teacher-checkin/rates')->assertOk()->json('teachers'))->keyBy('name');
+        $this->assertSame(['Piano'], array_column($teachers['Cô Mai']['courses'], 'name'));
+
+        $this->saveRates([['name' => 'Cô Mai', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 100000,
+            'courses' => [['course_id' => $this->piano->id, 'one_on_one' => 180000]]]]);
+
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $this->shifts()['Cô Mai']['id']])->assertOk();
+
+        $this->assertEquals(180000, $this->monthly()['total_salary']);
+    }
+
+    public function test_manager_can_reset_edit_and_delete_shifts(): void
+    {
+        $this->student('A', 'Cô Mai', $this->guitar, 'G1');
+        $this->student('B', 'Thầy Bình', $this->piano, 'P1');
+        $this->saveRates([['name' => 'Cô Mai', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 100000, 'courses' => []]]);
+
+        $id = $this->shifts()['Cô Mai']['id'];
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $id, 'checkin_time' => '17:30'])->assertOk();
+
+        // Sửa: giờ check-in trễ → tự thành đi trễ; đơn giá đã chốt đổi theo
+        $this->putJson("/api/teacher-checkin/{$id}", ['checkin_time' => '17:50', 'unit_rate' => 120000])->assertOk();
+        $shift = $this->shifts()['Cô Mai'];
+        $this->assertSame('late', $shift['status']);
+        $this->assertSame(20, $shift['minutes_late']);
+        $this->assertEquals(120000, $this->monthly()['total_salary']);
+
+        // Khôi phục: về chưa check-in, check-in lại được
+        $this->postJson("/api/teacher-checkin/{$id}/reset")->assertOk();
+        $shift = $this->shifts()['Cô Mai'];
+        $this->assertSame('not_checked_in', $shift['status']);
+        $this->assertArrayNotHasKey('unit_rate', $shift);
+        $this->assertEquals(0, $this->monthly()['total_salary']);
+        $this->postJson("/api/teacher-checkin/{$id}/reset")->assertStatus(422);
+        $this->putJson("/api/teacher-checkin/{$id}", ['checkin_time' => '17:30'])->assertStatus(422);
+
+        // Xoá: ca biến mất và không được tự sinh lại từ lịch học
+        $this->deleteJson("/api/teacher-checkin/{$id}")->assertOk();
+        $this->assertArrayNotHasKey('Cô Mai', $this->shifts());
+        $this->assertArrayHasKey('Thầy Bình', $this->shifts());
+        $this->deleteJson("/api/teacher-checkin/{$id}")->assertNotFound();
+    }
+
     public function test_per_student_rate_counts_present_students(): void
     {
         $a = $this->student('A', 'Cô Mai', $this->guitar, 'G1');

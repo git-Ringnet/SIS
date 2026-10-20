@@ -685,8 +685,17 @@ onMounted(() => {
                         <Calendar class="h-3.5 w-3.5 text-slate-400" />
                         <span>{{ s.full_datetime || s.date }}</span>
                       </span>
+                      <!-- Buổi chưa học: ngày dự kiến theo lịch học hằng tuần -->
+                      <span v-else-if="s.planned_date" class="flex items-center gap-1 text-indigo-600 font-medium" title="Ngày dự kiến theo lịch học, có thể thay đổi khi nghỉ / học bù">
+                        <Calendar class="h-3.5 w-3.5 text-indigo-400" />
+                        <span>Dự kiến: {{ s.planned_weekday }}, {{ s.planned_date }} · {{ s.planned_time }}</span>
+                      </span>
                       <span v-else class="text-slate-400 italic">
                         Chưa diễn ra
+                      </span>
+                      <span v-if="s.planned_teacher" class="flex items-center gap-1">
+                        <User class="h-3.5 w-3.5 text-slate-400" />
+                        <span>GV: {{ s.planned_teacher }}</span>
                       </span>
 
                       <span v-if="s.marked_by" class="flex items-center gap-1">

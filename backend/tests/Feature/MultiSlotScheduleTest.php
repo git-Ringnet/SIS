@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Models\Course;
+use App\Models\Invoice;
 use App\Models\Student;
 use App\Models\User;
+use App\Support\BrandSettings;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
@@ -145,5 +147,59 @@ class MultiSlotScheduleTest extends TestCase
             'retention_status' => 'normal',
             'schedules' => [['day' => 1, 'start' => '10:00', 'end' => '09:00']],
         ])->assertUnprocessable();
+    }
+
+    public function test_parent_portal_shows_planned_date_of_each_upcoming_session(): void
+    {
+        $student = $this->createStudent(); // T2 09:00, T2 15:00, CN 15:30, 22 buổi
+        $morning = collect($student->schedules)->firstWhere('start', '09:00')['id'];
+        // Hôm nay (T2 19/10) đã điểm danh ca sáng → buổi sắp tới đầu tiên là ca chiều hôm nay
+        $this->postJson("/api/attendance/{$student->id}/mark", ['date' => self::MONDAY, 'status' => 'present', 'slot_id' => $morning])->assertOk();
+
+        $sessions = collect($this->postJson("/api/portal/students/{$student->id}/verify", ['phone_last4' => '0000'])->assertOk()->json('sessions'));
+        $upcoming = $sessions->where('status', 'upcoming')->values();
+
+        $this->assertSame('present', $sessions[0]['status']);
+        $this->assertSame(
+            ['19/10/2026 15:00 - 16:00', '25/10/2026 15:30 - 16:30', '26/10/2026 09:00 - 10:00', '26/10/2026 15:00 - 16:00'],
+            $upcoming->take(4)->map(fn ($s) => $s['planned_date'].' '.$s['planned_time'])->all(),
+        );
+        $this->assertSame(['Thứ 2', 'Chủ nhật'], $upcoming->take(2)->pluck('planned_weekday')->all());
+        $this->assertSame('Thầy Bình', $upcoming[0]['planned_teacher']);
+        $this->assertTrue($upcoming->every(fn ($s) => ! empty($s['planned_date']))); // đủ ngày cho mọi buổi chưa học
+
+        // Tạm dừng đến 01/11 → buổi sắp tới tính từ ngày đó (CN 01/11)
+        $student->update(['status' => 'paused', 'paused_until' => '2026-11-01']);
+        $first = collect($this->postJson("/api/portal/students/{$student->id}/verify", ['phone_last4' => '0000'])->json('sessions'))->firstWhere('status', 'upcoming');
+        $this->assertSame('01/11/2026', $first['planned_date']);
+
+        // Đã nghỉ học → không còn ngày dự kiến
+        $student->update(['status' => 'inactive']);
+        $first = collect($this->postJson("/api/portal/students/{$student->id}/verify", ['phone_last4' => '0000'])->json('sessions'))->firstWhere('status', 'upcoming');
+        $this->assertArrayNotHasKey('planned_date', $first);
+    }
+
+    public function test_course_end_date_is_estimated_from_schedule_when_missing(): void
+    {
+        $student = $this->createStudent(); // Guitar: T2 09:00 + CN, 12 buổi; Piano: T2 15:00, 10 buổi; hôm nay T2 19/10
+        $student->update(['end_date' => null]);
+        $student->refresh();
+
+        // Guitar: 19/10, 25/10, 26/10, 01/11 ... buổi thứ 12 là CN 29/11
+        $this->assertSame(['start' => null, 'end' => '29/11/2026', 'end_estimated' => true], [...$student->courseDates($this->guitar->id), 'start' => null]);
+        // Piano chỉ học T2 15:00: 10 buổi → T2 21/12
+        $this->assertSame('21/12/2026', $student->courseDates($this->piano->id)['end']);
+
+        // Đã nhập ngày kết thúc cho khóa thì dùng ngày đó, không tự tính
+        $courses = $student->registered_courses;
+        $courses[1]['end_date'] = '2027-01-15';
+        $student->update(['registered_courses' => $courses]);
+        $this->assertSame(['15/01/2027', false], array_values(array_slice($student->fresh()->courseDates($this->piano->id), 1)));
+
+        // PDF hiện chữ "(dự kiến)" khi ngày kết thúc là ngày tự tính
+        $id = $this->postJson('/api/invoices', ['student_id' => $student->id, 'course_id' => $this->guitar->id, 'amount' => 1, 'sessions_added' => 0, 'payment_method' => 'cash', 'paid_at' => self::MONDAY])
+            ->assertCreated()->json('invoice.id');
+        $html = view('pdf.payment-receipt', ['invoice' => Invoice::find($id), 'brand' => BrandSettings::brand()])->render();
+        $this->assertMatchesRegularExpression('/Ngày kết thúc: <strong>29\/11\/2026<\/strong> <span[^>]*>\(dự kiến\)/u', $html);
     }
 }

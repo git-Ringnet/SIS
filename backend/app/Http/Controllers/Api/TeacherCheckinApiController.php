@@ -32,6 +32,9 @@ class TeacherCheckinApiController extends Controller
 
     private const PATH = 'teacher_checkins.json';
 
+    // Dữ liệu ghi lúc check-in, bỏ đi khi khôi phục ca
+    private const CHECKIN_FIELDS = ['checked_in_by', 'checkin_method', 'checked_in_at', 'pay_mode', 'unit_rate', 'free_threshold', 'free_per_shift'];
+
     /**
      * Sinh ca dạy của ngày từ lịch học cố định của học viên (giáo viên + giờ + phòng + trung tâm).
      * Ca chưa check-in được cập nhật lại theo danh sách học viên hiện tại (thêm / bớt học viên, đổi loại ca),
@@ -257,7 +260,7 @@ class TeacherCheckinApiController extends Controller
         $periods = TeacherLeaves::all();
         $shifts = array_map(
             fn ($s) => $this->withPeriods($s, $periods),
-            $this->syncScheduledShifts($date, $this->loadCheckins()),
+            array_filter($this->syncScheduledShifts($date, $this->loadCheckins()), fn ($s) => $s['status'] !== 'deleted'),
         );
 
         $carbonDate = Carbon::parse($date);
@@ -486,6 +489,135 @@ class TeacherCheckinApiController extends Controller
     }
 
     /**
+     * Khôi phục ca về "Chưa check-in": bỏ giờ check-in, đơn giá đã chốt, báo vắng. Phân công dạy thay giữ nguyên.
+     */
+    public function resetShift(Request $request, int $id): JsonResponse
+    {
+        if ($denied = $this->forbidTeacher($request)) {
+            return $denied;
+        }
+
+        return $this->updateStoredShift($id, function (array $s) {
+            if (($s['status'] ?? 'not_checked_in') === 'not_checked_in') {
+                return response()->json(['message' => 'Ca dạy này chưa được ghi nhận.'], 422);
+            }
+
+            $reset = array_diff_key($s, array_flip(self::CHECKIN_FIELDS));
+
+            return [...$reset, 'status' => 'not_checked_in', 'checkin_time' => null, 'minutes_late' => 0, 'note' => null];
+        }, fn ($old) => ['Khôi phục', ['status' => self::statusLabel($old['status'])], ['status' => 'Chưa check-in']]);
+    }
+
+    /**
+     * Sửa ca đã check-in: giờ check-in (tính lại trễ), đơn giá đã chốt, ghi chú.
+     */
+    public function updateShift(Request $request, int $id): JsonResponse
+    {
+        if ($denied = $this->forbidTeacher($request)) {
+            return $denied;
+        }
+
+        $validated = $request->validate([
+            'checkin_time' => ['required', 'date_format:H:i'],
+            'unit_rate' => 'nullable|numeric|min:0',
+            'note' => 'nullable|string|max:255',
+        ]);
+
+        return $this->updateStoredShift($id, function (array $s) use ($validated) {
+            if (! in_array($s['status'] ?? null, self::PAID_STATUSES, true)) {
+                return response()->json(['message' => 'Chỉ sửa được ca đã check-in.'], 422);
+            }
+
+            $mins = $this->minutesLate($s['start_time'] ?? null, $validated['checkin_time']);
+            $isLate = $mins > self::LATE_GRACE_MINUTES;
+            $s['checkin_time'] = $validated['checkin_time'];
+            $s['minutes_late'] = $isLate ? $mins : 0;
+            if ($s['status'] !== 'substitute') {
+                $s['status'] = $isLate ? 'late' : 'checked_in';
+            }
+            if (array_key_exists('unit_rate', $validated) && $validated['unit_rate'] !== null) {
+                // Ca cũ chỉ có đơn giá cố định "rate": chuyển sang đơn giá theo ca
+                $s['pay_mode'] ??= 'per_shift';
+                $s['unit_rate'] = (float) $validated['unit_rate'];
+                unset($s['rate']);
+            }
+            $s['note'] = $validated['note'] ?? null;
+
+            return $s;
+        }, fn ($old, $new) => ['Sửa', [
+            'checkin_time' => $old['checkin_time'] ?? null,
+            'unit_rate' => $old['unit_rate'] ?? ($old['rate'] ?? null),
+        ], [
+            'checkin_time' => $new['checkin_time'],
+            'unit_rate' => $new['unit_rate'] ?? ($new['rate'] ?? null),
+        ]]);
+    }
+
+    /**
+     * Xoá ca dạy. Ca sinh từ lịch học được giữ lại dạng đã xoá để không bị tự sinh lại.
+     */
+    public function destroyShift(Request $request, int $id): JsonResponse
+    {
+        if ($denied = $this->forbidTeacher($request)) {
+            return $denied;
+        }
+
+        return $this->updateStoredShift(
+            $id,
+            fn (array $s) => ['id' => $s['id'], 'schedule_key' => $s['schedule_key'] ?? null, 'date' => $s['date'], 'status' => 'deleted',
+                'teacher_name' => $s['teacher_name'], 'shift_name' => $s['shift_name'] ?? '', 'center' => $s['center'] ?? null],
+            fn ($old) => ['Xoá', ['status' => self::statusLabel($old['status'])], ['status' => 'Đã xoá']],
+        );
+    }
+
+    /**
+     * Tìm ca theo id, áp thay đổi rồi lưu + ghi nhật ký.
+     * $change trả về ca mới, hoặc một JsonResponse để từ chối.
+     */
+    private function updateStoredShift(int $id, callable $change, callable $describe): JsonResponse
+    {
+        $shifts = $this->loadCheckins();
+
+        foreach ($shifts as $i => $s) {
+            if ($s['id'] !== $id || ($s['status'] ?? null) === 'deleted') {
+                continue;
+            }
+
+            $result = $change($s);
+            if ($result instanceof JsonResponse) {
+                return $result;
+            }
+
+            $shifts[$i] = $result;
+            $this->saveCheckins($shifts);
+
+            [$action, $before, $after] = $describe($s, $result);
+            ActivityLogger::log($action === 'Xoá' ? 'deleted' : 'updated', 'teacher_checkin', "{$this->earner($s)} – {$s['shift_name']}", $id,
+                ActivityLogger::diff($before, [...$after, 'note' => "{$action} ca ngày {$s['date']}"]), $s['center'] ?? null);
+
+            return response()->json(['message' => match ($action) {
+                'Khôi phục' => 'Đã khôi phục ca dạy về chưa check-in.',
+                'Xoá' => 'Đã xoá ca dạy.',
+                default => 'Đã cập nhật ca dạy.',
+            }]);
+        }
+
+        return response()->json(['message' => 'Không tìm thấy ca dạy!'], 404);
+    }
+
+    private static function statusLabel(?string $status): string
+    {
+        return match ($status) {
+            'checked_in' => 'Đúng giờ',
+            'late' => 'Đi trễ',
+            'skipped' => 'Bỏ dạy không phép',
+            'excused_absence' => 'Vắng có phép',
+            'substitute' => 'Dạy thay',
+            default => 'Chưa check-in',
+        };
+    }
+
+    /**
      * Cấu hình đơn giá: mỗi giáo viên một kiểu tính + đơn giá chung + đơn giá theo khoá học được gán.
      */
     public function rates(Request $request): JsonResponse
@@ -497,11 +629,17 @@ class TeacherCheckinApiController extends Controller
         $saved = TeacherRates::all();
         $courses = Course::pluck('name', 'id');
 
-        $teachers = array_map(function ($name) use ($saved, $courses) {
+        // Khoá học được gán = khoá của từng ca trong lịch học có giáo viên đó dạy
+        // (cùng cách xác định khoá như khi sinh ca dạy và chốt đơn giá lúc check-in)
+        $slotCourses = Student::all()->flatMap(fn ($st) => array_map(
+            fn ($slot) => ['teacher' => $slot['teacher'], 'course_id' => StudentSchedule::courseItemForSlot($st, $slot['id'])['course_id'] ?? $st->course_id],
+            array_filter(StudentSchedule::slots($st), fn ($slot) => ! empty($slot['teacher'])),
+        ));
+
+        $teachers = array_map(function ($name) use ($saved, $courses, $slotCourses) {
             $cfg = $saved[TeacherName::key($name)] ?? [];
-            // Khoá học được gán = khoá của các học viên có giáo viên này trong lịch học
-            $courseIds = Student::whereNotNull('teacher')->get(['teacher', 'course_id'])
-                ->filter(fn ($st) => TeacherName::same($st->teacher, $name))
+            $courseIds = $slotCourses
+                ->filter(fn ($sc) => TeacherName::same($sc['teacher'], $name))
                 ->pluck('course_id')->unique()->filter()->values();
 
             return [
@@ -589,6 +727,7 @@ class TeacherCheckinApiController extends Controller
 
         $monthlyShifts = array_values(array_filter($this->loadCheckins(), function ($s) use ($month, $ownName) {
             return str_starts_with($s['date'], $month)
+                && $s['status'] !== 'deleted'
                 && ($ownName === null || TeacherName::same($this->earner($s), $ownName));
         }));
         $present = $this->presentByDate($monthlyShifts);
@@ -605,15 +744,6 @@ class TeacherCheckinApiController extends Controller
             ]);
 
             foreach ($monthlyShifts as $s) {
-                $statusVi = match ($s['status']) {
-                    'checked_in' => 'Đúng giờ',
-                    'late' => 'Đi trễ',
-                    'skipped' => 'Bỏ dạy không phép',
-                    'excused_absence' => 'Vắng có phép',
-                    'substitute' => 'Dạy thay',
-                    default => 'Chưa check-in',
-                };
-
                 fputcsv($output, [
                     Carbon::parse($s['date'])->format('d/m/Y'),
                     $s['teacher_name'],
@@ -622,7 +752,7 @@ class TeacherCheckinApiController extends Controller
                     $s['type'],
                     $s['room'],
                     $s['center'],
-                    $statusVi,
+                    self::statusLabel($s['status']),
                     $s['checkin_time'] ?: '-',
                     $s['minutes_late'] ?: 0,
                     match ($s['pay_mode'] ?? 'per_shift') {

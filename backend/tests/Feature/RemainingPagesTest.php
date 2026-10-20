@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Models\Course;
+use App\Models\Invoice;
 use App\Models\Student;
 use App\Models\User;
+use App\Support\BrandSettings;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
@@ -198,5 +200,29 @@ class RemainingPagesTest extends TestCase
         $give([['inventory_id' => $id, 'name' => 'Capo', 'quantity' => 2, 'price' => 95000]])->assertOk();
         $this->assertSame(0, collect($this->getJson('/api/inventory')->json('items'))->firstWhere('id', $id)['quantity']);
         $give([['inventory_id' => $id, 'name' => 'Capo', 'quantity' => 1]])->assertUnprocessable(); // đã hết hàng
+    }
+
+    public function test_invoice_pdfs_show_course_start_and_end_dates(): void
+    {
+        $piano = Course::create(['code' => 'P', 'name' => 'Piano', 'price' => 1, 'default_sessions' => 8]);
+        $student = $this->student('An', 'Cơ sở A', ['join_date' => '2026-09-01', 'end_date' => '2026-12-31', 'registered_courses' => [
+            ['id' => 1, 'course_id' => $this->course->id, 'course_name' => 'Guitar', 'start_date' => '2026-09-01', 'end_date' => '2026-11-30'],
+            ['id' => 2, 'course_id' => $piano->id, 'course_name' => 'Piano', 'start_date' => '2026-10-05', 'end_date' => '2026-12-20'],
+        ]]);
+
+        // Theo đúng khóa của hóa đơn
+        $this->assertSame(['start' => '05/10/2026', 'end' => '20/12/2026', 'end_estimated' => false], $student->courseDates($piano->id));
+        $this->assertSame(['start' => '01/09/2026', 'end' => '30/11/2026', 'end_estimated' => false], $student->courseDates());
+        // Khóa không có trong danh sách đăng ký → ngày nhập học / kết thúc dự kiến của học viên
+        $this->assertSame(['start' => '01/09/2026', 'end' => '31/12/2026', 'end_estimated' => false], $student->courseDates(999));
+
+        $id = $this->postJson('/api/invoices', ['student_id' => $student->id, 'course_id' => $piano->id, 'amount' => 1000000, 'sessions_added' => 0, 'payment_method' => 'cash', 'paid_at' => '2026-10-20'])
+            ->assertCreated()->json('invoice.id');
+        $this->get("/api/invoices/{$id}/pdf")->assertOk()->assertHeader('Content-Type', 'application/pdf');
+        $this->get("/api/students/{$student->id}/tuition-invoice.pdf")->assertOk();
+
+        $html = view('pdf.payment-receipt', ['invoice' => Invoice::find($id), 'brand' => BrandSettings::brand()])->render();
+        $this->assertStringContainsString('Ngày bắt đầu học: <strong>05/10/2026</strong>', $html);
+        $this->assertStringContainsString('Ngày kết thúc: <strong>20/12/2026</strong>', $html);
     }
 }

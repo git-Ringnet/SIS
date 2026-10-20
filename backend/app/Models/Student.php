@@ -251,4 +251,43 @@ class Student extends Model
 
         return [];
     }
+
+    /**
+     * Ngày bắt đầu / kết thúc học của một khóa (dùng trên hóa đơn): lấy từ khóa đã đăng ký trùng course_id
+     * (khóa đăng ký gần nhất), không có thì dùng ngày nhập học / ngày kết thúc dự kiến của học viên.
+     * Chưa nhập ngày kết thúc thì tự tính = ngày buổi cuối còn lại theo lịch học của khóa (end_estimated = true).
+     *
+     * @return array{start: ?string, end: ?string, end_estimated: bool} ngày dạng d/m/Y
+     */
+    public function courseDates(?int $courseId = null): array
+    {
+        $courseId ??= $this->course_id;
+        $item = collect($this->registered_courses_list)
+            ->filter(fn ($c) => (int) ($c['course_id'] ?? 0) === (int) $courseId)
+            ->last();
+
+        $format = fn ($date) => $date ? Carbon::parse($date)->format('d/m/Y') : null;
+
+        // Ngày buổi cuối còn lại theo lịch học của khóa (các ca gán cho khóa, số buổi còn lại của khóa)
+        $estimate = function () use ($item) {
+            $remaining = (int) ($item['remaining_sessions'] ?? $this->remaining_sessions);
+            $planned = StudentSchedule::upcomingSessions($this, $remaining, $item['schedule_ids'] ?? null, $item['start_date'] ?? null);
+
+            return $remaining > 0 && count($planned) === $remaining ? end($planned)['date']->format('d/m/Y') : null;
+        };
+
+        // Ưu tiên: ngày đã nhập của khóa → tự tính theo khóa → ngày kết thúc chung của học viên
+        $end = $format($item['end_date'] ?? null);
+        $estimated = false;
+        if (! $end && ($end = $estimate())) {
+            $estimated = true;
+        }
+        $end ??= $format($this->end_date);
+
+        return [
+            'start' => $format($item['start_date'] ?? null) ?? $format($this->join_date),
+            'end' => $end,
+            'end_estimated' => $estimated,
+        ];
+    }
 }

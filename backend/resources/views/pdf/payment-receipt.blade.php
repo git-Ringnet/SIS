@@ -71,6 +71,9 @@
                     <div class="name">{{ $student?->name ?? '—' }}</div>
                     <div>Mã học viên: <span class="code">{{ $student?->code ?? ($student ? 'HV-' . $student->id : '—') }}</span></div>
                     <div>Số buổi còn lại: <strong style="color: #e11d48;">{{ $student?->remaining_sessions ?? 0 }} buổi</strong></div>
+                    @php($dates = $student?->courseDates($invoice->course_id) ?? ['start' => null, 'end' => null])
+                    <div>Ngày bắt đầu học: <strong>{{ $dates['start'] ?? '—' }}</strong></div>
+                    <div>Ngày kết thúc: <strong>{{ $dates['end'] ?? '—' }}</strong>@if ($dates['end_estimated'] ?? false) <span style="color: #94a3b8;">(dự kiến)</span>@endif</div>
                 </td>
                 <td style="width: 50%; vertical-align: top;">
                     <div class="label">Người nộp tiền / Phụ huynh</div>

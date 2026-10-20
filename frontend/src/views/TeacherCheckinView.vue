@@ -1,6 +1,7 @@
 <script setup>
 import { toLocalDateString, toLocalMonthString } from '../services/date';
 import { notify, errorMessage } from '../services/notify';
+import { confirmDialog } from '../services/useConfirm';
 import { ref, onMounted, computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { teacherCheckinApi } from '../services/api';
@@ -19,6 +20,8 @@ import {
   X,
   Trash2,
   QrCode,
+  RotateCcw,
+  Pencil,
 } from 'lucide-vue-next';
 
 // Bộ lọc ngày hôm nay
@@ -170,6 +173,71 @@ const submitAbsence = async () => {
     await fetchData();
   } catch (err) {
     notify.error('Lỗi ghi nhận', { description: errorMessage(err, err.message) });
+  }
+};
+
+// Khôi phục / Sửa / Xoá ca dạy (chỉ quản lý)
+const PAID_STATUSES = ['checked_in', 'late', 'substitute'];
+const showEditModal = ref(false);
+const editForm = ref({ id: null, checkin_time: '', unit_rate: null, note: '' });
+const savingEdit = ref(false);
+
+const resetShift = async (shift) => {
+  const ok = await confirmDialog({
+    title: 'Khôi phục ca dạy?',
+    message: `Ca ${shift.start_time} của ${shift.substitute_teacher || shift.teacher_name} sẽ về "Chưa check-in"; giờ check-in và đơn giá đã chốt bị bỏ.`,
+    confirmText: 'Khôi phục',
+    variant: 'warning',
+  });
+  if (!ok) return;
+  try {
+    const res = await teacherCheckinApi.resetShift(shift.id);
+    notify.success(res.data.message || 'Đã khôi phục ca dạy');
+    await fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Không khôi phục được ca dạy');
+  }
+};
+
+const openEditModal = (shift) => {
+  selectedShift.value = shift;
+  editForm.value = {
+    id: shift.id,
+    checkin_time: shift.checkin_time || shift.start_time || '',
+    unit_rate: shift.unit_rate ?? shift.rate ?? null,
+    note: shift.note || '',
+  };
+  showEditModal.value = true;
+};
+
+const submitEdit = async () => {
+  try {
+    savingEdit.value = true;
+    const { id, ...data } = editForm.value;
+    const res = await teacherCheckinApi.updateShift(id, data);
+    notify.success(res.data.message || 'Đã cập nhật ca dạy');
+    showEditModal.value = false;
+    await fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Không cập nhật được ca dạy');
+  } finally {
+    savingEdit.value = false;
+  }
+};
+
+const deleteShift = async (shift) => {
+  const ok = await confirmDialog({
+    title: 'Xoá ca dạy?',
+    message: `Xoá ca ${shift.start_time} ngày ${formatDateDisplay(shift.date)} của ${shift.teacher_name}. Ca sẽ không được tự tạo lại từ lịch học và không tính thù lao.`,
+    confirmText: 'Xoá',
+  });
+  if (!ok) return;
+  try {
+    const res = await teacherCheckinApi.deleteShift(shift.id);
+    notify.success(res.data.message || 'Đã xoá ca dạy');
+    await fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Không xoá được ca dạy');
   }
 };
 
@@ -489,6 +557,22 @@ const exportMonthly = async () => {
               class="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-3 py-1.5 text-xs font-medium cursor-pointer">
               Báo vắng / Dạy thay
             </button>
+            <template v-if="!isTeacher">
+              <button v-if="PAID_STATUSES.includes(s.status)" type="button" @click="openEditModal(s)"
+                class="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 cursor-pointer"
+                title="Sửa giờ check-in / đơn giá">
+                <Pencil class="h-4 w-4" />
+              </button>
+              <button v-if="s.status !== 'not_checked_in' && !s.on_leave" type="button" @click="resetShift(s)"
+                class="rounded-lg p-1.5 text-amber-600 hover:bg-amber-50 cursor-pointer"
+                title="Khôi phục về chưa check-in">
+                <RotateCcw class="h-4 w-4" />
+              </button>
+              <button type="button" @click="deleteShift(s)"
+                class="rounded-lg p-1.5 text-rose-500 hover:bg-rose-50 cursor-pointer" title="Xoá ca dạy">
+                <Trash2 class="h-4 w-4" />
+              </button>
+            </template>
           </div>
         </div>
       </div>
@@ -737,6 +821,57 @@ const exportMonthly = async () => {
             <button type="submit"
               class="rounded-xl bg-rose-600 hover:bg-rose-700 px-5 py-2 font-semibold text-white shadow-2xs cursor-pointer">
               Xác nhận
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- MODAL 4: SỬA CA ĐÃ CHECK-IN -->
+    <div v-if="showEditModal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
+      <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+          <h3 class="text-base font-bold text-slate-900">
+            Sửa ca {{ selectedShift?.start_time }} – {{ selectedShift?.substitute_teacher || selectedShift?.teacher_name }}
+          </h3>
+          <button type="button" @click="showEditModal = false"
+            class="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+            <X class="h-5 w-5" />
+          </button>
+        </div>
+
+        <form @submit.prevent="submitEdit" class="space-y-3.5 text-xs sm:text-sm">
+          <div>
+            <label class="block font-medium text-slate-700 mb-1">Giờ check-in</label>
+            <input v-model="editForm.checkin_time" type="time" required
+              class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none" />
+            <p class="mt-1 text-[11px] text-slate-500">Trễ quá 5 phút so với giờ vào ca ({{ selectedShift?.start_time }})
+              sẽ tự tính là đi trễ.</p>
+          </div>
+
+          <div v-if="selectedShift?.pay_mode !== 'free'">
+            <label class="block font-medium text-slate-700 mb-1">
+              Đơn giá đã chốt {{ selectedShift?.pay_mode === 'per_student' ? '(VNĐ / HV)' : '(VNĐ / ca)' }}
+            </label>
+            <MoneyInput v-model="editForm.unit_rate"
+              class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none" />
+          </div>
+
+          <div>
+            <label class="block font-medium text-slate-700 mb-1">Ghi chú</label>
+            <textarea v-model="editForm.note" rows="2"
+              class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none"></textarea>
+          </div>
+
+          <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+            <button type="button" @click="showEditModal = false"
+              class="rounded-xl border border-slate-200 px-4 py-2 font-medium text-slate-600 hover:bg-slate-50 cursor-pointer">
+              Hủy
+            </button>
+            <button type="submit" :disabled="savingEdit"
+              class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 px-5 py-2 font-semibold text-white shadow-2xs cursor-pointer">
+              {{ savingEdit ? 'Đang lưu...' : 'Lưu' }}
             </button>
           </div>
         </form>

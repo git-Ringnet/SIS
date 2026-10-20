@@ -140,6 +140,12 @@ const formatDate = (val) => {
   }
 };
 
+// dd-mm-yyyy
+const formatDateDMY = (val) => {
+  const iso = formatDate(val);
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.split('-').reverse().join('-') : iso;
+};
+
 const getStudentProgress = (st) => {
   if (!st || st.total_sessions <= 0) return 0;
   const attended = Math.max(0, st.total_sessions - st.remaining_sessions);
@@ -287,15 +293,29 @@ const getAddCourseForm = (studentId) => {
       start_date: today,
       sessions_per_week: '',
       end_date: '',
+      end_touched: false,
     };
   }
   return addCourseForms.value[studentId];
 };
 
+// Tự tính ngày kết thúc dự kiến khi đổi ngày bắt đầu / tổng buổi / buổi/tuần (trừ khi đã sửa tay).
+const recomputeAddCourseEnd = (student) => {
+  const form = getAddCourseForm(student.id);
+  if (form.end_touched) return;
+  const slots = student.schedule_slots || [];
+  form.end_date = computeCourseEndDate(
+    form.start_date,
+    Number(form.total_sessions),
+    Number(form.sessions_per_week) || slots.length || 1,
+    slots.map((x) => x.day),
+  );
+};
+
 const toggleAddCourseForm = (student) => {
   showAddCourseForm.value[student.id] = !showAddCourseForm.value[student.id];
   if (showAddCourseForm.value[student.id]) {
-    getAddCourseForm(student.id);
+    recomputeAddCourseEnd(student);
   }
 };
 
@@ -484,7 +504,7 @@ const submitChangeCourse = async () => {
   }
 };
 
-// ---- Thời gian khóa học (nút "Sửa" cạnh Copy placeholder) ----
+// ---- Thời gian khóa học (nút "Sửa" trên thẻ khóa học) ----
 const courseDatesState = ref({ key: null, student: null, item: null, start: '', perWeek: null, end: '', endTouched: false });
 const savingCourseDates = ref(false);
 
@@ -506,6 +526,19 @@ const computeCourseEndDate = (startIso, totalSessions, perWeek, classDays) => {
   return '';
 };
 
+const coursePerWeek = (student, courseItem) =>
+  Number(courseItem.sessions_per_week) || courseSlots(student, courseItem).length || 1;
+
+// Ngày kết thúc hiển thị trên thẻ khóa: ngày đã lưu, nếu chưa có thì tự tính.
+const courseEndDate = (student, courseItem) =>
+  toIsoDate(courseItem.end_date || student.end_date) ||
+  computeCourseEndDate(
+    toIsoDate(courseItem.start_date || student.join_date),
+    Number(courseItem.total_sessions),
+    coursePerWeek(student, courseItem),
+    courseSlots(student, courseItem).map((x) => x.day),
+  );
+
 const openCourseDates = (student, courseItem) => {
   const key = `${student.id}_${courseItem.id}`;
   if (courseDatesState.value.key === key) {
@@ -519,7 +552,7 @@ const openCourseDates = (student, courseItem) => {
     item: courseItem,
     start: toIsoDate(courseItem.start_date || student.join_date),
     perWeek,
-    end: toIsoDate(courseItem.end_date || student.end_date),
+    end: courseEndDate(student, courseItem),
     endTouched: !!(courseItem.end_date || student.end_date),
   };
 };
@@ -569,11 +602,6 @@ const deleteStudentCourse = async (student, courseItem) => {
   } catch (err) {
     notify.apiError(err, 'Lỗi khi xóa khóa học');
   }
-};
-
-const copyPlaceholder = (st) => {
-  navigator.clipboard?.writeText(st.name || '');
-  notify.success(`Đã sao chép: ${st.name}`);
 };
 
 const openRetentionNote = (st) => {
@@ -1460,6 +1488,7 @@ const getAttendanceSummaryTooltip = (student) => {
                           type="number"
                           min="1"
                           v-model="getAddCourseForm(student.id).total_sessions"
+                          @input="recomputeAddCourseEnd(student)"
                           class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-red-500 focus:ring-1 focus:ring-red-500 focus:outline-none transition-all"
                         />
                       </div>
@@ -1470,6 +1499,7 @@ const getAttendanceSummaryTooltip = (student) => {
                         <input
                           type="date"
                           v-model="getAddCourseForm(student.id).start_date"
+                          @input="recomputeAddCourseEnd(student)"
                           class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-red-500 focus:ring-1 focus:ring-red-500 focus:outline-none transition-all"
                         />
                       </div>
@@ -1481,6 +1511,7 @@ const getAttendanceSummaryTooltip = (student) => {
                           type="text"
                           placeholder="vd: 2"
                           v-model="getAddCourseForm(student.id).sessions_per_week"
+                          @input="recomputeAddCourseEnd(student)"
                           class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-red-500 focus:ring-1 focus:ring-red-500 focus:outline-none transition-all"
                         />
                       </div>
@@ -1492,6 +1523,7 @@ const getAttendanceSummaryTooltip = (student) => {
                           type="date"
                           placeholder="dd/mm/yyyy"
                           v-model="getAddCourseForm(student.id).end_date"
+                          @input="getAddCourseForm(student.id).end_touched = !!getAddCourseForm(student.id).end_date"
                           class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-red-500 focus:ring-1 focus:ring-red-500 focus:outline-none transition-all"
                         />
                       </div>
@@ -1546,13 +1578,10 @@ const getAttendanceSummaryTooltip = (student) => {
                         <div class="flex items-center gap-1">
                           <Calendar class="h-3.5 w-3.5 text-slate-400" />
                           <span>
-                            Bắt đầu {{ formatDate(cItem.start_date || student.join_date) }} &bull; Kết thúc dự kiến {{ cItem.end_date ? formatDate(cItem.end_date) : (student.end_date ? formatDate(student.end_date) : '—') }} &bull; {{ cItem.schedule_info || student.schedule_info || '1 buổi/tuần' }}
+                            Bắt đầu {{ formatDateDMY(cItem.start_date || student.join_date) }} &bull; Kết thúc dự kiến {{ formatDateDMY(courseEndDate(student, cItem)) }} &bull; {{ cItem.schedule_info || student.schedule_info || '1 buổi/tuần' }}
                             <template v-if="cItem.schedule_ids?.length"> &bull; Ca: {{ courseSlots(student, cItem).map(slotLabel).join(', ') }}</template>
                           </span>
                         </div>
-                        <button type="button" @click="copyPlaceholder(student)" class="text-slate-400 hover:text-slate-700 font-medium">
-                          Copy placeholder
-                        </button>
                         <button
                           type="button"
                           @click="openCourseDates(student, cItem)"

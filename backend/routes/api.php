@@ -219,6 +219,9 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::get('/', [TeacherCheckinApiController::class, 'index']);
         Route::post('/checkin', [TeacherCheckinApiController::class, 'checkin']);
         Route::post('/absence', [TeacherCheckinApiController::class, 'recordAbsence']);
+        Route::post('/{id}/reset', [TeacherCheckinApiController::class, 'resetShift'])->whereNumber('id');
+        Route::put('/{id}', [TeacherCheckinApiController::class, 'updateShift'])->whereNumber('id');
+        Route::delete('/{id}', [TeacherCheckinApiController::class, 'destroyShift'])->whereNumber('id');
         Route::get('/qr-token', [TeacherCheckinApiController::class, 'qrToken']);
         Route::get('/rates', [TeacherCheckinApiController::class, 'rates']);
         Route::post('/rates', [TeacherCheckinApiController::class, 'updateRates']);

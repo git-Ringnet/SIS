@@ -7,6 +7,7 @@ use App\Models\Attendance;
 use App\Models\Student;
 use App\Support\BrandSettings;
 use App\Support\CenterStore;
+use App\Support\StudentSchedule;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -138,6 +139,20 @@ class ParentPortalApiController extends Controller
 
         // Sắp xếp lại danh sách buổi học theo thứ tự 1, 2, 3...
         usort($sessionList, fn ($a, $b) => $a['session_number'] <=> $b['session_number']);
+
+        // Ngày học dự kiến của các buổi chưa học, theo lịch học hằng tuần
+        $upcomingIndexes = array_keys(array_filter($sessionList, fn ($s) => $s['status'] === 'upcoming'));
+        $planned = StudentSchedule::upcomingSessions($student, count($upcomingIndexes));
+        $weekdays = [1 => 'Thứ 2', 2 => 'Thứ 3', 3 => 'Thứ 4', 4 => 'Thứ 5', 5 => 'Thứ 6', 6 => 'Thứ 7', 0 => 'Chủ nhật'];
+        foreach ($planned as $n => ['date' => $date, 'slot' => $slot]) {
+            $sessionList[$upcomingIndexes[$n]] = [
+                ...$sessionList[$upcomingIndexes[$n]],
+                'planned_date' => $date->format('d/m/Y'),
+                'planned_weekday' => $weekdays[$date->dayOfWeek],
+                'planned_time' => StudentSchedule::timeLabel($slot),
+                'planned_teacher' => $slot['teacher'] ?? null,
+            ];
+        }
 
         $brand = BrandSettings::brand();
         $maskedPhone = strlen($cleanParentPhone) >= 6
