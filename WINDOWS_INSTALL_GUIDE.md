@@ -38,7 +38,7 @@ PHP, Node.js, Caddy, cloudflared, rclone được tải về **một thư mục 
 - Tài khoản GitHub có quyền đọc repo `git-Ringnet/SIS` và một **Personal Access Token** (repo private).
 - Code mới nhất đã được commit và push lên GitHub.
 
-## Bước 1. Tải source code về `C:\SIS`
+## Bước 1. Tải source code (ví dụ `C:\SIS` hoặc `D:\SIS`)
 
 1. Cài **Git for Windows**: mở PowerShell gõ `winget install --id Git.Git -e`, hoặc tải ở [git-scm.com/download/win](https://git-scm.com/download/win) (cứ Next đến hết).
 2. Mở **PowerShell mới** và chạy:
@@ -49,11 +49,15 @@ PHP, Node.js, Caddy, cloudflared, rclone được tải về **một thư mục 
 
    Khi Git hỏi mật khẩu: nhập **Personal Access Token**, không phải mật khẩu GitHub.
 
-> Đường dẫn **không được có dấu cách** (không đặt trong `Desktop\New folder`...). Nên dùng đúng `C:\SIS`.
+   Để ở ổ D thì thay bằng `D:\SIS`. **Trong tài liệu này, mọi chỗ ghi `C:\SIS` thì thay bằng thư mục source thực tế** (ví dụ `D:\SIS\scripts\setup_windows.bat`).
+
+> Đường dẫn **không được có dấu cách** (không đặt trong `Desktop\New folder`...).
+>
+> PHP, Node.js, Caddy... được tải vào `C:\SIS-runtime` (khoảng 600MB). Ổ C ít dung lượng thì cài với `setup_windows.bat -RuntimeDir D:\SIS-runtime`, khi đó mọi chỗ ghi `C:\SIS-runtime` trong tài liệu thay bằng `D:\SIS-runtime`.
 
 ## Bước 2. Chạy cài đặt
 
-Mở thư mục `C:\SIS\scripts`, **bấm đúp `setup_windows.bat`** → chọn **Yes** khi Windows hỏi quyền Administrator.
+Mở thư mục `scripts` trong source (ví dụ `D:\SIS\scripts`), **bấm đúp `setup_windows.bat`** → chọn **Yes** khi Windows hỏi quyền Administrator.
 
 Mất khoảng 10–20 phút (tải khoảng 150MB). Script hỏi 4 câu:
 
@@ -259,7 +263,7 @@ Windows tự khởi động lại sau khi cập nhật thì hệ thống cũng t
 | Hiện tượng | Kiểm tra / cách xử lý |
 |---|---|
 | Script báo **cổng 80 đang bị chiếm** | Tắt IIS (*Turn Windows features on or off* → bỏ *Internet Information Services*), XAMPP, WampServer... hoặc cài lại với `-Port 8080` |
-| Script báo **đường dẫn có dấu cách** | Chuyển source về `C:\SIS` |
+| Script báo **đường dẫn có dấu cách** | Chuyển source về thư mục không dấu cách, ví dụ `D:\SIS` |
 | Bấm đúp `.bat` bị **SmartScreen** chặn | Bấm *More info* → *Run anyway* |
 | Mở `localhost` **không vào được** | Chạy `sis-control.ps1 status`. Có dòng "KHÔNG chạy" thì `sis-control.ps1 restart`, vẫn lỗi thì xem log `C:\SIS-runtime\logs\` |
 | Trang mở được nhưng **lỗi khi thao tác** | Xem log Laravel: `C:\SIS\backend\storage\logs\laravel.log` (mở bằng Notepad, xem cuối file) |
