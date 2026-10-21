@@ -3,6 +3,7 @@ import { ref, computed, onMounted, nextTick } from 'vue';
 import { useRoute } from 'vue-router';
 import { parentPortalApi } from '../services/api';
 import ExpandableText from '../components/ExpandableText.vue';
+import { richLines } from '../services/richLines';
 import { notify } from '../services/notify';
 import {
   ShieldCheck,
@@ -214,6 +215,14 @@ const leaveOf = (session) => {
   return course || { left: portalData.value?.stats?.leave_left ?? 0, allowed: portalData.value?.stats?.allowed_absences ?? 0, course_name: null };
 };
 const selectedLeave = computed(() => leaveOf(selectedLeaveSession.value));
+
+// Quy định nghỉ học do trung tâm soạn ở Cài đặt; {so_buoi_duoc_nghi} = số buổi được nghỉ của học viên
+const leaveRuleLines = computed(() => richLines(portalData.value?.brand?.leave_rules, {
+  // Học nhiều khóa: "3 (Piano), 3 (Guitar)"
+  so_buoi_duoc_nghi: multiCourse.value
+    ? leaveByCourse.value.map((c) => `${c.allowed} (${c.course_name})`).join(', ')
+    : (portalData.value?.stats?.allowed_absences ?? 0),
+}));
 
 const sessionLabel = (s) => `${s.weekday}, ${s.date}${s.time ? ` · ${s.time}` : ''}${multiCourse.value && s.course_name ? ` · ${s.course_name}` : ''}${s.is_makeup ? ' (buổi bù)' : ''}`;
 
@@ -603,12 +612,11 @@ onMounted(() => {
               <RefreshCw class="h-3.5 w-3.5" /> Buổi bù: {{ portalData.stats?.makeup_sessions }}
             </span>
           </div>
-          <ul class="text-[11px] text-slate-500 space-y-0.5 list-disc pl-4">
-            <li v-if="multiCourse">Nghỉ có phép (báo trước) <strong class="text-slate-700">không bị trừ buổi</strong>, tính riêng từng khóa: buổi nghỉ trừ vào số buổi được nghỉ của khóa có buổi học đó.</li>
-            <li v-else>Nghỉ có phép (báo trước) <strong class="text-slate-700">không bị trừ buổi</strong>, tối đa {{ portalData.stats?.allowed_absences }} buổi cho khóa học.</li>
-            <li>Vắng không phép, hoặc nghỉ có phép khi đã hết số buổi được nghỉ: <strong class="text-slate-700">trừ 1 buổi</strong>.</li>
-            <li>Ngày trung tâm nghỉ / giáo viên nghỉ: <strong class="text-slate-700">không trừ buổi</strong>, lịch học tự lùi sang buổi kế tiếp.</li>
+          <!-- Quy định nghỉ học: trung tâm sửa ở Cài đặt → Thương hiệu -->
+          <ul v-if="leaveRuleLines.length" class="text-[11px] text-slate-500 space-y-0.5 list-disc pl-4">
+            <li v-for="(line, i) in leaveRuleLines" :key="i" v-html="line"></li>
           </ul>
+          <p v-if="multiCourse" class="text-[11px] text-slate-500">Học nhiều khóa: buổi nghỉ trừ vào số buổi được nghỉ của khóa có buổi học đó.</p>
         </div>
 
         <!-- Thanh tiến độ tổng quan lớn -->

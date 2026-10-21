@@ -1,5 +1,6 @@
 <script setup>
 import { useBrand } from '../services/useBrand';
+import { richLines } from '../services/richLines';
 import { notify } from '../services/notify';
 import { ref, computed, onMounted } from 'vue';
 import { useAuth } from '../services/useAuth';
@@ -44,8 +45,12 @@ const brand = ref({
   bank_name: '',
   bank_account: '',
   bank_holder: '',
+  portal_leave_rules: '',
 });
 const savingBrand = ref(false);
+// Quy định nghỉ học mặc định của Cổng phụ huynh (khi để trống ô soạn)
+const defaultLeaveRules = ref('');
+const leaveRulesPreview = computed(() => richLines(brand.value.portal_leave_rules || defaultLeaveRules.value, { so_buoi_duoc_nghi: 3 }));
 
 // VAT Invoice form
 const vat = ref({
@@ -77,6 +82,7 @@ const fetchData = async () => {
     }
     if (res.data?.brand) {
       brand.value = { ...brand.value, ...res.data.brand };
+      defaultLeaveRules.value = res.data.default_portal_leave_rules || '';
     }
     if (res.data?.vat) {
       vat.value = { ...vat.value, ...res.data.vat };
@@ -419,6 +425,31 @@ const handleLogoUpload = (e) => {
               <option value="100 – 300">100 – 300</option>
               <option value="Trên 300">Trên 300</option>
             </select>
+          </div>
+        </div>
+
+        <!-- Quy định nghỉ học hiện ở Cổng phụ huynh -->
+        <div>
+          <div class="flex items-center justify-between gap-2 mb-1.5">
+            <label class="block text-xs font-semibold text-slate-700">Quy định nghỉ học (Cổng phụ huynh)</label>
+            <button type="button" @click="brand.portal_leave_rules = defaultLeaveRules"
+              class="text-[11px] font-semibold text-rose-600 hover:underline">Dùng nội dung mặc định</button>
+          </div>
+          <textarea
+            v-model="brand.portal_leave_rules"
+            rows="4"
+            :placeholder="defaultLeaveRules"
+            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
+          ></textarea>
+          <p class="text-[11px] text-slate-400 mt-1">
+            Mỗi dòng là một ý. Viết <code>**chữ**</code> để in đậm, <code>{so_buoi_duoc_nghi}</code> để tự điền số buổi được nghỉ của học viên.
+            Để trống thì dùng nội dung mặc định.
+          </p>
+          <div class="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p class="text-[11px] font-semibold text-slate-500 mb-1">Xem trước (học viên được nghỉ 3 buổi):</p>
+            <ul class="text-[11px] text-slate-500 space-y-0.5 list-disc pl-4">
+              <li v-for="(line, i) in leaveRulesPreview" :key="i" v-html="line"></li>
+            </ul>
           </div>
         </div>
       </div>

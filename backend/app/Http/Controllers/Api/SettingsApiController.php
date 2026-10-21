@@ -45,6 +45,7 @@ class SettingsApiController extends Controller
             ],
             'brand' => $stored['brand'],
             'vat' => $stored['vat'],
+            'default_portal_leave_rules' => BrandSettings::DEFAULT_PORTAL_LEAVE_RULES,
         ]);
     }
 
@@ -118,6 +119,8 @@ class SettingsApiController extends Controller
             'bank_name' => 'nullable|string|max:255',
             'bank_account' => 'nullable|string|max:50',
             'bank_holder' => 'nullable|string|max:255',
+            // Quy định nghỉ học hiện ở Cổng phụ huynh (mỗi dòng một ý); trống = nội dung mặc định
+            'portal_leave_rules' => 'nullable|string|max:3000',
         ]);
 
         $stored = $this->loadBrandSettings();
@@ -137,6 +140,7 @@ class SettingsApiController extends Controller
         return response()->json([
             'message' => 'Lưu thông tin thương hiệu thành công!',
             'brand' => $stored['brand'],
+            'default_portal_leave_rules' => BrandSettings::DEFAULT_PORTAL_LEAVE_RULES,
         ]);
     }
 

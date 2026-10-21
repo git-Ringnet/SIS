@@ -13,6 +13,24 @@ class BrandSettings
 {
     private const PATH = 'settings.json';
 
+    /**
+     * Quy định nghỉ học hiện ở Cổng phụ huynh khi trung tâm chưa tự soạn (mỗi dòng một ý, **in đậm**,
+     * {so_buoi_duoc_nghi} = số buổi được nghỉ có phép của học viên).
+     */
+    public const DEFAULT_PORTAL_LEAVE_RULES = 'Nghỉ có phép (báo trước) **không bị trừ buổi**, tối đa {so_buoi_duoc_nghi} buổi cho khóa học.
+'
+        .'Vắng không phép, hoặc nghỉ có phép khi đã hết số buổi được nghỉ: **trừ 1 buổi**.
+'
+        .'Ngày trung tâm nghỉ / giáo viên nghỉ: **không trừ buổi**, lịch học tự lùi sang buổi kế tiếp.';
+
+    /**
+     * Quy định nghỉ học cho Cổng phụ huynh: nội dung trung tâm soạn ở Cài đặt, để trống thì dùng mặc định.
+     */
+    public static function portalLeaveRules(): string
+    {
+        return trim((string) (self::brand()['portal_leave_rules'] ?? '')) ?: self::DEFAULT_PORTAL_LEAVE_RULES;
+    }
+
     public static function all(): array
     {
         $stored = [];
@@ -70,6 +88,8 @@ class BrandSettings
                 'bank_name' => 'MB Bank (Quân Đội)',
                 'bank_account' => '15119928888',
                 'bank_holder' => 'KHOA ANH MUSIC',
+                // Trống = dùng DEFAULT_PORTAL_LEAVE_RULES
+                'portal_leave_rules' => '',
             ],
             'vat' => [
                 'company_name' => '',

@@ -176,6 +176,8 @@ class ParentPortalApiController extends Controller
                 'logo_url' => $brand['logo_url'] ?? null,
                 'phone' => $brand['phone'] ?? null,
                 'address' => $brand['address'] ?? null,
+                // Quy định nghỉ học do trung tâm soạn ở Cài đặt (mỗi dòng một ý)
+                'leave_rules' => BrandSettings::portalLeaveRules(),
             ],
         ]);
     }
