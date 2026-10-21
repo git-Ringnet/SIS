@@ -216,6 +216,13 @@ const leaveOf = (session) => {
 };
 const selectedLeave = computed(() => leaveOf(selectedLeaveSession.value));
 
+// Các khóa kèm ngày bắt đầu / kết thúc (khóa đã học xong thì ẩn, trừ khi chỉ còn khóa đó)
+const portalCourses = computed(() => {
+  const list = portalData.value?.courses || [];
+  const active = list.filter((c) => !c.completed);
+  return active.length ? active : list;
+});
+
 // Quy định nghỉ học do trung tâm soạn ở Cài đặt; {so_buoi_duoc_nghi} = số buổi được nghỉ của học viên
 const leaveRuleLines = computed(() => richLines(portalData.value?.brand?.leave_rules, {
   // Học nhiều khóa: "3 (Piano), 3 (Guitar)"
@@ -494,6 +501,22 @@ onMounted(() => {
                   Khóa học: <strong class="text-indigo-600">{{ portalData.student?.course?.name || 'Chưa phân khóa' }}</strong>
                   <span v-if="portalData.student?.assigned_class"> &bull; Lớp: {{ portalData.student.assigned_class }}</span>
                 </p>
+
+                <!-- Ngày bắt đầu / kết thúc từng khóa (chưa có ngày kết thúc thì dự kiến theo lịch học) -->
+                <div v-if="portalCourses.length" class="space-y-0.5">
+                  <p v-for="c in portalCourses" :key="c.course_item_id" class="text-xs text-slate-600 flex flex-wrap items-center gap-x-1.5">
+                    <Calendar class="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                    <span v-if="portalCourses.length > 1" class="font-semibold text-slate-700">{{ c.course_name }}:</span>
+                    <span>Bắt đầu{{ c.start_estimated ? ' dự kiến' : '' }} <strong class="text-slate-800">{{ c.start || '—' }}</strong></span>
+                    <span class="text-slate-300">&bull;</span>
+                    <span>
+                      Kết thúc{{ c.end_estimated ? ' dự kiến' : '' }} <strong class="text-slate-800">{{ c.end || 'chưa xác định' }}</strong>
+                    </span>
+                  </p>
+                  <p v-if="portalCourses.some((c) => c.end_estimated || c.start_estimated)" class="text-[11px] text-slate-400 italic">
+                    * Ngày dự kiến theo lịch học của từng khóa, tự lùi khi có buổi nghỉ / trung tâm nghỉ.
+                  </p>
+                </div>
 
                 <p class="text-xs text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
                   <span>Phụ huynh: <strong class="text-slate-700">{{ portalData.student?.parent_name }}</strong></span>

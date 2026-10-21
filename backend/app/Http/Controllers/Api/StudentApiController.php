@@ -218,6 +218,11 @@ class StudentApiController extends Controller
 
         if ($this->wantsPagination($request)) {
             $paginator = $query->paginate($this->perPage($request));
+            // Ngày bắt đầu / kết thúc từng khóa (cùng cách tính với Cổng phụ huynh) cho thẻ khóa học
+            foreach ($paginator->items() as $st) {
+                $st->setAttribute('course_dates', collect($st->registered_courses_list)
+                    ->mapWithKeys(fn ($item) => [$item['id'] => $st->courseItemDates($item)]));
+            }
 
             return response()->json([
                 'students' => $paginator->items(),
@@ -268,6 +273,7 @@ class StudentApiController extends Controller
             'parent_phone' => 'required|string|max:20',
             'parent_zalo' => 'nullable|string|max:20',
             'parent_email' => 'nullable|email|max:255',
+            'address' => 'nullable|string|max:255',
             'course_id' => 'required|exists:courses,id',
             'total_sessions' => 'required|integer|min:1',
             'status' => 'required|string|in:active,paused,dropped',
@@ -293,6 +299,7 @@ class StudentApiController extends Controller
             'parent_phone' => $validated['parent_phone'],
             'parent_zalo' => $validated['parent_zalo'] ?? $validated['parent_phone'],
             'parent_email' => $validated['parent_email'] ?? null,
+            'address' => $validated['address'] ?? null,
             'course_id' => $validated['course_id'],
             'total_sessions' => $validated['total_sessions'],
             'remaining_sessions' => $validated['total_sessions'],
@@ -344,6 +351,8 @@ class StudentApiController extends Controller
             'parent_phone' => 'required|string|max:20',
             'parent_zalo' => 'nullable|string|max:20',
             'parent_email' => 'nullable|email|max:255',
+            'address' => 'nullable|string|max:255',
+            'join_date' => 'nullable|date',
             'course_id' => 'required|exists:courses,id',
             'total_sessions' => 'required|integer|min:1',
             'remaining_sessions' => 'required|integer|min:0',

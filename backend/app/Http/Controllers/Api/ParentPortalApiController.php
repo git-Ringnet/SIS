@@ -143,6 +143,15 @@ class ParentPortalApiController extends Controller
                     'default_sessions' => $student->course->default_sessions,
                 ] : null,
             ],
+            // Ngày bắt đầu / kết thúc từng khóa (chưa nhập ngày kết thúc thì dự kiến theo lịch học và số buổi còn lại)
+            'courses' => collect($student->registered_courses_list)->map(fn ($item) => [
+                'course_item_id' => $item['id'],
+                'course_name' => $item['course_name'] ?? $student->course?->name ?? 'Khóa học',
+                'total_sessions' => (int) ($item['total_sessions'] ?? 0),
+                'remaining_sessions' => (int) ($item['remaining_sessions'] ?? 0),
+                'completed' => ($item['status'] ?? 'active') === 'completed',
+                ...$student->courseItemDates($item),
+            ])->values(),
             'stats' => [
                 'total_sessions' => $totalSessions,
                 'completed_sessions' => $completedSessions,

@@ -282,12 +282,24 @@ class Student extends Model
             ->filter(fn ($c) => (int) ($c['course_id'] ?? 0) === (int) $courseId)
             ->last();
 
+        return $this->courseItemDates($item);
+    }
+
+    /**
+     * Ngày bắt đầu / kết thúc của một khóa đã đăng ký (cổng phụ huynh hiện từng khóa).
+     *
+     * @return array{start: ?string, end: ?string, end_estimated: bool} ngày dạng d/m/Y
+     */
+    public function courseItemDates(?array $item): array
+    {
         $format = fn ($date) => $date ? Carbon::parse($date)->format('d/m/Y') : null;
 
         // Ngày buổi cuối còn lại theo lịch học của khóa (các ca gán cho khóa, số buổi còn lại của khóa)
         $estimate = function () use ($item) {
             $remaining = (int) ($item['remaining_sessions'] ?? $this->remaining_sessions);
-            $planned = StudentSchedule::upcomingSessions($this, $remaining, $item['schedule_ids'] ?? null, $item['start_date'] ?? null);
+            // Tính từ ngày bắt đầu của khóa (khóa đầu tiên = "Ngày bắt đầu học" của học viên)
+            $from = $this->courseItemStart($item)['date'];
+            $planned = StudentSchedule::upcomingSessions($this, $remaining, $item['schedule_ids'] ?? null, $from ? Carbon::createFromFormat('d/m/Y', $from)->toDateString() : null);
 
             return $remaining > 0 && count($planned) === $remaining ? end($planned)['date']->format('d/m/Y') : null;
         };
@@ -300,10 +312,45 @@ class Student extends Model
         }
         $end ??= $format($this->end_date);
 
+        $start = $this->courseItemStart($item);
+
         return [
-            'start' => $format($item['start_date'] ?? null) ?? $format($this->join_date),
+            'start' => $start['date'],
+            'start_estimated' => $start['estimated'],
             'end' => $end,
             'end_estimated' => $estimated,
         ];
+    }
+
+    /**
+     * Ngày bắt đầu thật của một khóa (học nhiều khóa thì mỗi khóa một ngày):
+     * - đã học: ngày buổi điểm danh đầu tiên của khóa (bản ghi cũ chưa gắn khóa được tính cho khóa đầu tiên);
+     * - chưa học: buổi đầu tiên theo lịch của khóa (dự kiến), tính từ ngày bắt đầu nhập cho khóa
+     *   (khóa đầu tiên = "Ngày bắt đầu học" của học viên, khóa đăng ký thêm = ngày bắt đầu của khóa).
+     *
+     * @return array{date: ?string, estimated: bool} ngày dạng d/m/Y
+     */
+    public function courseItemStart(?array $item): array
+    {
+        $itemId = isset($item['id']) ? (int) $item['id'] : null;
+        $isFirstCourse = $item === null || $itemId === (int) (collect($this->registered_courses_list)->first()['id'] ?? 0);
+        $from = $isFirstCourse ? ($this->join_date ?? $item['start_date'] ?? null) : ($item['start_date'] ?? $this->join_date);
+        $from = $from ? Carbon::parse($from)->toDateString() : null;
+
+        $attendances = $this->relationLoaded('attendances') ? $this->attendances : $this->attendances()->get();
+        $first = $attendances
+            ->filter(fn ($a) => ($a->course_item_id !== null && (int) $a->course_item_id === $itemId) || ($isFirstCourse && $a->course_item_id === null))
+            ->sortBy('attended_at')
+            ->first();
+        if ($first) {
+            return ['date' => $first->attended_at->format('d/m/Y'), 'estimated' => false];
+        }
+
+        $planned = StudentSchedule::upcomingSessions($this, 1, $item['schedule_ids'] ?? null, $from);
+        if ($planned !== []) {
+            return ['date' => $planned[0]['date']->format('d/m/Y'), 'estimated' => true];
+        }
+
+        return ['date' => $from ? Carbon::parse($from)->format('d/m/Y') : null, 'estimated' => false];
     }
 }

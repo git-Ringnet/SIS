@@ -218,6 +218,42 @@ class LeaveRulesTest extends TestCase
         $this->assertSame('16/11/2026', $upcoming->last()['date']);
     }
 
+    public function test_portal_shows_course_start_and_estimated_end_date(): void
+    {
+        $student = $this->createStudent();
+
+        // 8 buổi T2 + T5 từ 19/10: 19, 22, 26, 29/10, 02, 05, 09, 12/11
+        $course = $this->portal($student)['courses'][0];
+        $this->assertSame(['19/10/2026', '12/11/2026', true], [$course['start'], $course['end'], $course['end_estimated']]);
+
+        // Trung tâm nghỉ 22/10 → ngày kết thúc dự kiến lùi 1 buổi
+        $this->postJson('/api/teacher-checkin/center-offs', ['from' => self::THURSDAY, 'to' => self::THURSDAY])->assertCreated();
+        $this->assertSame('16/11/2026', $this->portal($student)['courses'][0]['end']);
+
+        // Học 2 khóa: Piano (ca T2) đã học từ 12/10, Guitar (ca T5) đăng ký thêm, bắt đầu từ 29/10
+        $monday = collect($student->schedules)->firstWhere('day', 1)['id'];
+        $thursday = collect($student->schedules)->firstWhere('day', 4)['id'];
+        $student->update(['join_date' => '2026-10-05', 'registered_courses' => [
+            ['id' => 1, 'course_id' => $this->course->id, 'course_name' => 'Piano', 'total_sessions' => 8, 'attended_sessions' => 1,
+                'remaining_sessions' => 7, 'start_date' => '2026-10-14', 'status' => 'active', 'schedule_ids' => [$monday]],
+            ['id' => 2, 'course_id' => $this->course->id, 'course_name' => 'Guitar', 'total_sessions' => 8, 'attended_sessions' => 0,
+                'remaining_sessions' => 8, 'start_date' => '2026-10-29', 'status' => 'active', 'schedule_ids' => [$thursday]],
+        ]]);
+        Attendance::create(['student_id' => $student->id, 'course_item_id' => 1, 'slot_id' => $monday,
+            'attended_at' => '2026-10-12 17:00:00', 'status' => 'present', 'deducts_session' => true, 'session_number' => 1]);
+
+        $courses = collect($this->portal($student)['courses'])->keyBy('course_name');
+        // Piano: ngày buổi điểm danh đầu tiên (thực tế), không phải ngày lưu trong khóa
+        $this->assertSame(['12/10/2026', false], [$courses['Piano']['start'], $courses['Piano']['start_estimated']]);
+        // Guitar: chưa học → buổi T5 đầu tiên từ ngày bắt đầu của khóa (dự kiến); 8 buổi T5 → kết thúc 17/12
+        $this->assertSame(['29/10/2026', true], [$courses['Guitar']['start'], $courses['Guitar']['start_estimated']]);
+        $this->assertSame('17/12/2026', $courses['Guitar']['end']);
+
+        // Trang Học viên dùng cùng ngày
+        $row = collect($this->getJson('/api/students?page=1&per_page=20')->json('students'))->firstWhere('id', $student->id);
+        $this->assertSame('29/10/2026', $row['course_dates'][2]['start']);
+    }
+
     public function test_teacher_leave_without_substitute_makes_session_off(): void
     {
         $student = $this->createStudent();

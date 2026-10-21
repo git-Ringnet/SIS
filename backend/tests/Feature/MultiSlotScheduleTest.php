@@ -186,7 +186,7 @@ class MultiSlotScheduleTest extends TestCase
         $student->refresh();
 
         // Guitar: 19/10, 25/10, 26/10, 01/11 ... buổi thứ 12 là CN 29/11
-        $this->assertSame(['start' => null, 'end' => '29/11/2026', 'end_estimated' => true], [...$student->courseDates($this->guitar->id), 'start' => null]);
+        $this->assertSame(['start' => null, 'start_estimated' => true, 'end' => '29/11/2026', 'end_estimated' => true], [...$student->courseDates($this->guitar->id), 'start' => null]);
         // Piano chỉ học T2 15:00: 10 buổi → T2 21/12
         $this->assertSame('21/12/2026', $student->courseDates($this->piano->id)['end']);
 
@@ -194,7 +194,7 @@ class MultiSlotScheduleTest extends TestCase
         $courses = $student->registered_courses;
         $courses[1]['end_date'] = '2027-01-15';
         $student->update(['registered_courses' => $courses]);
-        $this->assertSame(['15/01/2027', false], array_values(array_slice($student->fresh()->courseDates($this->piano->id), 1)));
+        $this->assertSame(['15/01/2027', false], array_values(array_slice($student->fresh()->courseDates($this->piano->id), 2)));
 
         // PDF hiện chữ "(dự kiến)" khi ngày kết thúc là ngày tự tính
         $id = $this->postJson('/api/invoices', ['student_id' => $student->id, 'course_id' => $this->guitar->id, 'amount' => 1, 'sessions_added' => 0, 'payment_method' => 'cash', 'paid_at' => self::MONDAY])

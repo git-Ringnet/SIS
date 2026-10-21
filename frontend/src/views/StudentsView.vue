@@ -51,6 +51,7 @@ import {
 import MoneyInput from '../components/MoneyInput.vue';
 import { tuitionState, TUITION_BUTTON } from '../services/tuition';
 import ReturnSupplyModal from '../components/ReturnSupplyModal.vue';
+import StudentContactFields from '../components/StudentContactFields.vue';
 
 const route = useRoute();
 
@@ -532,6 +533,20 @@ const coursePerWeek = (student, courseItem) =>
   Number(courseItem.sessions_per_week) || courseSlots(student, courseItem).length || 1;
 
 // Ngày kết thúc hiển thị trên thẻ khóa: ngày đã lưu, nếu chưa có thì tự tính.
+// Ngày bắt đầu / kết thúc hiển thị trên thẻ khóa: backend tính theo từng khóa (cùng cách tính với Cổng phụ huynh):
+// bắt đầu = buổi điểm danh đầu tiên của khóa, chưa học thì buổi đầu tiên theo lịch (dự kiến)
+const courseDatesLabel = (student, courseItem) => {
+  const d = student.course_dates?.[courseItem.id];
+  if (!d) {
+    return `Bắt đầu ${formatDateDMY(courseItem.start_date || student.join_date)} • Kết thúc dự kiến ${formatDateDMY(courseEndDate(student, courseItem))}`;
+  }
+  // Khóa chưa gán ca học: backend chưa tính được ngày kết thúc → dùng ngày dự kiến theo số buổi/tuần (như popup Sửa)
+  const end = d.end
+    ? `Kết thúc${d.end_estimated ? ' dự kiến' : ''} ${d.end}`
+    : `Kết thúc dự kiến ${formatDateDMY(courseEndDate(student, courseItem)) || 'chưa xác định'}`;
+  return `Bắt đầu${d.start_estimated ? ' dự kiến' : ''} ${d.start || '—'} • ${end}`;
+};
+
 const courseEndDate = (student, courseItem) =>
   toIsoDate(courseItem.end_date || student.end_date) ||
   computeCourseEndDate(
@@ -680,6 +695,7 @@ const newStudentForm = ref({
   parent_phone: '',
   parent_zalo: '',
   parent_email: '',
+  address: '',
   course_id: '',
   total_sessions: 12,
   status: 'active',
@@ -835,6 +851,9 @@ const submitCreateStudent = async () => {
       parent_phone: '',
       parent_zalo: '',
       parent_email: '',
+      address: '',
+      dob: '',
+      parent_zalo: '',
       course_id: courses.value[0]?.id || '',
       total_sessions: 12,
       status: 'active',
@@ -1593,7 +1612,7 @@ const getAttendanceSummaryTooltip = (student) => {
                         <div class="flex items-center gap-1">
                           <Calendar class="h-3.5 w-3.5 text-slate-400" />
                           <span>
-                            Bắt đầu {{ formatDateDMY(cItem.start_date || student.join_date) }} &bull; Kết thúc dự kiến {{ formatDateDMY(courseEndDate(student, cItem)) }} &bull; {{ cItem.schedule_info || student.schedule_info || '1 buổi/tuần' }}
+                            {{ courseDatesLabel(student, cItem) }} &bull; {{ cItem.schedule_info || student.schedule_info || '1 buổi/tuần' }}
                             <template v-if="cItem.schedule_ids?.length"> &bull; Ca: {{ courseSlots(student, cItem).map(slotLabel).join(', ') }}</template>
                           </span>
                         </div>
@@ -1606,57 +1625,6 @@ const getAttendanceSummaryTooltip = (student) => {
                           <Edit3 class="h-3 w-3" />
                           <span>Sửa</span>
                         </button>
-
-                        <!-- Popup thời gian khóa học -->
-                        <div
-                          v-if="courseDatesState.key === `${student.id}_${cItem.id}`"
-                          class="absolute right-0 top-full z-30 mt-2 w-80 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl space-y-3 text-slate-700"
-                        >
-                          <div class="text-xs font-semibold">
-                            Ngày bắt đầu
-                            <DatePickerVN v-model="courseDatesState.start" :default-today="false" class="mt-1" @change="recomputeCourseEnd" />
-                          </div>
-                          <label class="block text-xs font-semibold">
-                            Buổi/tuần <span class="font-normal text-slate-400">(tuỳ chọn)</span>
-                            <input
-                              v-model.number="courseDatesState.perWeek"
-                              type="number"
-                              min="1"
-                              max="14"
-                              @input="recomputeCourseEnd"
-                              class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-rose-500 focus:outline-none"
-                            />
-                          </label>
-                          <div class="text-xs font-semibold">
-                            Ngày kết thúc dự kiến
-                            <DatePickerVN v-model="courseDatesState.end" :default-today="false" class="mt-1" @change="courseDatesState.endTouched = true" />
-                          </div>
-                          <p class="text-[11px] leading-relaxed text-slate-500">
-                            Tự tính từ tổng {{ cItem.total_sessions }} buổi ÷ buổi/tuần, và lấy đúng buổi học cuối cùng trong tuần cuối
-                            (theo lịch học của học viên). Sửa tay sẽ giữ nguyên ngày bạn chọn.
-                            <button
-                              v-if="courseDatesState.endTouched"
-                              type="button"
-                              @click="courseDatesState.endTouched = false; recomputeCourseEnd()"
-                              class="font-semibold text-rose-600 hover:underline"
-                            >
-                              Tính lại tự động
-                            </button>
-                          </p>
-                          <div class="flex justify-end gap-2">
-                            <button type="button" @click="courseDatesState.key = null" class="rounded-xl border border-slate-200 px-4 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                              Huỷ
-                            </button>
-                            <button
-                              type="button"
-                              :disabled="savingCourseDates"
-                              @click="submitCourseDates"
-                              class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 px-4 py-1.5 text-xs font-bold text-white"
-                            >
-                              Lưu
-                            </button>
-                          </div>
-                        </div>
                       </div>
 
                       <!-- Blue progress bar matching Screenshot -->
@@ -1935,6 +1903,9 @@ const getAttendanceSummaryTooltip = (student) => {
             </div>
           </div>
 
+          <!-- Ngày sinh, SĐT Zalo, email, địa chỉ (giống file Excel mẫu) -->
+          <StudentContactFields v-model="newStudentForm" />
+
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
             <div class="sm:col-span-2">
               <label class="block text-xs font-bold text-slate-700 mb-1">
@@ -1995,6 +1966,15 @@ const getAttendanceSummaryTooltip = (student) => {
               </label>
             </div>
             <p class="text-[11px] text-slate-400 mt-1">Chưa đóng: cổng phụ huynh hiện "Chưa thanh toán", khi phụ huynh đóng tiền bấm nút "Chưa đóng HP" hoặc vào Hóa đơn để xác nhận đã thu.</p>
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Trạng thái</label>
+            <select v-model="newStudentForm.status" class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-xs sm:text-sm font-medium focus:border-red-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-red-500 transition-all">
+              <option value="active">Đang học</option>
+              <option value="paused">Tạm dừng</option>
+              <option value="dropped">Đã nghỉ</option>
+            </select>
           </div>
 
           <div>
@@ -2082,7 +2062,7 @@ const getAttendanceSummaryTooltip = (student) => {
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             <div>
-              <label class="block text-xs font-bold text-slate-700 mb-1">Số điện thoại</label>
+              <label class="block text-xs font-bold text-slate-700 mb-1">Số điện thoại phụ huynh</label>
               <input
                 type="text"
                 v-model="editingStudent.parent_phone"
@@ -2099,6 +2079,24 @@ const getAttendanceSummaryTooltip = (student) => {
               />
             </div>
           </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <div>
+              <label class="block text-xs font-bold text-slate-700 mb-1">Giới tính</label>
+              <select v-model="editingStudent.gender" class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-xs sm:text-sm font-medium focus:border-red-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-red-500 transition-all">
+                <option value="Nam">Nam</option>
+                <option value="Nữ">Nữ</option>
+                <option value="Khác">Khác</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-slate-700 mb-1">Ngày bắt đầu học</label>
+              <DatePickerVN v-model="editingStudent.join_date" :default-today="false" />
+            </div>
+          </div>
+
+          <!-- Ngày sinh, SĐT Zalo, email, địa chỉ (giống file Excel mẫu) -->
+          <StudentContactFields v-model="editingStudent" />
 
           <div class="grid grid-cols-3 gap-3.5">
             <div>
@@ -2146,6 +2144,11 @@ const getAttendanceSummaryTooltip = (student) => {
           </div>
 
           <ScheduleFields v-model="editingStudent" :center="editingStudent.center" />
+
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Ghi chú</label>
+            <textarea v-model="editingStudent.notes" rows="2" class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-xs sm:text-sm font-medium focus:border-red-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-red-500 transition-all"></textarea>
+          </div>
 
           <div class="flex items-center justify-end gap-3 border-t border-slate-100 pt-5">
             <button
@@ -2295,6 +2298,65 @@ const getAttendanceSummaryTooltip = (student) => {
       @close="showNoteModal = false"
       @saved="fetchData"
     />
+
+    <!-- Sửa thời gian khóa học (ngày bắt đầu, buổi/tuần, ngày kết thúc): modal giữa màn hình, dễ thao tác trên điện thoại -->
+    <Modal :show="!!courseDatesState.key" max-width="md" @close="courseDatesState.key = null">
+      <div v-if="courseDatesState.item" class="p-5 space-y-4 text-slate-700">
+        <div class="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+          <div>
+            <h3 class="text-sm font-bold text-slate-900">Thời gian khóa học</h3>
+            <p class="text-xs text-slate-500 mt-0.5">{{ courseDatesState.item.course_name }} &bull; {{ courseDatesState.student?.name }}</p>
+          </div>
+          <button type="button" @click="courseDatesState.key = null" class="text-slate-400 hover:text-slate-600">
+            <X class="h-4 w-4" />
+          </button>
+        </div>
+          <div class="text-xs font-semibold">
+            Ngày bắt đầu
+            <DatePickerVN v-model="courseDatesState.start" :default-today="false" class="mt-1" @change="recomputeCourseEnd" />
+          </div>
+          <label class="block text-xs font-semibold">
+            Buổi/tuần <span class="font-normal text-slate-400">(tuỳ chọn)</span>
+            <input
+              v-model.number="courseDatesState.perWeek"
+              type="number"
+              min="1"
+              max="14"
+              @input="recomputeCourseEnd"
+              class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-rose-500 focus:outline-none"
+            />
+          </label>
+          <div class="text-xs font-semibold">
+            Ngày kết thúc dự kiến
+            <DatePickerVN v-model="courseDatesState.end" :default-today="false" class="mt-1" @change="courseDatesState.endTouched = true" />
+          </div>
+          <p class="text-[11px] leading-relaxed text-slate-500">
+            Tự tính từ tổng {{ courseDatesState.item?.total_sessions }} buổi ÷ buổi/tuần, và lấy đúng buổi học cuối cùng trong tuần cuối
+            (theo lịch học của học viên). Sửa tay sẽ giữ nguyên ngày bạn chọn.
+            <button
+              v-if="courseDatesState.endTouched"
+              type="button"
+              @click="courseDatesState.endTouched = false; recomputeCourseEnd()"
+              class="font-semibold text-rose-600 hover:underline"
+            >
+              Tính lại tự động
+            </button>
+          </p>
+        <div class="flex justify-end gap-2 pt-1">
+          <button type="button" @click="courseDatesState.key = null" class="rounded-xl border border-slate-200 px-4 py-2 text-xs sm:text-sm font-semibold text-slate-700 hover:bg-slate-50">
+            Huỷ
+          </button>
+          <button
+            type="button"
+            :disabled="savingCourseDates"
+            @click="submitCourseDates"
+            class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 px-5 py-2 text-xs sm:text-sm font-bold text-white"
+          >
+            Lưu
+          </button>
+        </div>
+      </div>
+    </Modal>
 
     <!-- Thu hồi học cụ giao nhầm -->
     <ReturnSupplyModal

@@ -244,10 +244,10 @@ class RemainingPagesTest extends TestCase
         ]]);
 
         // Theo đúng khóa của hóa đơn
-        $this->assertSame(['start' => '05/10/2026', 'end' => '20/12/2026', 'end_estimated' => false], $student->courseDates($piano->id));
-        $this->assertSame(['start' => '01/09/2026', 'end' => '30/11/2026', 'end_estimated' => false], $student->courseDates());
+        $this->assertSame(['start' => '05/10/2026', 'start_estimated' => false, 'end' => '20/12/2026', 'end_estimated' => false], $student->courseDates($piano->id));
+        $this->assertSame(['start' => '01/09/2026', 'start_estimated' => false, 'end' => '30/11/2026', 'end_estimated' => false], $student->courseDates());
         // Khóa không có trong danh sách đăng ký → ngày nhập học / kết thúc dự kiến của học viên
-        $this->assertSame(['start' => '01/09/2026', 'end' => '31/12/2026', 'end_estimated' => false], $student->courseDates(999));
+        $this->assertSame(['start' => '01/09/2026', 'start_estimated' => false, 'end' => '31/12/2026', 'end_estimated' => false], $student->courseDates(999));
 
         $id = $this->postJson('/api/invoices', ['student_id' => $student->id, 'course_id' => $piano->id, 'amount' => 1000000, 'sessions_added' => 0, 'payment_method' => 'cash', 'paid_at' => '2026-10-20'])
             ->assertCreated()->json('invoice.id');
