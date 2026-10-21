@@ -639,12 +639,12 @@ const openMessageModal = (student) => {
                 <span>Giờ: <strong class="text-slate-800">{{ st.shift_time }}</strong></span>
                 <span>GV: {{ st.teacher }}</span>
                 <span>
-                  <!-- Buổi không trừ (nghỉ có phép trong lượt / trung tâm, GV nghỉ) không có số buổi, chỉ hiện số đã học -->
-                  <template v-if="st.status === 'off' || (st.status === 'absent_with_leave' && !st.deducts_session)">
-                    Tiến độ: <strong class="text-indigo-700">Đã học {{ st.attended_sessions }}/{{ st.total_sessions }}</strong>
+                  <!-- Buổi hôm nay đã tính (đi học / vắng bị trừ buổi): "Buổi N". Chưa điểm danh, nghỉ không trừ, buổi off: chỉ hiện số đã học -->
+                  <template v-if="st.deducts_session">
+                    Tiến độ: <strong class="text-indigo-700">Buổi {{ st.current_session }}/{{ st.total_sessions }}</strong>
                   </template>
                   <template v-else>
-                    Tiến độ: <strong class="text-indigo-700">Buổi {{ st.current_session }}/{{ st.total_sessions }}</strong>
+                    Tiến độ: <strong class="text-indigo-700">Đã học {{ st.attended_sessions }}/{{ st.total_sessions }}</strong>
                   </template>
                   (Còn {{ st.remaining_sessions }} buổi)
                 </span>

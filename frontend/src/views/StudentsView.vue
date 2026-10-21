@@ -1261,8 +1261,10 @@ const getAttendanceSummaryTooltip = (student) => {
 
               <!-- Absences -->
               <td class="py-3.5 px-4 text-center">
-                <span v-if="student.consecutive_absences > 0" class="font-bold text-red-600">
-                  {{ student.consecutive_absences }} (Bù {{ student.consecutive_absences }})
+                <!-- Số buổi vắng liên tiếp gần nhất (không phải số buổi bù) -->
+                <span v-if="student.consecutive_absences > 0" class="font-bold text-red-600"
+                  :title="`Vắng ${student.consecutive_absences} buổi liên tiếp gần nhất, cần liên hệ / xếp học bù`">
+                  {{ student.consecutive_absences }} <span class="font-medium text-[11px]">liên tiếp</span>
                 </span>
                 <span v-else class="text-slate-400 font-mono">0</span>
               </td>
