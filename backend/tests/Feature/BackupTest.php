@@ -115,6 +115,24 @@ class BackupTest extends TestCase
             ->assertJsonPath('drive.status', 'uploaded');
     }
 
+    public function test_restore_rejects_backup_from_another_database_driver_before_touching_data(): void
+    {
+        $file = $this->postJson('/api/settings/backups')->json('backup.file');
+        // Giả lập bản backup tạo từ MySQL (máy chạy test dùng SQLite)
+        $zip = new \ZipArchive;
+        $zip->open(config('backup.path').DIRECTORY_SEPARATOR.$file);
+        $zip->addFromString('database.sql', "-- SIS backup | driver: mysql | 2026-10-21 15:47:22\nSET FOREIGN_KEY_CHECKS=0;\n");
+        $zip->close();
+        $before = count(File::files(config('backup.path')));
+
+        $this->postJson("/api/settings/backups/{$file}/restore", ['password' => 'secret-pass'])
+            ->assertStatus(500)
+            ->assertJsonPath('message', fn ($m) => str_contains($m, 'không khôi phục được vào database SQLite'));
+        // Không tạo bản an toàn, không đụng dữ liệu hiện tại
+        $this->assertCount($before, File::files(config('backup.path')));
+        $this->assertSame('{"version":"original"}', File::get("{$this->root}/private/centers_data.json"));
+    }
+
     public function test_restore_requires_the_correct_password(): void
     {
         $file = $this->postJson('/api/settings/backups')->json('backup.file');

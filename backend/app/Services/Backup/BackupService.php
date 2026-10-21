@@ -4,6 +4,7 @@ namespace App\Services\Backup;
 
 use App\Models\User;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Str;
@@ -140,12 +141,38 @@ class BackupService
     }
 
     /**
+     * Bản backup chỉ khôi phục được vào cùng loại database đã tạo ra nó (SQL của SQLite và MySQL khác nhau).
+     * Kiểm tra trước khi đụng vào dữ liệu hiện tại.
+     */
+    private function assertSameDriver(string $path): void
+    {
+        $zip = new ZipArchive;
+        if ($zip->open($path) !== true) {
+            throw new RuntimeException('File backup không hợp lệ.');
+        }
+        $stream = $zip->getStream('database.sql');
+        $header = $stream ? (string) fgets($stream) : '';
+        if ($stream) {
+            fclose($stream);
+        }
+        $zip->close();
+
+        $backupDriver = preg_match('/driver:\s*(\w+)/', $header, $m) ? $m[1] : null;
+        $current = DB::connection()->getDriverName();
+        if ($backupDriver && $backupDriver !== $current) {
+            $label = fn ($d) => $d === 'sqlite' ? 'SQLite (máy cài bằng script Windows)' : 'MySQL/MariaDB';
+            throw new RuntimeException("Bản backup này tạo từ database {$label($backupDriver)}, không khôi phục được vào database {$label($current)} của máy này. Hãy khôi phục trên máy dùng cùng loại database.");
+        }
+    }
+
+    /**
      * Khôi phục toàn bộ hệ thống từ một bản backup.
      * Trước khi ghi đè, tự tạo một bản backup an toàn của dữ liệu hiện tại.
      */
     public function restore(string $file, ?User $by = null): array
     {
         $path = $this->path($file);
+        $this->assertSameDriver($path);
         $safety = $this->create('pre-restore', $by);
 
         $this->withLock(function () use ($path) {
