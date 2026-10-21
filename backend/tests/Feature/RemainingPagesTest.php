@@ -94,6 +94,39 @@ class RemainingPagesTest extends TestCase
         $this->assertEquals(285000, $this->getJson('/api/revenue?type=inventory')->json('metrics.inventory_total'));
     }
 
+    public function test_returning_wrongly_given_supplies_restocks_and_reduces_revenue(): void
+    {
+        $student = $this->student('An');
+        $capo = $this->postJson('/api/inventory', ['name' => 'Capo', 'unit' => 'Cái', 'center' => 'Cơ sở A', 'cost_price' => 50000, 'sell_price' => 95000, 'quantity' => 5])->json('item.id');
+        $book = $this->postJson('/api/inventory', ['name' => 'Sách 1A', 'unit' => 'Cuốn', 'center' => 'Cơ sở A', 'cost_price' => 10000, 'sell_price' => 50000, 'quantity' => 5])->json('item.id');
+
+        // Giao 1 lần 2 món: Capo x3, Sách x1 → 335.000đ trên một dòng doanh thu
+        $supplies = collect($this->postJson("/api/students/{$student->id}/supplies", [
+            'delivery_date' => '2026-10-20', 'center' => 'Cơ sở A',
+            'items' => [
+                ['inventory_id' => $capo, 'name' => 'Capo', 'quantity' => 3, 'price' => 95000],
+                ['inventory_id' => $book, 'name' => 'Sách 1A', 'quantity' => 1, 'price' => 50000],
+            ],
+        ])->assertOk()->json('supplies'))->keyBy('name');
+        $stock = fn ($id) => collect($this->getJson('/api/inventory')->json('items'))->firstWhere('id', $id)['quantity'];
+        $revenue = fn () => $this->getJson('/api/revenue?type=inventory')->json('metrics.inventory_total');
+        $this->assertEquals(335000, $revenue());
+
+        // Thu hồi 1 Capo giao nhầm: còn 2, kho +1, doanh thu -95.000
+        $this->postJson("/api/students/{$student->id}/supplies/{$supplies['Capo']['id']}/return", ['quantity' => 1, 'reason' => 'Giao nhầm'])
+            ->assertOk()->assertJsonPath('supplies.0.quantity', 2);
+        $this->assertSame([3, 240000], [$stock($capo), (int) $revenue()]);
+
+        // Thu hồi hết Sách: bỏ khỏi học viên (cổng phụ huynh không còn thấy), kho +1
+        $this->postJson("/api/students/{$student->id}/supplies/{$supplies['Sách 1A']['id']}/return")->assertOk();
+        $this->assertSame(['Capo'], collect($student->fresh()->supplies)->pluck('name')->all());
+        $this->assertSame([5, 190000], [$stock($book), (int) $revenue()]);
+
+        // Thu hồi quá số đã giao / học cụ không có → báo lỗi
+        $this->postJson("/api/students/{$student->id}/supplies/{$supplies['Capo']['id']}/return", ['quantity' => 3])->assertUnprocessable();
+        $this->postJson("/api/students/{$student->id}/supplies/khong-co/return")->assertNotFound();
+    }
+
     public function test_revenue_and_expense_can_be_edited_and_deleted(): void
     {
         $tx = $this->postJson('/api/revenue', [

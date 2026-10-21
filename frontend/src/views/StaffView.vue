@@ -20,7 +20,7 @@ const loading = ref(true);
 
 const members = ref([]);
 const centers = ref([]);
-const roles = ref(['Giáo viên', 'Quản lý / Lễ tân', 'Tư vấn viên']);
+const roles = ref(['Giáo viên', 'Quản lý / Lễ tân', 'Giáo vụ']);
 const ownerRole = ref('Chủ trung tâm');
 const { user } = useAuth();
 const isOwner = computed(() => !!user.value?.is_owner);

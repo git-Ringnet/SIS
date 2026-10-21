@@ -6,15 +6,17 @@ use Carbon\Carbon;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * Nghỉ phép và phân công dạy thay theo khoảng ngày (lưu teacher_leaves.json).
- * Được áp lên các ca chưa check-in khi xem, nên xoá một đợt thì các ca đó tự trở lại bình thường.
+ * Nghỉ phép, phân công dạy thay và ngày nghỉ của trung tâm theo khoảng ngày (lưu teacher_leaves.json).
+ * Được áp lên các ca chưa check-in / buổi học chưa điểm danh khi xem, nên xoá một đợt thì các ca đó tự trở lại bình thường.
  */
 class TeacherLeaves
 {
     private const PATH = 'teacher_leaves.json';
 
     /**
-     * @return array{leaves: list<array>, substitutions: list<array>}
+     * center_offs: [{id, center: tên cơ sở | null (mọi cơ sở), from, to, reason}]
+     *
+     * @return array{leaves: list<array>, substitutions: list<array>, center_offs: list<array>}
      */
     public static function all(): array
     {
@@ -23,6 +25,7 @@ class TeacherLeaves
         return [
             'leaves' => $data['leaves'] ?? [],
             'substitutions' => $data['substitutions'] ?? [],
+            'center_offs' => $data['center_offs'] ?? [],
         ];
     }
 
@@ -52,6 +55,21 @@ class TeacherLeaves
         foreach (($data ?? self::all())['substitutions'] as $s) {
             if (TeacherName::same($s['original'], $teacher) && self::covers($s, $date)) {
                 return $s;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Đợt nghỉ của trung tâm áp cho cơ sở $center vào ngày $date (đợt không chọn cơ sở áp cho mọi cơ sở).
+     */
+    public static function centerOffFor(?string $center, string $date, ?array $data = null): ?array
+    {
+        $center = $center ?: CenterStore::defaultName();
+        foreach (($data ?? self::all())['center_offs'] as $off) {
+            if ((empty($off['center']) || $off['center'] === $center) && self::covers($off, $date)) {
+                return $off;
             }
         }
 

@@ -8,6 +8,7 @@ use App\Models\MessageTemplate;
 use App\Models\RetentionLog;
 use App\Models\Student;
 use App\Support\CenterStore;
+use App\Support\SingleLessons;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -200,6 +201,21 @@ class AbsenceApiController extends Controller
         $makeupNote = "Lịch học bù: Ngày {$validated['date']} ({$validated['time']}) - Phòng: ".($validated['room'] ?? 'N/A').' - GV: '.($validated['teacher'] ?? 'N/A');
         $student->notes = ($student->notes ? $student->notes."\n" : '').'['.date('d/m/Y').'] '.$makeupNote;
         $student->save();
+
+        // Buổi bù hiện ở trang Điểm danh ngày đó và trên Cổng phụ huynh
+        SingleLessons::add([
+            'id' => uniqid('lesson_'),
+            'student_id' => $student->id,
+            'date' => Carbon::parse($validated['date'])->toDateString(),
+            'center' => $student->center,
+            'course_id' => $student->course_id,
+            'room' => $validated['room'] ?? null,
+            'teacher' => $validated['teacher'] ?? null,
+            'time' => $validated['time'],
+            'is_makeup' => true,
+            'note' => $validated['note'] ?? 'Buổi học bù',
+            'created_at' => Carbon::now()->toDateTimeString(),
+        ]);
 
         RetentionLog::create([
             'student_id' => $student->id,

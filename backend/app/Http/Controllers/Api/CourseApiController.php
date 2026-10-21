@@ -30,6 +30,8 @@ class CourseApiController extends Controller
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'default_sessions' => 'required|integer|min:1',
+            // Số buổi được nghỉ có phép của khóa (trống = mặc định 3 buổi)
+            'allowed_absences' => 'nullable|integer|min:0|max:100',
             'price' => 'required|numeric|min:0',
             'description' => 'nullable|string',
         ]);
@@ -47,6 +49,8 @@ class CourseApiController extends Controller
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'default_sessions' => 'required|integer|min:1',
+            // Số buổi được nghỉ có phép của khóa (trống = mặc định 3 buổi)
+            'allowed_absences' => 'nullable|integer|min:0|max:100',
             'price' => 'required|numeric|min:0',
             'description' => 'nullable|string',
         ]);

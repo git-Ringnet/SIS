@@ -53,6 +53,14 @@ const addSlot = () => {
   ];
 };
 
+// Chọn giờ bắt đầu thì giờ kết thúc tự đặt = bắt đầu + 1 tiếng (vẫn sửa tay được), tối đa 23:59
+const onStartChange = (slot) => {
+  if (!slot.start) return;
+  const [h, m] = slot.start.split(':').map(Number);
+  const end = Math.min(h * 60 + m + 60, 23 * 60 + 59);
+  slot.end = `${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}`;
+};
+
 const removeSlot = (i) => {
   model.value.schedules = slots.value.filter((_, idx) => idx !== i);
 };
@@ -93,12 +101,12 @@ const inputClass =
     </datalist>
 
     <div v-for="(slot, i) in slots" :key="i" class="space-y-1">
-      <div class="grid grid-cols-2 sm:grid-cols-[6.5rem_6rem_6rem_1fr_1fr_auto] gap-2 items-center">
+      <div class="grid grid-cols-2 sm:grid-cols-[6.5rem_7.5rem_7.5rem_1fr_1fr_auto] gap-2 items-center">
         <select v-model="slot.day" :class="inputClass" aria-label="Thứ">
           <option value="" disabled>Thứ</option>
           <option v-for="d in WEEKDAYS" :key="d.value" :value="d.value">{{ d.label }}</option>
         </select>
-        <input v-model="slot.start" type="time" :class="inputClass" aria-label="Giờ bắt đầu" title="Giờ bắt đầu" />
+        <input v-model="slot.start" type="time" @change="onStartChange(slot)" :class="inputClass" aria-label="Giờ bắt đầu" title="Giờ bắt đầu" />
         <input v-model="slot.end" type="time" :min="slot.start || undefined" :class="inputClass" aria-label="Giờ kết thúc" title="Giờ kết thúc" />
         <input v-model="slot.teacher" :list="`teachers-${uid}`" placeholder="Giáo viên" :class="inputClass" aria-label="Giáo viên" />
         <input v-model="slot.room" :list="`rooms-${uid}`" placeholder="Phòng" :class="inputClass" aria-label="Phòng học" />

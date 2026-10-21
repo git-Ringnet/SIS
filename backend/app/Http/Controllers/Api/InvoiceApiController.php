@@ -8,6 +8,7 @@ use App\Models\Invoice;
 use App\Models\Student;
 use App\Support\BrandSettings;
 use App\Support\CenterStore;
+use App\Support\StudentSchedule;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -46,8 +47,12 @@ class InvoiceApiController extends Controller
         $students = Student::where('status', 'active')->get();
         $courses = Course::where('is_active', true)->get();
 
+        // Phiếu chờ thu (công nợ) không thuộc tháng nào: luôn hiện để xác nhận khi phụ huynh đóng tiền
+        $pendingInvoices = Invoice::with(['student.course', 'course'])->where('status', 'pending')->orderBy('created_at')->get();
+
         return response()->json([
             'invoices' => $invoices,
+            'pending_invoices' => $pendingInvoices,
             'pagination' => $pagination,
             'monthlyTotal' => $monthlyTotal,
             'students' => $students,
@@ -87,8 +92,8 @@ class InvoiceApiController extends Controller
         ]);
 
         if ($validated['sessions_added'] > 0) {
-            $student->increment('remaining_sessions', $validated['sessions_added']);
-            $student->increment('total_sessions', $validated['sessions_added']);
+            // Cộng vào khóa của phiếu thu (không chỉ tổng của học viên, vì tổng được tính lại từ các khóa)
+            StudentSchedule::addSessions($student, $invoice->course_id, (int) $validated['sessions_added']);
             $student->retention_status = 'renewed';
             $student->save();
         }
@@ -116,13 +121,16 @@ class InvoiceApiController extends Controller
             'invoice_pdf' => 'nullable|file|mimetypes:application/pdf|max:10240',
         ]);
 
+        if ($invoice->status === 'cancelled') {
+            return response()->json(['message' => 'Phiếu đã hủy, hãy khôi phục trước khi sửa.'], 422);
+        }
+
         DB::transaction(function () use ($invoice, $request, $validated): void {
             $delta = $validated['sessions_added'] - $invoice->sessions_added;
             $student = $invoice->student;
 
             if ($delta !== 0 && $student) {
-                $student->remaining_sessions = max(0, $student->remaining_sessions + $delta);
-                $student->total_sessions = max(0, $student->total_sessions + $delta);
+                StudentSchedule::addSessions($student, $validated['course_id'] ?? $invoice->course_id, $delta);
                 $student->save();
             }
 
@@ -146,6 +154,117 @@ class InvoiceApiController extends Controller
     }
 
     /**
+     * Xác nhận đã thu tiền một phiếu chờ thu. Không cộng thêm buổi: buổi đã cấp khi lập phiếu.
+     */
+    public function markPaid(Request $request, Invoice $invoice): JsonResponse
+    {
+        if ($invoice->status !== 'pending') {
+            return response()->json(['message' => 'Phiếu này không ở trạng thái chờ thu.'], 422);
+        }
+
+        $validated = $request->validate([
+            'payment_method' => 'required|string|in:bank_transfer,cash,pos,momo',
+            'paid_at' => 'required|date',
+        ]);
+
+        $invoice->update([...$validated, 'status' => 'paid']);
+        $invoice->load(['student.course', 'course']);
+
+        return response()->json([
+            'message' => "Đã xác nhận thu tiền phiếu {$invoice->invoice_code}.",
+            'invoice' => $invoice,
+        ]);
+    }
+
+    /**
+     * Ghi nhầm "đã thu" khi phụ huynh chưa đóng tiền: đưa phiếu về chờ thu, giữ nguyên số buổi đã cấp.
+     */
+    public function markUnpaid(Invoice $invoice): JsonResponse
+    {
+        if ($invoice->status !== 'paid') {
+            return response()->json(['message' => 'Chỉ chuyển được phiếu đã thanh toán về chờ thu.'], 422);
+        }
+
+        $invoice->update(['status' => 'pending', 'paid_at' => null]);
+
+        return response()->json(['message' => "Đã chuyển phiếu {$invoice->invoice_code} về chờ thu.", 'invoice' => $invoice]);
+    }
+
+    /**
+     * Hủy phiếu thu (thu / gia hạn nhầm): trừ lại số buổi đã cộng, không tính doanh thu / công nợ nữa.
+     * Khác xóa: giữ lại phiếu để khôi phục. Buổi đã học thì không trừ được, chỉ trừ phần còn lại.
+     */
+    public function cancel(Request $request, Invoice $invoice): JsonResponse
+    {
+        if ($invoice->status === 'cancelled') {
+            return response()->json(['message' => 'Phiếu này đã hủy.'], 422);
+        }
+
+        $validated = $request->validate(['reason' => 'nullable|string|max:255']);
+        $student = $invoice->student;
+
+        DB::transaction(function () use ($invoice, $student, $validated): void {
+            $reverted = 0;
+            if ($invoice->sessions_added > 0 && $student) {
+                $before = (int) $student->total_sessions;
+                StudentSchedule::addSessions($student, $invoice->course_id, -$invoice->sessions_added);
+                $reverted = $before - (int) $student->total_sessions;
+                // Hết phiếu "đã đóng" thì học viên không còn ở trạng thái Đã đóng của chăm sóc tái ký
+                if ($student->retention_status === 'renewed'
+                    && ! $student->invoices()->where('status', 'paid')->whereKeyNot($invoice->id)->exists()) {
+                    $student->retention_status = 'normal';
+                }
+                $student->save();
+            }
+
+            $invoice->update([
+                'status_before_cancel' => $invoice->status,
+                'status' => 'cancelled',
+                'sessions_reverted' => $reverted,
+                'cancelled_at' => Carbon::now(),
+                'cancelled_reason' => $validated['reason'] ?? null,
+            ]);
+        });
+
+        $message = "Đã hủy phiếu {$invoice->invoice_code}";
+        if ($invoice->sessions_added > 0) {
+            $message .= $invoice->sessions_reverted < $invoice->sessions_added
+                ? ", trừ lại {$invoice->sessions_reverted}/{$invoice->sessions_added} buổi (học viên đã học phần còn lại)."
+                : ", trừ lại {$invoice->sessions_reverted} buổi.";
+        }
+
+        return response()->json(['message' => $message, 'invoice' => $invoice]);
+    }
+
+    /**
+     * Khôi phục phiếu đã hủy nhầm: về trạng thái cũ và cộng lại đúng số buổi đã trừ lúc hủy.
+     */
+    public function restore(Invoice $invoice): JsonResponse
+    {
+        if ($invoice->status !== 'cancelled') {
+            return response()->json(['message' => 'Phiếu này chưa bị hủy.'], 422);
+        }
+
+        DB::transaction(function () use ($invoice): void {
+            $student = $invoice->student;
+            if ($invoice->sessions_reverted > 0 && $student) {
+                StudentSchedule::addSessions($student, $invoice->course_id, (int) $invoice->sessions_reverted);
+                $student->save();
+            }
+
+            $invoice->update([
+                'status' => $invoice->status_before_cancel ?: 'paid',
+                'status_before_cancel' => null,
+                'sessions_reverted' => null,
+                'cancelled_at' => null,
+                'cancelled_reason' => null,
+            ]);
+        });
+
+        return response()->json(['message' => "Đã khôi phục phiếu {$invoice->invoice_code}.", 'invoice' => $invoice]);
+    }
+
+    /**
      * Xóa phiếu thu và trừ lại số buổi đã cộng cho học viên.
      */
     public function destroy(Invoice $invoice): JsonResponse
@@ -153,9 +272,9 @@ class InvoiceApiController extends Controller
         DB::transaction(function () use ($invoice): void {
             $student = $invoice->student;
 
-            if ($invoice->sessions_added > 0 && $student) {
-                $student->remaining_sessions = max(0, $student->remaining_sessions - $invoice->sessions_added);
-                $student->total_sessions = max(0, $student->total_sessions - $invoice->sessions_added);
+            // Phiếu đã hủy thì số buổi đã trừ lại lúc hủy
+            if ($invoice->status !== 'cancelled' && $invoice->sessions_added > 0 && $student) {
+                StudentSchedule::addSessions($student, $invoice->course_id, -$invoice->sessions_added);
                 $student->save();
             }
 

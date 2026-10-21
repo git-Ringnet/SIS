@@ -18,6 +18,7 @@ class Course extends Model
     protected $casts = [
         'price' => 'decimal:0',
         'default_sessions' => 'integer',
+        'allowed_absences' => 'integer',
         'is_active' => 'boolean',
     ];
 

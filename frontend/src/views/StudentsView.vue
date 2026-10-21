@@ -49,6 +49,8 @@ import {
   Check,
 } from 'lucide-vue-next';
 import MoneyInput from '../components/MoneyInput.vue';
+import { tuitionState, TUITION_BUTTON } from '../services/tuition';
+import ReturnSupplyModal from '../components/ReturnSupplyModal.vue';
 
 const route = useRoute();
 
@@ -609,6 +611,12 @@ const openRetentionNote = (st) => {
   showNoteModal.value = true;
 };
 
+// Thu hồi học cụ giao nhầm
+const returningSupply = ref(null);
+const openReturnSupply = (student, supply) => {
+  returningSupply.value = { student, supply };
+};
+
 const openRenew = (st) => {
   activeActionStudent.value = st;
   showRenewModal.value = true;
@@ -679,6 +687,8 @@ const newStudentForm = ref({
   notes: '',
   create_invoice: true,
   invoice_amount: 3600000,
+  // Mặc định chưa đóng: phiếu chờ thu, không tính doanh thu, cổng phụ huynh hiện "Chưa thanh toán"
+  invoice_paid: false,
   center: '',
   schedules: [],
 });
@@ -832,6 +842,7 @@ const submitCreateStudent = async () => {
       notes: '',
       create_invoice: true,
       invoice_amount: 3600000,
+      invoice_paid: false,
       center: defaultCenter.value,
       schedules: [],
     };
@@ -1413,13 +1424,15 @@ const getAttendanceSummaryTooltip = (student) => {
                         <span>Nhận xét</span>
                       </button>
 
+                      <!-- Đã đóng học phí và còn nhiều buổi: hiện "Đã đóng HP" (bấm vẫn mở, có cảnh báo thu trùng) -->
                       <button
                         type="button"
                         @click="openRenew(student)"
-                        class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3 py-1.5 font-semibold text-slate-700 shadow-2xs active:scale-95 transition-all"
+                        :title="{ pending: 'Phụ huynh chưa đóng học phí, bấm để xác nhận đã thu', paid: 'Học viên đã đóng học phí, chỉ thu tiếp khi gia hạn', due: 'Thu học phí / gia hạn' }[tuitionState(student)]"
+                        :class="['inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 font-semibold shadow-2xs active:scale-95 transition-all', TUITION_BUTTON[tuitionState(student)].class]"
                       >
-                        <CreditCard class="h-3.5 w-3.5 text-slate-500" />
-                        <span>Học phí</span>
+                        <CreditCard class="h-3.5 w-3.5" :class="TUITION_BUTTON[tuitionState(student)].icon" />
+                        <span>{{ TUITION_BUTTON[tuitionState(student)].label }}</span>
                       </button>
 
                       <button
@@ -1821,9 +1834,15 @@ const getAttendanceSummaryTooltip = (student) => {
                     Chưa có học cụ
                   </div>
                   <div v-else class="divide-y divide-slate-100 bg-white rounded-xl p-3 border border-slate-200/80 space-y-1.5">
-                    <div v-for="sup in student.supplies" :key="sup.name" class="flex items-center justify-between py-1">
+                    <div v-for="sup in student.supplies" :key="sup.id || sup.name" class="flex items-center justify-between gap-2 py-1">
                       <span class="font-bold text-slate-800">{{ sup.name }} ({{ formatDate(sup.delivery_date) }})</span>
-                      <span class="font-bold text-slate-700">SL: {{ sup.quantity }}</span>
+                      <span class="flex items-center gap-2">
+                        <span class="font-bold text-slate-700">SL: {{ sup.quantity }}</span>
+                        <button v-if="sup.id" type="button" @click="openReturnSupply(student, sup)"
+                          class="rounded-lg px-2 py-0.5 text-[11px] font-semibold text-rose-600 hover:bg-rose-50" title="Thu hồi học cụ giao nhầm">
+                          Thu hồi
+                        </button>
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1956,6 +1975,24 @@ const getAttendanceSummaryTooltip = (student) => {
                 class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-xs sm:text-sm font-bold text-slate-900 focus:border-red-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-red-500 transition-all"
               />
             </div>
+          </div>
+
+          <!-- Tình trạng học phí lúc đăng ký: chưa đóng thì phiếu chờ thu (công nợ), không tính doanh thu -->
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Tình trạng học phí</label>
+            <div class="grid grid-cols-2 gap-2 text-xs sm:text-sm">
+              <label class="flex items-center gap-2 rounded-xl border px-3 py-2 cursor-pointer"
+                :class="!newStudentForm.invoice_paid ? 'border-amber-300 bg-amber-50 text-amber-900 font-semibold' : 'border-slate-200 text-slate-600'">
+                <input v-model="newStudentForm.invoice_paid" type="radio" :value="false" class="accent-amber-600" />
+                Chưa đóng (chờ thu)
+              </label>
+              <label class="flex items-center gap-2 rounded-xl border px-3 py-2 cursor-pointer"
+                :class="newStudentForm.invoice_paid ? 'border-emerald-300 bg-emerald-50 text-emerald-800 font-semibold' : 'border-slate-200 text-slate-600'">
+                <input v-model="newStudentForm.invoice_paid" type="radio" :value="true" class="accent-emerald-600" />
+                Đã đóng học phí
+              </label>
+            </div>
+            <p class="text-[11px] text-slate-400 mt-1">Chưa đóng: cổng phụ huynh hiện "Chưa thanh toán", khi phụ huynh đóng tiền bấm nút "Chưa đóng HP" hoặc vào Hóa đơn để xác nhận đã thu.</p>
           </div>
 
           <div>
@@ -2255,6 +2292,15 @@ const getAttendanceSummaryTooltip = (student) => {
       :student="activeActionStudent"
       @close="showNoteModal = false"
       @saved="fetchData"
+    />
+
+    <!-- Thu hồi học cụ giao nhầm -->
+    <ReturnSupplyModal
+      :show="!!returningSupply"
+      :student="returningSupply?.student"
+      :supply="returningSupply?.supply"
+      @close="returningSupply = null"
+      @returned="fetchData"
     />
 
     <!-- Renew Modal -->

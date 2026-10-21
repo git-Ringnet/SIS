@@ -66,6 +66,9 @@ const availableVariables = [
   { tag: '{so_tien}', label: 'Học phí', desc: 'Mức học phí khóa học', example: '3.600.000đ' },
   { tag: '{so_tai_khoan}', label: 'Số tài khoản', desc: 'STK ngân hàng nhận thanh toán', example: '1029384756 (HO VIET DUNG)' },
   { tag: '{ngan_hang}', label: 'Tên ngân hàng', desc: 'Ngân hàng thụ hưởng', example: 'Vietcombank' },
+  { tag: '{nhan_xet}', label: 'Nhận xét / báo bài', desc: 'Nhận xét giáo viên ghi cho buổi học (giữ xuống dòng). Dùng ở trang Điểm danh', example: 'Bài cũ: thuộc\nBTVN: tập 10p' },
+  { tag: '{ngay_hoc}', label: 'Ngày học', desc: 'Ngày của buổi học đang điểm danh', example: '21/10/2026' },
+  { tag: '{so_buoi_con_duoc_nghi}', label: 'Số buổi còn được nghỉ', desc: 'Số buổi còn được nghỉ có phép của khóa', example: '2/3' },
 ];
 
 const categories = [
@@ -119,7 +122,10 @@ const renderTemplate = (content) => {
       .replace(/{so_tien}/g, '3.600.000đ')
       .replace(/{so_tai_khoan}/g, '1029384756 (HO VIET DUNG)')
       .replace(/{ngan_hang}/g, 'Vietcombank')
-      .replace(/{sdt_phu_huynh}/g, '0934567890');
+      .replace(/{sdt_phu_huynh}/g, '0934567890')
+      .replace(/{nhan_xet}/g, 'Bài cũ: con đã thuộc bài\nBài mới: ABC trang 10\nBTVN: tập 10 phút mỗi ngày')
+      .replace(/{ngay_hoc}/g, '21/10/2026')
+      .replace(/{so_buoi_con_duoc_nghi}/g, '2/3');
   }
 
   const courseName = props.student.course ? props.student.course.name : 'Khóa học';
@@ -133,7 +139,12 @@ const renderTemplate = (content) => {
     .replace(/{so_tien}/g, price)
     .replace(/{so_tai_khoan}/g, '1029384756 (HO VIET DUNG)')
     .replace(/{ngan_hang}/g, 'Vietcombank')
-    .replace(/{sdt_phu_huynh}/g, props.student.parent_phone || '');
+    .replace(/{sdt_phu_huynh}/g, props.student.parent_phone || '')
+    // Báo bài: nhận xét giáo viên tự ghi (giữ nguyên xuống dòng), chưa báo bài thì nhắc giáo viên
+    .replace(/{nhan_xet}/g, props.student.has_report ? props.student.checkin_note : '(Giáo viên chưa ghi nhận xét buổi học)')
+    .replace(/{ngay_hoc}/g, props.student.lesson_date || '')
+    .replace(/{so_buoi_con_duoc_nghi}/g,
+      props.student.leave_left !== undefined ? `${props.student.leave_left}/${props.student.allowed_absences}` : '');
 };
 
 const copyToClipboard = async (text, id) => {

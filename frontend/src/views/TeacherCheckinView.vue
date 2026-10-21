@@ -22,6 +22,10 @@ import {
   QrCode,
   RotateCcw,
   Pencil,
+  ArchiveRestore,
+  ChevronDown,
+  Download,
+  Wallet,
 } from 'lucide-vue-next';
 
 // Bộ lọc ngày hôm nay
@@ -33,6 +37,10 @@ const selectedTeacher = ref('all');
 // Giáo viên chỉ thấy và check-in ca của mình; các thao tác quản lý (đơn giá, báo vắng, dạy thay) ẩn đi
 const { user } = useAuth();
 const isTeacher = computed(() => !!user.value?.is_teacher);
+// Thù lao / đơn giá: chủ trung tâm và quản lý xem tất cả, người khác chỉ xem của mình
+const seesAllPay = computed(() => !!user.value?.sees_all_pay);
+// Xoá ca đã tính thù lao (chấm sai): chỉ chủ trung tâm
+const isOwner = computed(() => !!user.value?.is_owner);
 
 // Mã QR giáo viên vừa quét ở quầy (?qr=...&c=...). Giáo viên bắt buộc có mã này mới tự check-in được.
 const route = useRoute();
@@ -70,7 +78,10 @@ const monthlySummary = ref({
   total_salary: 0,
   total_shifts: 0,
   shifts: [],
+  deleted_shifts: [],
 });
+// Mở danh sách ca đã xoá nháp (để khôi phục)
+const showDeletedShifts = ref(false);
 const teachers = ref([]);
 const centers = ref([]);
 
@@ -228,7 +239,7 @@ const submitEdit = async () => {
 const deleteShift = async (shift) => {
   const ok = await confirmDialog({
     title: 'Xoá ca dạy?',
-    message: `Xoá ca ${shift.start_time} ngày ${formatDateDisplay(shift.date)} của ${shift.teacher_name}. Ca sẽ không được tự tạo lại từ lịch học và không tính thù lao.`,
+    message: `Xoá ca ${shift.start_time} ngày ${formatDateDisplay(shift.date)} của ${shift.earner || shift.teacher_name}. Ca không được tính thù lao nữa và không tự tạo lại từ lịch học. Chủ trung tâm có thể khôi phục ở mục "Ca đã xoá".`,
     confirmText: 'Xoá',
   });
   if (!ok) return;
@@ -240,6 +251,19 @@ const deleteShift = async (shift) => {
     notify.apiError(err, 'Không xoá được ca dạy');
   }
 };
+
+const restoreShift = async (shift) => {
+  try {
+    const res = await teacherCheckinApi.restoreShift(shift.id);
+    notify.success(res.data.message || 'Đã khôi phục ca dạy');
+    await fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Không khôi phục được ca dạy');
+  }
+};
+
+const WEEKDAY_SHORT = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+const weekdayOf = (dateStr) => (dateStr ? WEEKDAY_SHORT[new Date(`${dateStr}T00:00:00`).getDay()] : '');
 
 // Mở modal Đơn giá
 const openRatesModal = async () => {
@@ -283,10 +307,43 @@ const clearCourseRate = (c) => {
   c.one_on_one = null;
 };
 
-// Xuất file Excel tháng
+// Tổng thù lao trong tháng theo từng giáo viên (người thực dạy), nhiều tiền nhất lên đầu
+const monthlyTeacher = ref('');
+const payByTeacher = computed(() => {
+  const map = new Map();
+  for (const ms of monthlySummary.value.shifts || []) {
+    const row = map.get(ms.earner) || { name: ms.earner, shifts: 0, substitute: 0, late: 0, total: 0 };
+    row.shifts += 1;
+    row.total += Number(ms.amount || 0);
+    if (ms.status === 'substitute') row.substitute += 1;
+    if (ms.minutes_late > 0) row.late += 1;
+    map.set(ms.earner, row);
+  }
+  return [...map.values()].sort((a, b) => b.total - a.total);
+});
+// Chi tiết ca trong tháng, mới nhất lên đầu
+const visibleMonthlyShifts = computed(() =>
+  (monthlySummary.value.shifts || [])
+    .filter((ms) => !monthlyTeacher.value || ms.earner === monthlyTeacher.value)
+    .sort((a, b) => `${b.date} ${b.start_time || ''}`.localeCompare(`${a.date} ${a.start_time || ''}`)),
+);
+const visibleDeletedShifts = computed(() =>
+  (monthlySummary.value.deleted_shifts || []).filter((ms) => !monthlyTeacher.value || ms.earner === monthlyTeacher.value),
+);
+const visibleMonthlyTotal = computed(() =>
+  monthlyTeacher.value
+    ? visibleMonthlyShifts.value.reduce((sum, ms) => sum + Number(ms.amount || 0), 0)
+    : monthlySummary.value.total_salary,
+);
+// Bấm vào giáo viên trong bảng tổng: lọc chi tiết theo giáo viên đó (bấm lại để bỏ lọc)
+const toggleMonthlyTeacher = (name) => {
+  monthlyTeacher.value = monthlyTeacher.value === name ? '' : name;
+};
+
+// Xuất file Excel tháng (đang lọc giáo viên thì chỉ xuất giáo viên đó)
 const exportMonthly = async () => {
   try {
-    await teacherCheckinApi.exportMonthly(selectedMonth.value);
+    await teacherCheckinApi.exportMonthly(selectedMonth.value, monthlyTeacher.value);
   } catch (err) {
     notify.apiError(err, 'Không thể xuất file ca dạy');
   }
@@ -317,7 +374,7 @@ const exportMonthly = async () => {
           </router-link>
 
           <!-- Nút [ 📄 Đơn giá ca dạy ] -->
-          <button v-if="!isTeacher" type="button" @click="openRatesModal"
+          <button v-if="seesAllPay" type="button" @click="openRatesModal"
             class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50 transition-all cursor-pointer shadow-2xs">
             <FileText class="h-3.5 w-3.5 text-slate-600" />
             <span>Đơn giá ca dạy</span>
@@ -558,7 +615,7 @@ const exportMonthly = async () => {
               Báo vắng / Dạy thay
             </button>
             <template v-if="!isTeacher">
-              <button v-if="PAID_STATUSES.includes(s.status)" type="button" @click="openEditModal(s)"
+              <button v-if="seesAllPay && PAID_STATUSES.includes(s.status)" type="button" @click="openEditModal(s)"
                 class="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 cursor-pointer"
                 title="Sửa giờ check-in / đơn giá">
                 <Pencil class="h-4 w-4" />
@@ -568,7 +625,7 @@ const exportMonthly = async () => {
                 title="Khôi phục về chưa check-in">
                 <RotateCcw class="h-4 w-4" />
               </button>
-              <button type="button" @click="deleteShift(s)"
+              <button v-if="isOwner || !PAID_STATUSES.includes(s.status)" type="button" @click="deleteShift(s)"
                 class="rounded-lg p-1.5 text-rose-500 hover:bg-rose-50 cursor-pointer" title="Xoá ca dạy">
                 <Trash2 class="h-4 w-4" />
               </button>
@@ -578,82 +635,154 @@ const exportMonthly = async () => {
       </div>
     </div>
 
-    <!-- CARD 2: TỔNG CA DẠY THEO THÁNG (Khớp 100% hình tham khảo Seny) -->
-    <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
-      <h2 class="text-sm sm:text-base font-bold text-slate-900">Tổng ca dạy theo tháng</h2>
+    <!-- CARD 2: TỔNG CA DẠY THEO THÁNG -->
+    <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-5">
+      <!-- Tiêu đề + bộ lọc + xuất Excel -->
+      <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-3">
+        <div>
+          <h2 class="text-sm sm:text-base font-bold text-slate-900">Tổng ca dạy theo tháng</h2>
+          <p class="text-[11px] text-slate-500 mt-0.5">Các ca đã check-in, thù lao tính cho người thực dạy.</p>
+        </div>
+        <div class="flex flex-col sm:flex-row sm:items-end gap-2">
+          <label class="text-[11px] text-slate-500 font-medium sm:w-44">
+            Tháng
+            <input v-model="selectedMonth" type="month" @change="monthlyTeacher = ''; fetchData()"
+              class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none" />
+          </label>
+          <label v-if="seesAllPay" class="text-[11px] text-slate-500 font-medium sm:w-52">
+            Giáo viên
+            <select v-model="monthlyTeacher"
+              class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none">
+              <option value="">Tất cả giáo viên</option>
+              <option v-for="t in payByTeacher" :key="t.name" :value="t.name">{{ t.name }}</option>
+            </select>
+          </label>
+          <button type="button" @click="exportMonthly"
+            class="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-4 py-2 text-xs sm:text-sm font-semibold text-slate-800 shadow-2xs cursor-pointer">
+            <Download class="h-4 w-4" /> Tải Excel
+          </button>
+        </div>
+      </div>
 
-      <!-- Filter Tháng & Nút Tải Excel tháng này -->
-      <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
-        <div class="w-full sm:w-64">
-          <label class="block text-[11px] text-slate-500 mb-1 font-medium">Tháng</label>
-          <input v-model="selectedMonth" type="month" @change="fetchData"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none" />
+      <!-- Tổng tiền + tổng theo từng giáo viên -->
+      <div class="grid grid-cols-1 lg:grid-cols-[16rem_1fr] gap-3">
+        <div class="rounded-xl border border-rose-100 bg-rose-50/60 p-4 flex flex-col justify-between gap-2">
+          <span class="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+            <Wallet class="h-4 w-4 text-rose-500" />
+            <template v-if="!seesAllPay">Thu nhập của bạn trong tháng</template>
+            <template v-else-if="monthlyTeacher">Tiền trả {{ monthlyTeacher }}</template>
+            <template v-else>Tổng tiền trả giáo viên</template>
+          </span>
+          <span class="text-2xl font-black text-rose-600">{{ formatCurrency(visibleMonthlyTotal) }}</span>
+          <span class="text-[11px] text-slate-500">{{ visibleMonthlyShifts.length }} ca đã tính công</span>
         </div>
 
-        <button type="button" @click="exportMonthly"
-          class="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-5 py-2 text-xs sm:text-sm font-semibold text-slate-800 shadow-2xs transition-all cursor-pointer">
-          Tải Excel tháng này
+        <!-- Chủ trung tâm / quản lý: thẻ từng giáo viên, bấm để lọc -->
+        <div v-if="seesAllPay && payByTeacher.length > 0" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
+          <button v-for="t in payByTeacher" :key="t.name" type="button" @click="toggleMonthlyTeacher(t.name)"
+            class="text-left rounded-xl border px-3 py-2.5 transition-colors cursor-pointer"
+            :class="monthlyTeacher === t.name ? 'border-rose-300 bg-rose-50 ring-1 ring-rose-200' : 'border-slate-200 bg-white hover:bg-slate-50'"
+            :title="monthlyTeacher === t.name ? 'Bấm để xem tất cả giáo viên' : 'Bấm để xem chi tiết ca của giáo viên này'">
+            <div class="flex items-baseline justify-between gap-2">
+              <span class="font-bold text-sm text-slate-900 truncate">{{ t.name }}</span>
+              <span class="font-extrabold text-sm text-emerald-700 shrink-0">{{ formatCurrency(t.total) }}</span>
+            </div>
+            <div class="mt-1 flex flex-wrap gap-x-2.5 text-[11px] text-slate-500">
+              <span>{{ t.shifts }} ca</span>
+              <span v-if="t.substitute" class="text-blue-700">{{ t.substitute }} dạy thay</span>
+              <span v-if="t.late" class="text-amber-600 font-semibold">{{ t.late }} lần trễ</span>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <!-- Chi tiết từng ca -->
+      <div>
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <h3 class="text-xs font-bold text-slate-700 uppercase tracking-wide">
+            Chi tiết ca dạy<template v-if="monthlyTeacher"> · {{ monthlyTeacher }}</template>
+          </h3>
+          <button v-if="monthlyTeacher" type="button" @click="monthlyTeacher = ''"
+            class="text-[11px] font-semibold text-rose-600 hover:underline cursor-pointer">Xem tất cả giáo viên</button>
+        </div>
+
+        <p v-if="visibleMonthlyShifts.length === 0"
+          class="rounded-xl border border-dashed border-slate-200 py-8 text-center text-xs sm:text-sm text-slate-500">
+          Chưa có ca dạy nào được check-in trong tháng này.
+        </p>
+
+        <div v-else class="overflow-x-auto rounded-xl border border-slate-200">
+          <table class="w-full text-left text-xs sm:text-sm">
+            <thead class="bg-slate-50">
+              <tr class="text-slate-500 text-[11px] uppercase font-semibold">
+                <th class="py-2.5 px-3">Ngày</th>
+                <th class="py-2.5 px-3">Người dạy</th>
+                <th class="py-2.5 px-3">Ca dạy</th>
+                <th class="py-2.5 px-3">Check-in</th>
+                <th class="py-2.5 px-3 text-right">Thu nhập</th>
+                <th v-if="isOwner" class="py-2.5 px-3 w-10"></th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr v-for="ms in visibleMonthlyShifts" :key="ms.id" class="hover:bg-slate-50/70 transition-colors">
+                <td class="py-2.5 px-3 whitespace-nowrap">
+                  <span class="font-semibold text-slate-800">{{ formatDateDisplay(ms.date) }}</span>
+                  <span class="block text-[11px] text-slate-400">{{ weekdayOf(ms.date) }}</span>
+                </td>
+                <td class="py-2.5 px-3">
+                  <span class="font-bold text-slate-900">{{ ms.earner }}</span>
+                  <span v-if="ms.status === 'substitute'" class="block text-[11px] text-blue-700">dạy thay {{ ms.teacher_name }}</span>
+                </td>
+                <td class="py-2.5 px-3">
+                  <span class="text-slate-800">{{ ms.shift_name }}</span>
+                  <span class="block text-[11px]">
+                    <span class="font-semibold text-blue-700">{{ ms.type }}</span>
+                    <template v-if="ms.unit_rate !== undefined">
+                      <span class="text-slate-400"> · {{ payModeLabel(ms.pay_mode) }} · {{ rateDetail(ms) }}</span>
+                    </template>
+                  </span>
+                </td>
+                <td class="py-2.5 px-3 whitespace-nowrap">
+                  <span class="font-mono text-slate-700">{{ ms.checkin_time || '-' }}</span>
+                  <span v-if="ms.minutes_late > 0"
+                    class="ml-1.5 rounded-md bg-amber-50 px-1.5 py-0.5 text-[11px] font-bold text-amber-700">trễ {{ ms.minutes_late }}p</span>
+                </td>
+                <td class="py-2.5 px-3 text-right font-extrabold text-emerald-700 whitespace-nowrap">{{ formatCurrency(ms.amount) }}</td>
+                <td v-if="isOwner" class="py-2.5 px-3 text-right">
+                  <button type="button" @click="deleteShift(ms)"
+                    class="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 cursor-pointer"
+                    title="Xoá ca (bỏ khỏi thu nhập, khôi phục được)">
+                    <Trash2 class="h-4 w-4" />
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Ca đã xoá nháp: chủ trung tâm khôi phục -->
+      <div v-if="seesAllPay && visibleDeletedShifts.length > 0" class="rounded-xl border border-slate-200">
+        <button type="button" @click="showDeletedShifts = !showDeletedShifts"
+          class="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer">
+          <span>Ca đã xoá ({{ visibleDeletedShifts.length }}) · không tính vào thu nhập</span>
+          <ChevronDown class="h-4 w-4 transition-transform" :class="showDeletedShifts ? 'rotate-180' : ''" />
         </button>
-      </div>
-
-      <!-- Banner đỏ: Tổng tiền trả giáo viên trong tháng (Khớp 100% hình tham khảo) -->
-      <div class="rounded-xl border border-rose-100 bg-rose-50/60 p-4 flex items-center justify-between">
-        <span class="text-xs sm:text-sm font-bold text-slate-800">
-          Tổng tiền trả giáo viên trong tháng
-        </span>
-        <span class="text-base sm:text-lg font-black text-rose-600">
-          {{ formatCurrency(monthlySummary.total_salary) }}
-        </span>
-      </div>
-
-      <!-- Subtext thông báo -->
-      <div v-if="monthlySummary.shifts.length === 0" class="space-y-4">
-        <p class="text-xs text-slate-500">Chưa có ca dạy nào được check-in trong tháng này.</p>
-        <div class="py-8 text-center text-xs sm:text-sm text-slate-500">
-          Không có dữ liệu
+        <div v-if="showDeletedShifts" class="divide-y divide-slate-100 border-t border-slate-200">
+          <div v-for="ds in visibleDeletedShifts" :key="ds.id"
+            class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3 py-2.5 text-xs">
+            <div class="text-slate-500">
+              <span class="font-semibold text-slate-700 line-through">{{ formatDateDisplay(ds.date) }} · {{ ds.earner }} · {{ ds.shift_name }}</span>
+              <span v-if="ds.amount" class="ml-1.5 text-slate-400 line-through">{{ formatCurrency(ds.amount) }}</span>
+              <span class="block text-[11px]">Xoá lúc {{ ds.deleted_at || '—' }}<template v-if="ds.deleted_by"> bởi {{ ds.deleted_by }}</template></span>
+            </div>
+            <button v-if="isOwner && ds.restorable" type="button" @click="restoreShift(ds)"
+              class="self-start sm:self-auto inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 font-semibold text-emerald-700 hover:bg-emerald-100 cursor-pointer">
+              <ArchiveRestore class="h-3.5 w-3.5" /> Khôi phục
+            </button>
+            <span v-else-if="!ds.restorable" class="text-[11px] text-slate-400 italic">Xoá trước khi có khôi phục</span>
+          </div>
         </div>
-      </div>
-
-      <!-- Bảng ca dạy tháng -->
-      <div v-else class="overflow-x-auto pt-1">
-        <table class="w-full text-left text-xs sm:text-sm">
-          <thead>
-            <tr class="border-b border-slate-200 text-slate-500 text-[11px] sm:text-xs uppercase font-semibold">
-              <th class="py-2.5 pr-2">Ngày</th>
-              <th class="py-2.5 px-2">Người dạy</th>
-              <th class="py-2.5 px-2">Ca dạy</th>
-              <th class="py-2.5 px-2">Loại</th>
-              <th class="py-2.5 px-2">Kiểu tính</th>
-              <th class="py-2.5 px-2 text-right">Thu nhập</th>
-              <th class="py-2.5 px-2 text-center">Giờ check-in</th>
-              <th class="py-2.5 pl-2 text-center">Trễ</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            <tr v-for="ms in monthlySummary.shifts" :key="ms.id" class="hover:bg-slate-50/70 transition-colors">
-              <td class="py-3 pr-2 font-mono text-xs text-slate-600">{{ formatDateDisplay(ms.date) }}</td>
-              <td class="py-3 px-2">
-                <span class="font-bold text-slate-900">{{ ms.earner }}</span>
-                <span v-if="ms.status === 'substitute'" class="block text-[11px] text-blue-700">thay {{ ms.teacher_name
-                  }}</span>
-              </td>
-              <td class="py-3 px-2 text-xs text-slate-700">{{ ms.shift_name }}</td>
-              <td class="py-3 px-2 text-xs font-semibold text-blue-700">{{ ms.type }}</td>
-              <td class="py-3 px-2 text-xs text-slate-600">
-                {{ ms.unit_rate !== undefined ? payModeLabel(ms.pay_mode) : '—' }}
-                <span v-if="ms.unit_rate !== undefined" class="block text-[11px] text-slate-400">
-                  {{ rateDetail(ms) }}
-                </span>
-              </td>
-              <td class="py-3 px-2 text-right font-extrabold text-emerald-700">{{ formatCurrency(ms.amount) }}</td>
-              <td class="py-3 px-2 text-center font-mono text-xs">{{ ms.checkin_time || '-' }}</td>
-              <td class="py-3 pl-2 text-center text-xs">
-                <span v-if="ms.minutes_late > 0" class="text-amber-600 font-bold">{{ ms.minutes_late }}p</span>
-                <span v-else class="text-slate-300">-</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
       </div>
     </div>
 

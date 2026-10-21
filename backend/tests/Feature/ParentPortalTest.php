@@ -148,38 +148,4 @@ class ParentPortalTest extends TestCase
         $this->assertEquals('absent_with_leave', $sessions[2]['status']);
         $this->assertEquals('upcoming', $sessions[3]['status']);
     }
-
-    public function test_parent_can_submit_leave_request(): void
-    {
-        $course = Course::create([
-            'code' => 'KH-PIANO',
-            'name' => 'Piano Căn Bản',
-            'price' => 2000000,
-            'default_sessions' => 12,
-            'is_active' => true,
-        ]);
-
-        $student = Student::create([
-            'code' => 'HV-001',
-            'name' => 'Nguyễn Văn An',
-            'parent_name' => 'Nguyễn Văn Ba',
-            'parent_phone' => '0908123456',
-            'course_id' => $course->id,
-            'total_sessions' => 12,
-            'remaining_sessions' => 9,
-            'status' => 'active',
-        ]);
-
-        $response = $this->postJson("/api/portal/students/{$student->id}/leave-request", [
-            'phone_last4' => '3456',
-            'date' => Carbon::tomorrow()->format('Y-m-d'),
-            'reason' => 'Gia đình có việc bận về quê',
-        ]);
-
-        $response->assertStatus(200);
-        $this->assertDatabaseHas('attendances', [
-            'student_id' => $student->id,
-            'status' => 'absent_with_leave',
-        ]);
-    }
 }

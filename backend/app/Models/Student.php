@@ -122,6 +122,22 @@ class Student extends Model
         return $this->hasMany(Invoice::class)->orderBy('created_at', 'desc');
     }
 
+    /**
+     * Phiếu thu đang chờ thu (phụ huynh chưa đóng tiền), nút Học phí hiện "Chưa đóng HP".
+     */
+    public function pendingInvoice(): HasOne
+    {
+        return $this->hasOne(Invoice::class)->ofMany(['id' => 'max'], fn ($q) => $q->where('status', 'pending'));
+    }
+
+    /**
+     * Phiếu thu học phí đã thanh toán gần nhất (nút Học phí hiện "Đã đóng" để tránh thu trùng).
+     */
+    public function latestPaidInvoice(): HasOne
+    {
+        return $this->hasOne(Invoice::class)->ofMany(['id' => 'max'], fn ($q) => $q->where('status', 'paid'));
+    }
+
     // Scopes for high performance queries
     public function scopeActive($query)
     {

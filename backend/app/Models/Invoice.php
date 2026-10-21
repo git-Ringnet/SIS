@@ -29,7 +29,9 @@ class Invoice extends Model
     protected $casts = [
         'amount' => 'decimal:0',
         'sessions_added' => 'integer',
+        'sessions_reverted' => 'integer',
         'paid_at' => 'datetime',
+        'cancelled_at' => 'datetime',
     ];
 
     /**

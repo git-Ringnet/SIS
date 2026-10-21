@@ -6,6 +6,7 @@ import { dailyAttendanceApi, studentApi } from '../services/api';
 import SearchableSelect from '../components/SearchableSelect.vue';
 import MessageTemplateModal from '../components/MessageTemplateModal.vue';
 import Pagination from '../components/Pagination.vue';
+import ExpandableText from '../components/ExpandableText.vue';
 import {
   Calendar,
   CheckCircle2,
@@ -22,6 +23,7 @@ import {
   Phone,
   Mail,
   Info,
+  CalendarOff,
 } from 'lucide-vue-next';
 
 // Bộ lọc
@@ -54,6 +56,8 @@ const classes = ref([]);
 const rooms = ref([]);
 const teachers = ref([]);
 const parentLeaveRequests = ref([]);
+// Giáo viên chỉ xem + ghi báo bài; giáo vụ / quản lý / chủ trung tâm mới điểm danh
+const canMark = ref(true);
 const showLeaveRequests = ref(false);
 
 // Modals
@@ -79,6 +83,7 @@ const singleLessonForm = ref({
   merged_slot_id: '',
   merged_class_id: null,
   note: '',
+  is_makeup: false,
 });
 
 // Form nhận xét
@@ -90,8 +95,8 @@ const noteForm = ref({
 const attendanceTemplates = ref([
   {
     id: 1,
-    title: 'Báo cáo buổi học hôm nay gửi phụ huynh',
-    template_content: 'Chào phụ huynh bé {ten_hoc_vien}! Hôm nay con đã hoàn thành tốt buổi học bộ môn {khoa_hoc}. Thầy/cô nhận xét con tiến bộ rõ rệt và tiếp thu nhanh. Ba mẹ nhớ nhắc con luyện tập thêm 15 phút mỗi ngày nhé ạ! ❤️',
+    title: 'Báo bài buổi học gửi phụ huynh',
+    template_content: 'Chào phụ huynh bé {ten_hoc_vien}! Trung tâm gửi báo bài buổi học {khoa_hoc} ngày {ngay_hoc}:\n\n{nhan_xet}\n\nCon còn {so_buoi_con_lai} buổi học. Ba mẹ nhớ nhắc con luyện tập ở nhà nhé ạ! ❤️',
   },
   {
     id: 2,
@@ -124,6 +129,7 @@ const fetchData = async () => {
     rooms.value = res.data.rooms || [];
     teachers.value = res.data.teachers || [];
     parentLeaveRequests.value = res.data.parent_leave_requests || [];
+    canMark.value = res.data.can_mark !== false;
   } catch (err) {
     console.error('Lỗi tải dữ liệu điểm danh:', err);
   } finally {
@@ -258,12 +264,16 @@ onMounted(() => {
 const markStudent = async (student, status, note = '') => {
   try {
     // Điểm danh theo từng ca (một học viên có thể nhiều ca trong ngày)
-    await dailyAttendanceApi.mark(student.id, {
+    const res = await dailyAttendanceApi.mark(student.id, {
       date: selectedDate.value,
       status,
       note,
       slot_id: student.slot_id ?? null,
     });
+    // Nghỉ có phép khi đã hết số buổi được nghỉ → bị trừ buổi như vắng không phép
+    if (status === 'absent_with_leave' && res.data.deducts_session) {
+      notify.warning(res.data.message);
+    }
     await fetchData();
   } catch (err) {
     notify.error('Lỗi điểm danh', { description: errorMessage(err, err.message) });
@@ -290,6 +300,7 @@ const openSingleLessonModal = () => {
     merged_slot_id: '',
     merged_class_id: null,
     note: '',
+    is_makeup: false,
   };
   showMergeInfoTooltip.value = false;
   showSingleLessonModal.value = true;
@@ -313,9 +324,10 @@ const submitSingleLesson = async () => {
       merged_slot_id: singleLessonForm.value.merged_slot_id || null,
       merged_class_id: singleLessonForm.value.merged_class_id || null,
       note: singleLessonForm.value.note,
+      is_makeup: singleLessonForm.value.is_makeup,
     });
     showSingleLessonModal.value = false;
-    notify.success('Đã đặt buổi học lẻ thành công!');
+    notify.success(singleLessonForm.value.is_makeup ? 'Đã đặt buổi học bù thành công!' : 'Đã đặt buổi học lẻ thành công!');
     await fetchData();
   } catch (err) {
     notify.apiError(err, err.message);
@@ -325,19 +337,38 @@ const submitSingleLesson = async () => {
 // Mở modal Nhận xét buổi học
 const openNoteModal = (student) => {
   selectedStudent.value = student;
-  noteForm.value.content = student.checkin_note || '';
+  // Chưa báo bài thì để trống (không hiện ghi chú tự điền như "Điểm danh buổi #3")
+  noteForm.value.content = student.has_report ? student.checkin_note : '';
   showNoteModal.value = true;
 };
 
 const submitNote = async () => {
   if (!selectedStudent.value) return;
+  if (!canMark.value) {
+    // Giáo viên: chỉ lưu báo bài cho buổi đã được điểm danh
+    try {
+      const res = await dailyAttendanceApi.saveNote(selectedStudent.value.id, {
+        date: selectedDate.value,
+        slot_id: selectedStudent.value.slot_id ?? null,
+        note: noteForm.value.content,
+      });
+      notify.success(res.data.message);
+      showNoteModal.value = false;
+      await fetchData();
+    } catch (err) {
+      notify.apiError(err, 'Không lưu được báo bài');
+    }
+    return;
+  }
   await markStudent(selectedStudent.value, selectedStudent.value.status === 'not_checked' ? 'present' : selectedStudent.value.status, noteForm.value.content);
   showNoteModal.value = false;
 };
 
 // Mở modal mẫu tin nhắn
 const openMessageModal = (student) => {
-  selectedStudent.value = student;
+  // Kèm ngày học đang xem để mẫu tin nhắn điền {ngay_hoc}
+  const [y, m, d] = selectedDate.value.split('-');
+  selectedStudent.value = { ...student, lesson_date: `${d}/${m}/${y}` };
   showMessageModal.value = true;
 };
 
@@ -371,7 +402,7 @@ const openMessageModal = (student) => {
           </div>
 
           <!-- Nút Đặt buổi học lẻ (Đỏ / Rose - Khớp 100% hình tham khảo) -->
-          <button type="button" @click="openSingleLessonModal"
+          <button v-if="canMark" type="button" @click="openSingleLessonModal"
             class="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 px-3.5 py-1.5 text-xs sm:text-sm font-semibold text-white shadow-2xs transition-all active:scale-[0.98] cursor-pointer">
             <Calendar class="h-3.5 w-3.5" />
             <span>Đặt buổi học lẻ</span>
@@ -564,6 +595,10 @@ const openMessageModal = (student) => {
                   {{ st.name }}
                 </router-link>
                 <span class="text-xs font-mono text-slate-400">({{ st.code }})</span>
+                <span v-if="st.is_makeup"
+                  class="rounded-full bg-sky-100 text-sky-800 border border-sky-200 px-2 py-0.5 text-[11px] font-bold">
+                  Buổi bù
+                </span>
 
                 <!-- Trạng thái điểm danh -->
                 <span v-if="st.is_parent_request"
@@ -586,6 +621,10 @@ const openMessageModal = (student) => {
                   class="rounded-full bg-slate-200 text-slate-700 px-2.5 py-0.5 text-xs font-bold">
                   Đang tạm dừng
                 </span>
+                <span v-else-if="st.status === 'off'"
+                  class="rounded-full bg-violet-100 text-violet-800 border border-violet-200 px-2.5 py-0.5 text-xs font-bold inline-flex items-center gap-1">
+                  <CalendarOff class="h-3 w-3" /> {{ st.off_label }}
+                </span>
                 <span v-else
                   class="rounded-full bg-teal-100 text-teal-800 border border-teal-200 px-2.5 py-0.5 text-xs font-semibold">
                   Chưa điểm danh
@@ -600,8 +639,25 @@ const openMessageModal = (student) => {
                 <span>Giờ: <strong class="text-slate-800">{{ st.shift_time }}</strong></span>
                 <span>GV: {{ st.teacher }}</span>
                 <span>
-                  Tiến độ: <strong class="text-indigo-700">Buổi {{ st.current_session }}/{{ st.total_sessions
-                    }}</strong> (Còn {{ st.remaining_sessions }} buổi)
+                  <!-- Buổi không trừ (nghỉ có phép trong lượt / trung tâm, GV nghỉ) không có số buổi, chỉ hiện số đã học -->
+                  <template v-if="st.status === 'off' || (st.status === 'absent_with_leave' && !st.deducts_session)">
+                    Tiến độ: <strong class="text-indigo-700">Đã học {{ st.attended_sessions }}/{{ st.total_sessions }}</strong>
+                  </template>
+                  <template v-else>
+                    Tiến độ: <strong class="text-indigo-700">Buổi {{ st.current_session }}/{{ st.total_sessions }}</strong>
+                  </template>
+                  (Còn {{ st.remaining_sessions }} buổi)
+                </span>
+                <!-- Nghỉ có phép trong số buổi được nghỉ thì không trừ buổi; vắng không phép / hết lượt nghỉ thì trừ 1 buổi -->
+                <span v-if="st.status === 'absent_with_leave' && !st.deducts_session" class="font-semibold text-amber-700">
+                  Không trừ buổi · còn được nghỉ {{ st.leave_left }}/{{ st.allowed_absences }}
+                </span>
+                <span v-else-if="st.status.startsWith('absent') && st.deducts_session" class="font-semibold text-rose-700">
+                  Đã trừ 1 buổi{{ st.status === 'absent_with_leave' ? ' (hết lượt nghỉ có phép)' : '' }}
+                </span>
+                <span v-else-if="st.status === 'off'" class="font-semibold text-violet-700">Không trừ buổi</span>
+                <span v-else class="text-slate-500">
+                  Được nghỉ có phép: còn {{ st.leave_left }}/{{ st.allowed_absences }}
                 </span>
               </div>
 
@@ -610,12 +666,20 @@ const openMessageModal = (student) => {
                 :class="st.is_parent_request ? 'text-amber-900 bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-200 inline-block' : 'text-slate-500 italic'">
                 <span class="font-bold">{{ st.is_parent_request ? '📩 Lý do phụ huynh xin nghỉ:' : '📝 Nhận xét:'
                   }}</span>
-                <span class="ml-1">{{ st.checkin_note }}</span>
+                <!-- Giữ xuống dòng của nhận xét / báo bài; dài thì thu gọn, có Xem thêm -->
+                <ExpandableText :text="st.checkin_note" class="mt-0.5" />
               </div>
             </div>
 
+            <!-- Buổi trung tâm nghỉ / giáo viên nghỉ: không điểm danh -->
+            <p v-if="st.status === 'off'" class="text-xs text-violet-700 italic shrink-0">
+              Không có buổi học, không cần điểm danh
+            </p>
+
             <!-- Nút Hành Động 1-Click Điểm Danh -->
-            <div class="flex items-center gap-1.5 flex-wrap shrink-0">
+            <div v-else class="flex items-center gap-1.5 flex-wrap shrink-0">
+              <!-- Giáo viên không điểm danh: chỉ ghi báo bài -->
+              <template v-if="canMark">
               <!-- Nút [ Đi học ] -->
               <button type="button" @click="markStudent(st, 'present')" :class="[
                 'rounded-xl px-3 py-1.5 text-xs font-bold shadow-2xs transition-all cursor-pointer',
@@ -652,10 +716,20 @@ const openMessageModal = (student) => {
                 class="rounded-xl border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 cursor-pointer">
                 <RotateCcw class="h-3.5 w-3.5" />
               </button>
+              </template>
+              <span v-else-if="st.status === 'not_checked'" class="text-[11px] text-slate-400 italic">Chờ giáo vụ điểm danh</span>
 
               <!-- Nút [ Nhận xét bài học ] -->
-              <button type="button" @click="openNoteModal(st)" title="Ghi nhận xét bài học hôm nay"
-                class="rounded-xl border border-slate-200 p-1.5 text-slate-600 hover:bg-slate-50 cursor-pointer">
+              <!-- Đã báo bài thì nút màu xanh -->
+              <button type="button" @click="openNoteModal(st)"
+                :disabled="!canMark && st.status === 'not_checked'"
+                :title="!canMark && st.status === 'not_checked' ? 'Báo bài sau khi giáo vụ đã điểm danh' : st.has_report ? 'Đã báo bài, bấm để sửa nhận xét' : 'Chưa báo bài, bấm để ghi nhận xét bài học'"
+                :class="[
+                  'rounded-xl border p-1.5 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+                  st.has_report
+                    ? 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700'
+                    : 'border-slate-200 text-slate-600 hover:bg-slate-50',
+                ]">
                 <FileEdit class="h-3.5 w-3.5" />
               </button>
 
@@ -802,6 +876,16 @@ const openMessageModal = (student) => {
             <input v-model="singleLessonForm.note" type="text" placeholder="Tùy chọn"
               class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-800 placeholder:text-slate-400 focus:border-rose-500 focus:outline-none" />
           </div>
+
+          <!-- Buổi học bù: cổng phụ huynh hiển thị là "Buổi bù" -->
+          <label class="flex items-start gap-2 rounded-xl border border-sky-200 bg-sky-50/60 px-3 py-2 cursor-pointer">
+            <input v-model="singleLessonForm.is_makeup" type="checkbox" class="mt-0.5 h-4 w-4 accent-sky-600" />
+            <span>
+              <span class="font-semibold text-slate-800">Đây là buổi học bù</span>
+              <span class="block text-[11px] text-slate-500">Bù cho buổi nghỉ hoặc ngày trung tâm nghỉ. Phụ huynh sẽ thấy
+                "Buổi bù" trên cổng thông tin.</span>
+            </span>
+          </label>
 
           <!-- Nút Lưu lịch & Lưu ý chân trang -->
           <div class="pt-2">

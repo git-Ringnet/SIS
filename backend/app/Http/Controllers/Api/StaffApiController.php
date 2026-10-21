@@ -87,7 +87,7 @@ class StaffApiController extends Controller
             'roles' => [
                 'Giáo viên',
                 'Quản lý / Lễ tân',
-                'Tư vấn viên',
+                'Giáo vụ',
             ],
         ];
     }

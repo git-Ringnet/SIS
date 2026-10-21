@@ -81,6 +81,24 @@ class PagePermissions
     }
 
     /**
+     * Được điểm danh học viên (đi học / vắng / hoàn tác / đặt buổi học lẻ): chủ trung tâm, quản lý, giáo vụ.
+     * Giáo viên chỉ xem và ghi báo bài cho buổi đã được điểm danh.
+     */
+    public static function canMarkAttendance(?User $user): bool
+    {
+        return ! self::isTeacher($user);
+    }
+
+    /**
+     * Được xem thù lao / đơn giá của mọi giáo viên: chủ trung tâm và quản lý.
+     * Người khác (giáo viên, tư vấn viên...) chỉ xem thù lao của chính mình.
+     */
+    public static function seesAllPay(?User $user): bool
+    {
+        return OwnerGuard::isOwner($user) || str_contains(self::member($user)['role'] ?? '', 'Quản lý');
+    }
+
+    /**
      * Danh sách trang bị chặn của người dùng (rỗng nếu là chủ trung tâm hoặc không có trong danh sách nhân sự).
      *
      * @return list<string>

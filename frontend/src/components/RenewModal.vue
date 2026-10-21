@@ -1,10 +1,12 @@
 <script setup>
 import { notify } from '../services/notify';
-import { ref, watch } from 'vue';
-import { retentionApi } from '../services/api';
+import { confirmDialog } from '../services/useConfirm';
+import { computed, ref, watch } from 'vue';
+import { invoiceApi, retentionApi } from '../services/api';
 import Modal from './Modal.vue';
 import { CheckCircle2, DollarSign, PlusCircle, X } from 'lucide-vue-next';
 import MoneyInput from './MoneyInput.vue';
+import { latestPaidInvoice, pendingInvoice, tuitionPaid } from '../services/tuition';
 
 const props = defineProps({
   show: {
@@ -36,6 +38,52 @@ watch(
   },
   { immediate: true }
 );
+
+// Đã đóng học phí gần đây: cảnh báo để tránh thu trùng
+const lastPaid = computed(() => latestPaidInvoice(props.student));
+const alreadyPaid = computed(() => tuitionPaid(props.student));
+// Phiếu chờ thu: phụ huynh đóng tiền thì xác nhận phiếu này (không cộng thêm buổi)
+const pending = computed(() => pendingInvoice(props.student));
+const confirmingPaid = ref(false);
+const confirmPaid = async () => {
+  try {
+    confirmingPaid.value = true;
+    const res = await invoiceApi.markPaid(pending.value.id, {
+      payment_method: paymentMethod.value,
+      paid_at: new Date().toISOString().slice(0, 10),
+    });
+    notify.success(res.data.message || 'Đã xác nhận thu tiền');
+    emit('renewed');
+    emit('close');
+  } catch (err) {
+    notify.apiError(err, 'Không xác nhận được');
+  } finally {
+    confirmingPaid.value = false;
+  }
+};
+
+// Hủy lần thu gần nhất (thu / gia hạn nhầm): trừ lại số buổi, khôi phục được ở trang Hóa đơn
+const cancellingPaid = ref(false);
+const cancelLastPaid = async () => {
+  if (!(await confirmDialog({
+    title: 'Hủy lần thu này?',
+    message: `Phiếu ${lastPaid.value.invoice_code} (${Number(lastPaid.value.amount || 0).toLocaleString('vi-VN')}đ) sẽ bị hủy, học viên bị trừ lại ${lastPaid.value.sessions_added || 0} buổi đã cộng. Có thể khôi phục ở trang Hóa đơn.`,
+    confirmText: 'Hủy phiếu',
+  }))) return;
+  try {
+    cancellingPaid.value = true;
+    const res = await invoiceApi.cancel(lastPaid.value.id, { reason: 'Thu / gia hạn nhầm' });
+    notify.success(res.data.message);
+    emit('renewed');
+    emit('close');
+  } catch (err) {
+    notify.apiError(err, 'Không hủy được phiếu thu');
+  } finally {
+    cancellingPaid.value = false;
+  }
+};
+
+const formatDay = (value) => (value ? new Date(value).toLocaleDateString('vi-VN') : '');
 
 const submit = async () => {
   if (!props.student) return;
@@ -84,7 +132,39 @@ const submit = async () => {
         </button>
       </div>
 
+      <!-- Phụ huynh chưa đóng học phí lúc đăng ký: xác nhận thu phiếu chờ -->
+      <div v-if="pending" class="mt-4 rounded-xl bg-amber-50 p-3 text-xs text-amber-900 border border-amber-300 space-y-2">
+        <p>
+          <span class="font-bold">Phiếu chờ thu {{ pending.invoice_code }}:</span>
+          {{ Number(pending.amount || 0).toLocaleString('vi-VN') }}đ<template v-if="pending.sessions_added"> ({{ pending.sessions_added }} buổi đã cấp)</template>.
+          Phụ huynh đóng tiền thì xác nhận phiếu này, không cộng thêm buổi.
+        </p>
+        <div class="flex flex-wrap items-center gap-2">
+          <select v-model="paymentMethod" class="rounded-lg border border-amber-300 bg-white px-2 py-1.5 text-xs">
+            <option value="bank_transfer">Chuyển khoản</option>
+            <option value="cash">Tiền mặt</option>
+            <option value="pos">Quẹt POS</option>
+            <option value="momo">MoMo / QR</option>
+          </select>
+          <button type="button" @click="confirmPaid" :disabled="confirmingPaid"
+            class="rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 px-3 py-1.5 font-bold text-white">
+            {{ confirmingPaid ? 'Đang lưu...' : 'Xác nhận đã thu' }}
+          </button>
+        </div>
+        <p class="text-[11px] text-amber-700">Hoặc dùng form bên dưới để thu thêm / gia hạn khóa mới (cộng thêm buổi).</p>
+      </div>
+
       <form @submit.prevent="submit" class="mt-4 space-y-4">
+        <div v-if="alreadyPaid" class="rounded-xl bg-amber-50 p-3 text-xs text-amber-900 border border-amber-300">
+          <p class="font-bold">⚠️ Học viên này đã đóng học phí<template v-if="lastPaid?.paid_at || lastPaid?.created_at"> ngày {{ formatDay(lastPaid.paid_at || lastPaid.created_at) }}</template>
+            ({{ Number(lastPaid?.amount || 0).toLocaleString('vi-VN') }}đ<template v-if="lastPaid?.sessions_added">, +{{ lastPaid.sessions_added }} buổi</template>)
+            và còn {{ student.remaining_sessions }} buổi.</p>
+          <p class="mt-0.5">Chỉ thu tiếp khi phụ huynh đóng thêm / gia hạn khóa mới, tránh cộng trùng buổi.</p>
+          <button type="button" @click="cancelLastPaid" :disabled="cancellingPaid"
+            class="mt-2 rounded-lg border border-rose-300 bg-white hover:bg-rose-50 disabled:opacity-50 px-2.5 py-1 font-semibold text-rose-700">
+            {{ cancellingPaid ? 'Đang hủy...' : 'Thu / gia hạn nhầm? Hủy lần thu này' }}
+          </button>
+        </div>
         <div class="rounded-xl bg-emerald-50/70 p-3 text-xs text-emerald-900 border border-emerald-200/60">
           <p class="font-medium">🎉 Khi xác nhận, hệ thống sẽ tự động:</p>
           <ul class="mt-1 list-disc list-inside space-y-0.5 text-emerald-800">

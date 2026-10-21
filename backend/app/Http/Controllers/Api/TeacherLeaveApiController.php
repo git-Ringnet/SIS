@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Support\ActivityLogger;
+use App\Support\CenterStore;
 use App\Support\PagePermissions;
 use App\Support\TeacherLeaves;
 use App\Support\TeacherName;
@@ -52,7 +53,10 @@ class TeacherLeaveApiController extends Controller
         return response()->json([
             'leaves' => $filter($data['leaves'], ['teacher']),
             'substitutions' => $filter($data['substitutions'], ['original', 'substitute']),
+            // Ngày nghỉ của trung tâm không gắn giáo viên nên chỉ lọc theo trạng thái / khoảng ngày
+            'center_offs' => $teacher ? [] : $filter($data['center_offs'], []),
             'teachers' => TeacherName::all(),
+            'centers' => CenterStore::names(),
         ]);
     }
 
@@ -132,13 +136,51 @@ class TeacherLeaveApiController extends Controller
         return response()->json(['message' => "Đã phân công {$sub['substitute']} dạy thay {$sub['original']}.", 'substitution' => $sub], 201);
     }
 
+    /**
+     * Ngày nghỉ của trung tâm (lễ, Tết...): học viên không học, không trừ buổi, lịch học tự lùi lại.
+     */
+    public function storeCenterOff(Request $request): JsonResponse
+    {
+        if ($denied = $this->forbidTeacher($request)) {
+            return $denied;
+        }
+
+        $validated = $request->validate(['center' => 'nullable|string|max:255', ...$this->periodRules()], [
+            'to.after_or_equal' => 'Đến ngày phải sau hoặc bằng Từ ngày',
+        ]);
+
+        $data = TeacherLeaves::all();
+        $off = [
+            'id' => (string) Str::uuid(),
+            ...$validated,
+            // Không chọn cơ sở = áp cho mọi cơ sở
+            'center' => ($validated['center'] ?? '') ?: null,
+            'reason' => $validated['reason'] ?? null,
+            'created_by' => $request->user()?->name,
+            'created_at' => Carbon::now()->toDateTimeString(),
+        ];
+        $data['center_offs'][] = $off;
+        TeacherLeaves::save($data);
+
+        $where = $off['center'] ?? 'tất cả cơ sở';
+        ActivityLogger::log('created', 'teacher_checkin', "Trung tâm nghỉ: {$where}", null, ActivityLogger::diff([], [
+            'note' => "{$off['from']} → {$off['to']}".($off['reason'] ? " ({$off['reason']})" : ''),
+        ]));
+
+        return response()->json(['message' => "Đã lưu ngày nghỉ của trung tâm ({$where}).", 'center_off' => $off], 201);
+    }
+
     public function destroy(Request $request, string $type, string $id): JsonResponse
     {
         if ($denied = $this->forbidTeacher($request)) {
             return $denied;
         }
 
-        $key = $type === 'leaves' ? 'leaves' : 'substitutions';
+        $key = match ($type) {
+            'leaves' => 'leaves',
+            'center-offs' => 'center_offs',
+            default => 'substitutions',
+        };
         $data = TeacherLeaves::all();
         $removed = collect($data[$key])->firstWhere('id', $id);
         if (! $removed) {
@@ -148,7 +190,11 @@ class TeacherLeaveApiController extends Controller
         $data[$key] = array_values(array_filter($data[$key], fn ($p) => $p['id'] !== $id));
         TeacherLeaves::save($data);
 
-        $label = $key === 'leaves' ? "Nghỉ phép: {$removed['teacher']}" : "Dạy thay: {$removed['substitute']} thay {$removed['original']}";
+        $label = match ($key) {
+            'leaves' => "Nghỉ phép: {$removed['teacher']}",
+            'center_offs' => 'Trung tâm nghỉ: '.($removed['center'] ?? 'tất cả cơ sở'),
+            default => "Dạy thay: {$removed['substitute']} thay {$removed['original']}",
+        };
         ActivityLogger::log('deleted', 'teacher_checkin', $label, null, ActivityLogger::diff(['note' => "{$removed['from']} → {$removed['to']}"], []));
 
         return response()->json(['message' => 'Đã xoá. Các ca chưa check-in trong khoảng ngày này trở lại bình thường.']);

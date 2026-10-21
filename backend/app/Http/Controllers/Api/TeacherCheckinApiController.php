@@ -9,6 +9,7 @@ use App\Models\Student;
 use App\Support\ActivityLogger;
 use App\Support\CenterStore;
 use App\Support\CheckinToken;
+use App\Support\OwnerGuard;
 use App\Support\PagePermissions;
 use App\Support\ShiftTime;
 use App\Support\StudentSchedule;
@@ -137,6 +138,12 @@ class TeacherCheckinApiController extends Controller
             return $shift;
         }
 
+        // Ngày trung tâm nghỉ: không có ca dạy
+        if ($off = TeacherLeaves::centerOffFor($shift['center'] ?? null, $shift['date'], $periods)) {
+            return [...$shift, 'status' => 'excused_absence', 'on_leave' => true,
+                'period_note' => 'Trung tâm nghỉ'.(! empty($off['reason']) ? ': '.$off['reason'] : '')];
+        }
+
         if (empty($shift['substitute_teacher'])
             && $sub = TeacherLeaves::substitutionFor($shift['teacher_name'], $shift['date'], $periods)) {
             return [...$shift, 'substitute_teacher' => $sub['substitute'], 'period_note' => $sub['reason'] ?: 'Phân công dạy thay'];
@@ -204,6 +211,15 @@ class TeacherCheckinApiController extends Controller
             ->all();
     }
 
+    /**
+     * Ca đã xoá nháp: giữ lại (status = deleted) để không bị sinh lại từ lịch học và khôi phục được,
+     * nhưng không được tính công / thù lao / check-in / báo vắng ở bất kỳ đâu.
+     */
+    private static function isDeleted(array $shift): bool
+    {
+        return ($shift['status'] ?? null) === 'deleted';
+    }
+
     private function loadCheckins(): array
     {
         $data = Storage::exists(self::PATH) ? json_decode(Storage::get(self::PATH), true) : null;
@@ -236,6 +252,25 @@ class TeacherCheckinApiController extends Controller
             : TeacherName::same($shift['teacher_name'], $teacher);
     }
 
+    /**
+     * Người chỉ được xem thù lao của chính mình (tên theo màn Nhân sự); null = chủ trung tâm / quản lý, xem tất cả.
+     */
+    private function ownPayName(Request $request): ?string
+    {
+        if (PagePermissions::seesAllPay($request->user())) {
+            return null;
+        }
+
+        return PagePermissions::member($request->user())['name'] ?? $request->user()?->name ?? '';
+    }
+
+    private function forbidUnlessSeesAllPay(Request $request): ?JsonResponse
+    {
+        return PagePermissions::seesAllPay($request->user())
+            ? null
+            : response()->json(['message' => 'Chỉ chủ trung tâm hoặc quản lý được xem / sửa đơn giá và thù lao giáo viên.'], 403);
+    }
+
     private function forbidTeacher(Request $request): ?JsonResponse
     {
         return PagePermissions::isTeacher($request->user())
@@ -256,11 +291,13 @@ class TeacherCheckinApiController extends Controller
         if ($ownName !== null) {
             $teacherName = $ownName;
         }
+        // Thù lao: chủ trung tâm / quản lý xem tất cả, người khác chỉ xem của chính mình
+        $payName = $this->ownPayName($request);
 
         $periods = TeacherLeaves::all();
         $shifts = array_map(
             fn ($s) => $this->withPeriods($s, $periods),
-            array_filter($this->syncScheduledShifts($date, $this->loadCheckins()), fn ($s) => $s['status'] !== 'deleted'),
+            array_filter($this->syncScheduledShifts($date, $this->loadCheckins()), fn ($s) => ! self::isDeleted($s)),
         );
 
         $carbonDate = Carbon::parse($date);
@@ -283,15 +320,33 @@ class TeacherCheckinApiController extends Controller
             'substitute' => count(array_filter($todayShifts, fn ($s) => ! empty($s['substitute_teacher']))),
         ];
 
+        // Ca dạy trong ngày: ẩn đơn giá đã chốt của ca không phải của người xem
+        if ($payName !== null) {
+            $todayShifts = array_map(
+                fn ($s) => TeacherName::same($this->earner($s), $payName) ? $s : array_diff_key($s, array_flip(['pay_mode', 'unit_rate', 'free_threshold', 'free_per_shift', 'rate'])),
+                $todayShifts,
+            );
+        }
+
         // Bảng tổng kết tháng: các ca đã tính công, thù lao tính cho người thực dạy
-        $monthlyShifts = array_values(array_filter($shifts, function ($s) use ($month, $center, $ownName) {
+        $monthlyShifts = array_values(array_filter($shifts, function ($s) use ($month, $center, $payName) {
             return str_starts_with($s['date'], $month)
                 && in_array($s['status'], self::PAID_STATUSES, true)
                 && ($center === 'all' || $s['center'] === $center)
-                && ($ownName === null || TeacherName::same($this->earner($s), $ownName));
+                && ($payName === null || TeacherName::same($this->earner($s), $payName));
         }));
-        $present = $this->presentByDate($monthlyShifts);
+        // Ca đã xoá nháp trong tháng (chủ trung tâm / quản lý xem để khôi phục), kèm thù lao trước khi xoá
+        $deletedShifts = $payName !== null ? [] : array_values(array_filter(
+            array_map(fn ($s) => [...($s['trashed'] ?? $s), 'id' => $s['id'], 'status' => 'deleted', 'deleted_at' => $s['deleted_at'] ?? null,
+                'deleted_by' => $s['deleted_by'] ?? null, 'restorable' => ! empty($s['trashed']), 'trashed_status' => $s['trashed']['status'] ?? null],
+                array_filter($this->loadCheckins(), fn ($s) => self::isDeleted($s))),
+            fn ($s) => str_starts_with($s['date'], $month) && ($center === 'all' || ($s['center'] ?? null) === $center),
+        ));
+
+        $present = $this->presentByDate([...$monthlyShifts, ...array_map(fn ($s) => ['pay_mode' => $s['pay_mode'] ?? null, 'date' => $s['date']], $deletedShifts)]);
         $monthlyShifts = array_map(fn ($s) => [...$s, 'earner' => $this->earner($s), 'amount' => $this->amount($s, $present)], $monthlyShifts);
+        $deletedShifts = array_map(fn ($s) => [...$s, 'earner' => $this->earner($s),
+            'amount' => $s['trashed_status'] ? $this->amount([...$s, 'status' => $s['trashed_status']], $present) : 0], $deletedShifts);
 
         return response()->json([
             'date' => $date,
@@ -303,6 +358,7 @@ class TeacherCheckinApiController extends Controller
                 'total_salary' => array_sum(array_column($monthlyShifts, 'amount')),
                 'total_shifts' => count($monthlyShifts),
                 'shifts' => $monthlyShifts,
+                'deleted_shifts' => $deletedShifts,
             ],
             'teachers' => $ownName !== null ? [$ownName] : TeacherName::all(),
             'centers' => CenterStore::names(),
@@ -339,7 +395,7 @@ class TeacherCheckinApiController extends Controller
         $logged = null;
 
         foreach ($shifts as &$stored) {
-            if ($stored['id'] !== $validated['shift_id']) {
+            if ($stored['id'] !== $validated['shift_id'] || self::isDeleted($stored)) {
                 continue;
             }
 
@@ -454,7 +510,7 @@ class TeacherCheckinApiController extends Controller
         $found = false;
 
         foreach ($shifts as &$s) {
-            if ($s['id'] !== $validated['shift_id']) {
+            if ($s['id'] !== $validated['shift_id'] || self::isDeleted($s)) {
                 continue;
             }
             if (! in_array($s['status'] ?? 'not_checked_in', ['not_checked_in', 'skipped', 'excused_absence'], true)) {
@@ -513,7 +569,7 @@ class TeacherCheckinApiController extends Controller
      */
     public function updateShift(Request $request, int $id): JsonResponse
     {
-        if ($denied = $this->forbidTeacher($request)) {
+        if ($denied = $this->forbidUnlessSeesAllPay($request)) {
             return $denied;
         }
 
@@ -554,20 +610,55 @@ class TeacherCheckinApiController extends Controller
     }
 
     /**
-     * Xoá ca dạy. Ca sinh từ lịch học được giữ lại dạng đã xoá để không bị tự sinh lại.
+     * Xoá nháp ca dạy: giữ bản gốc trong "trashed" để khôi phục, ca sinh từ lịch học không bị tự sinh lại.
+     * Ca đã tính công (có thù lao, ví dụ chấm sai) chỉ chủ trung tâm được xoá.
      */
     public function destroyShift(Request $request, int $id): JsonResponse
     {
         if ($denied = $this->forbidTeacher($request)) {
             return $denied;
         }
+        $isOwner = OwnerGuard::isOwner($request->user());
 
         return $this->updateStoredShift(
             $id,
-            fn (array $s) => ['id' => $s['id'], 'schedule_key' => $s['schedule_key'] ?? null, 'date' => $s['date'], 'status' => 'deleted',
-                'teacher_name' => $s['teacher_name'], 'shift_name' => $s['shift_name'] ?? '', 'center' => $s['center'] ?? null],
+            fn (array $s) => in_array($s['status'] ?? null, self::PAID_STATUSES, true) && ! $isOwner
+                ? response()->json(['message' => 'Ca dạy đã tính thù lao, chỉ chủ trung tâm được xoá.'], 403)
+                : ['id' => $s['id'], 'schedule_key' => $s['schedule_key'] ?? null, 'date' => $s['date'], 'status' => 'deleted',
+                    'teacher_name' => $s['teacher_name'], 'shift_name' => $s['shift_name'] ?? '', 'center' => $s['center'] ?? null,
+                    'deleted_at' => Carbon::now()->toDateTimeString(), 'deleted_by' => $request->user()?->name, 'trashed' => $s],
             fn ($old) => ['Xoá', ['status' => self::statusLabel($old['status'])], ['status' => 'Đã xoá']],
         );
+    }
+
+    /**
+     * Khôi phục ca đã xoá nháp về đúng như trước khi xoá (giờ check-in, đơn giá đã chốt...). Chỉ chủ trung tâm.
+     */
+    public function restoreShift(Request $request, int $id): JsonResponse
+    {
+        if (! OwnerGuard::isOwner($request->user())) {
+            return response()->json(['message' => 'Chỉ chủ trung tâm được khôi phục ca dạy đã xoá.'], 403);
+        }
+
+        $shifts = $this->loadCheckins();
+        foreach ($shifts as $i => $s) {
+            if ($s['id'] !== $id || ! self::isDeleted($s)) {
+                continue;
+            }
+            if (empty($s['trashed'])) {
+                return response()->json(['message' => 'Ca này đã xoá từ trước khi có chức năng khôi phục, không khôi phục được.'], 422);
+            }
+
+            $shifts[$i] = $s['trashed'];
+            $this->saveCheckins($shifts);
+            ActivityLogger::log('updated', 'teacher_checkin', "{$this->earner($s['trashed'])} – {$s['shift_name']}", $id,
+                ActivityLogger::diff(['status' => 'Đã xoá'], ['status' => self::statusLabel($s['trashed']['status'] ?? null), 'note' => "Khôi phục ca ngày {$s['date']}"]),
+                $s['center'] ?? null);
+
+            return response()->json(['message' => 'Đã khôi phục ca dạy.']);
+        }
+
+        return response()->json(['message' => 'Không tìm thấy ca dạy đã xoá!'], 404);
     }
 
     /**
@@ -579,7 +670,7 @@ class TeacherCheckinApiController extends Controller
         $shifts = $this->loadCheckins();
 
         foreach ($shifts as $i => $s) {
-            if ($s['id'] !== $id || ($s['status'] ?? null) === 'deleted') {
+            if ($s['id'] !== $id || self::isDeleted($s)) {
                 continue;
             }
 
@@ -622,7 +713,7 @@ class TeacherCheckinApiController extends Controller
      */
     public function rates(Request $request): JsonResponse
     {
-        if ($denied = $this->forbidTeacher($request)) {
+        if ($denied = $this->forbidUnlessSeesAllPay($request)) {
             return $denied;
         }
 
@@ -666,7 +757,7 @@ class TeacherCheckinApiController extends Controller
 
     public function updateRates(Request $request): JsonResponse
     {
-        if ($denied = $this->forbidTeacher($request)) {
+        if ($denied = $this->forbidUnlessSeesAllPay($request)) {
             return $denied;
         }
 
@@ -723,12 +814,13 @@ class TeacherCheckinApiController extends Controller
     public function exportMonthly(Request $request): StreamedResponse
     {
         $month = $request->input('month', Carbon::now()->format('Y-m'));
-        $ownName = $this->ownTeacherName($request);
+        // Chủ trung tâm / quản lý có thể xuất riêng một giáo viên; người khác luôn chỉ xuất của mình
+        $payName = $this->ownPayName($request) ?? ($request->input('teacher') ?: null);
 
-        $monthlyShifts = array_values(array_filter($this->loadCheckins(), function ($s) use ($month, $ownName) {
+        $monthlyShifts = array_values(array_filter($this->loadCheckins(), function ($s) use ($month, $payName) {
             return str_starts_with($s['date'], $month)
-                && $s['status'] !== 'deleted'
-                && ($ownName === null || TeacherName::same($this->earner($s), $ownName));
+                && ! self::isDeleted($s)
+                && ($payName === null || TeacherName::same($this->earner($s), $payName));
         }));
         $present = $this->presentByDate($monthlyShifts);
 

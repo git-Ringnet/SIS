@@ -79,6 +79,7 @@ export const studentApi = {
   recordAbsence: (id, data) => api.post(`/students/${id}/absence`, data),
   tuitionInvoicePdf: (id) => api.get(`/students/${id}/tuition-invoice.pdf`, { responseType: 'blob', timeout: 30000 }),
   addSupplies: (id, data) => api.post(`/students/${id}/supplies`, data),
+  returnSupply: (id, supplyId, data) => api.post(`/students/${id}/supplies/${supplyId}/return`, data),
   updateProgress: (id, data) => api.put(`/students/${id}/progress`, data),
   downloadTemplate: () => api.get('/students/template', { responseType: 'blob' }),
   importCsv: (formData) => api.post('/students/import', formData, {
@@ -132,6 +133,10 @@ export const invoiceApi = {
   create: (data) => api.post('/invoices', data),
   update: (id, data) => api.put(`/invoices/${id}`, data),
   delete: (id) => api.delete(`/invoices/${id}`),
+  markPaid: (id, data) => api.post(`/invoices/${id}/mark-paid`, data),
+  markUnpaid: (id) => api.post(`/invoices/${id}/mark-unpaid`),
+  cancel: (id, data) => api.post(`/invoices/${id}/cancel`, data),
+  restore: (id) => api.post(`/invoices/${id}/restore`),
   downloadPdf: (inv) => downloadFile(`/invoices/${inv.id}/pdf`, {}, `${inv.invoice_code}.pdf`),
 };
 
@@ -242,14 +247,17 @@ export const teacherCheckinApi = {
   resetShift: (id) => api.post(`/teacher-checkin/${id}/reset`),
   updateShift: (id, data) => api.put(`/teacher-checkin/${id}`, data),
   deleteShift: (id) => api.delete(`/teacher-checkin/${id}`),
+  restoreShift: (id) => api.post(`/teacher-checkin/${id}/restore`),
   getRates: () => api.get('/teacher-checkin/rates'),
   getQrToken: (center) => api.get('/teacher-checkin/qr-token', { params: { center } }),
   updateRates: (data) => api.post('/teacher-checkin/rates', data),
-  exportMonthly: (month) => downloadFile('/teacher-checkin/export', { month }, `ca-day-${month}.csv`),
+  exportMonthly: (month, teacher = '') =>
+    downloadFile('/teacher-checkin/export', teacher ? { month, teacher } : { month }, `ca-day-${month}${teacher ? `-${teacher}` : ''}.csv`),
   // Nghỉ phép / dạy thay theo khoảng ngày
   getLeaves: (params) => api.get('/teacher-checkin/leaves', { params }),
   createLeave: (data) => api.post('/teacher-checkin/leaves', data),
   createSubstitution: (data) => api.post('/teacher-checkin/substitutions', data),
+  createCenterOff: (data) => api.post('/teacher-checkin/center-offs', data),
   deletePeriod: (type, id) => api.delete(`/teacher-checkin/${type}/${id}`),
 };
 
@@ -257,6 +265,7 @@ export const dailyAttendanceApi = {
   getAttendance: (params) => api.get('/attendance', { params }),
   getAvailableGroupSlots: (params) => api.get('/attendance/available-group-slots', { params }),
   mark: (studentId, data) => api.post(`/attendance/${studentId}/mark`, data),
+  saveNote: (studentId, data) => api.post(`/attendance/${studentId}/note`, data),
   scheduleSingleLesson: (data) => api.post('/attendance/single-lesson', data),
 };
 

@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, nextTick } from 'vue';
 import { useRoute } from 'vue-router';
 import { parentPortalApi } from '../services/api';
+import ExpandableText from '../components/ExpandableText.vue';
 import { notify } from '../services/notify';
 import {
   ShieldCheck,
@@ -27,7 +28,9 @@ import {
   Flame,
   Smile,
   AlertTriangle,
-  Info
+  Info,
+  CalendarOff,
+  RefreshCw,
 } from 'lucide-vue-next';
 
 const route = useRoute();
@@ -48,12 +51,12 @@ const digitInputs = ref([]);
 // Dữ liệu học tập sau khi xác thực
 const portalData = ref(null);
 const activeTab = ref('sessions'); // 'sessions' | 'supplies' | 'tuition'
-const sessionFilter = ref('all'); // 'all' | 'completed' | 'absent' | 'upcoming'
+const sessionFilter = ref('all'); // 'all' | 'completed' | 'absent' | 'off' | 'upcoming'
 
-// Modal Xin nghỉ phép
+// Modal Xin nghỉ phép: chọn một buổi học sắp tới
 const showLeaveModal = ref(false);
 const leaveForm = ref({
-  date: new Date().toISOString().split('T')[0],
+  key: '',
   reason: '',
 });
 const isSubmittingLeave = ref(false);
@@ -181,23 +184,66 @@ const lockPortal = () => {
 
 // Lọc danh sách buổi học
 const filteredSessions = computed(() => {
-  if (!portalData.value?.sessions) return [];
-  const list = portalData.value.sessions;
-  if (sessionFilter.value === 'completed') {
-    return list.filter((s) => s.is_completed);
+  const list = portalData.value?.sessions || [];
+  switch (sessionFilter.value) {
+    case 'completed':
+      return list.filter((s) => s.is_completed);
+    case 'absent':
+      return list.filter((s) => s.is_absent);
+    case 'off':
+      return list.filter((s) => s.status === 'off');
+    case 'upcoming':
+      return list.filter((s) => s.status === 'upcoming');
+    default:
+      return list;
   }
-  if (sessionFilter.value === 'absent') {
-    return list.filter((s) => s.is_absent);
-  }
-  if (sessionFilter.value === 'upcoming') {
-    return list.filter((s) => s.status === 'upcoming');
-  }
-  return list;
 });
 
-// Gửi đơn xin nghỉ phép
+const countBy = (fn) => (portalData.value?.sessions || []).filter(fn).length;
+
+// Các buổi sắp tới có thể xin nghỉ (đã có ngày học, từ hôm nay trở đi)
+const leaveOptions = computed(() => (portalData.value?.sessions || []).filter((s) => s.can_request_leave));
+const selectedLeaveSession = computed(() => leaveOptions.value.find((s) => s.key === leaveForm.value.key));
+
+// Số buổi được nghỉ có phép theo từng khóa (học nhiều khóa: mỗi khóa tính riêng)
+const leaveByCourse = computed(() => portalData.value?.stats?.leave_by_course || []);
+const multiCourse = computed(() => leaveByCourse.value.length > 1);
+// Lượt nghỉ của khóa mà buổi học thuộc về (không xác định được khóa thì dùng tổng)
+const leaveOf = (session) => {
+  const course = leaveByCourse.value.find((c) => c.course_item_id === session?.course_item_id);
+  return course || { left: portalData.value?.stats?.leave_left ?? 0, allowed: portalData.value?.stats?.allowed_absences ?? 0, course_name: null };
+};
+const selectedLeave = computed(() => leaveOf(selectedLeaveSession.value));
+
+const sessionLabel = (s) => `${s.weekday}, ${s.date}${s.time ? ` · ${s.time}` : ''}${multiCourse.value && s.course_name ? ` · ${s.course_name}` : ''}${s.is_makeup ? ' (buổi bù)' : ''}`;
+
+// Màu theo trạng thái buổi học
+const STATUS_STYLES = {
+  present: { card: 'border-emerald-200 bg-emerald-50/10', badge: 'bg-emerald-100 text-emerald-800', number: 'bg-emerald-500 text-white border-emerald-600' },
+  absent_with_leave: { card: 'border-amber-200 bg-amber-50/10', badge: 'bg-amber-100 text-amber-800', number: 'bg-amber-500 text-white border-amber-600' },
+  absent_without_leave: { card: 'border-rose-200 bg-rose-50/10', badge: 'bg-rose-100 text-rose-800', number: 'bg-rose-500 text-white border-rose-600' },
+  off: { card: 'border-violet-200 bg-violet-50/20', badge: 'bg-violet-100 text-violet-800', number: 'bg-violet-100 text-violet-600 border-violet-200' },
+  upcoming: { card: 'border-slate-200/80 bg-white', badge: 'bg-slate-100 text-slate-600', number: 'bg-slate-100 text-slate-500 border-slate-200' },
+};
+const styleOf = (s) => STATUS_STYLES[s.status] || STATUS_STYLES.upcoming;
+
+// Chấm chuyên cần 5 buổi gần nhất
+const DOT_CLASSES = { present: 'bg-emerald-500', excused: 'bg-amber-400', absent: 'bg-rose-500', upcoming: 'bg-slate-200' };
+const DOT_LABELS = { present: 'Có mặt', excused: 'Nghỉ có phép', absent: 'Vắng không phép', upcoming: 'Chưa diễn ra' };
+
+const openLeaveModal = (session = null) => {
+  leaveForm.value = { key: session?.key || leaveOptions.value[0]?.key || '', reason: '' };
+  showLeaveModal.value = true;
+};
+
+// Gửi đơn xin nghỉ phép cho buổi đã chọn
 const submitLeaveRequest = async () => {
   const pin = sessionStorage.getItem(`portal_pin_${studentId.value}`) || digits.value.join('');
+  const session = selectedLeaveSession.value;
+  if (!session) {
+    notify.error('Vui lòng chọn buổi học muốn xin nghỉ');
+    return;
+  }
   if (!leaveForm.value.reason.trim()) {
     notify.error('Vui lòng nhập lý do xin nghỉ phép');
     return;
@@ -207,12 +253,16 @@ const submitLeaveRequest = async () => {
     isSubmittingLeave.value = true;
     const res = await parentPortalApi.requestLeave(studentId.value, {
       phone_last4: pin,
-      date: leaveForm.value.date,
+      date: session.date_raw,
+      slot_id: session.slot_id,
       reason: leaveForm.value.reason,
     });
-    notify.success(res.data.message || 'Đã gửi đơn xin nghỉ phép thành công!');
+    if (res.data.attendance?.deducts_session) {
+      notify.warning(res.data.message);
+    } else {
+      notify.success(res.data.message || 'Đã gửi đơn xin nghỉ phép thành công!');
+    }
     showLeaveModal.value = false;
-    leaveForm.value.reason = '';
     // Tải lại dữ liệu portal
     await submitVerify(pin, true);
   } catch (err) {
@@ -450,13 +500,8 @@ onMounted(() => {
                       v-for="(dot, idx) in portalData.student?.attendance_dots || []"
                       :key="idx"
                       class="h-3 w-3 rounded-full border border-black/10 transition-transform"
-                      :class="{
-                        'bg-emerald-500': dot.color === 'green',
-                        'bg-rose-500': dot.color === 'red',
-                        'bg-amber-400': dot.color === 'yellow',
-                        'bg-slate-200': dot.color === 'gray'
-                      }"
-                      :title="dot.tooltip"
+                      :class="DOT_CLASSES[dot.status] || 'bg-slate-200'"
+                      :title="dot.date ? `${dot.date}: ${DOT_LABELS[dot.status]}` : DOT_LABELS[dot.status]"
                     ></span>
                   </div>
                 </div>
@@ -467,8 +512,9 @@ onMounted(() => {
             <div class="w-full sm:w-auto shrink-0 flex flex-col gap-2">
               <button
                 type="button"
-                @click="showLeaveModal = true"
-                class="w-full sm:w-auto px-4 py-2.5 rounded-2xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2"
+                @click="openLeaveModal()"
+                :disabled="leaveOptions.length === 0"
+                class="w-full sm:w-auto px-4 py-2.5 rounded-2xl bg-amber-50 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2"
               >
                 <Calendar class="h-4 w-4 text-amber-600" />
                 <span>Xin nghỉ học có phép</span>
@@ -477,8 +523,8 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 2. Thống kê tiến độ học tập (Progress & KPI Strip) -->
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+        <!-- 2. Thống kê tiến độ học tập & số buổi được nghỉ -->
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
           <!-- Tổng số buổi -->
           <div class="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200/90 shadow-xs space-y-1">
             <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Tổng số buổi</span>
@@ -491,12 +537,15 @@ onMounted(() => {
 
           <!-- Đã học (Có mặt) -->
           <div class="bg-white rounded-2xl p-4 sm:p-5 border border-emerald-100 bg-emerald-50/20 shadow-xs space-y-1">
-            <span class="text-[11px] font-bold uppercase tracking-wider text-emerald-600">Đã học (Có mặt)</span>
+            <span class="text-[11px] font-bold uppercase tracking-wider text-emerald-600">Đã học</span>
             <div class="flex items-baseline gap-1">
               <span class="text-2xl sm:text-3xl font-black text-emerald-600">{{ portalData.stats?.completed_sessions }}</span>
               <span class="text-xs text-emerald-600 font-semibold">buổi</span>
             </div>
-            <p class="text-[11px] text-emerald-600/70 font-medium">Đã điểm danh có mặt</p>
+            <p class="text-[11px] text-emerald-600/70 font-medium">
+              <template v-if="portalData.stats?.deducted_absences">+ {{ portalData.stats.deducted_absences }} buổi vắng bị trừ</template>
+              <template v-else>Đã điểm danh có mặt</template>
+            </p>
           </div>
 
           <!-- Số buổi còn lại -->
@@ -520,14 +569,54 @@ onMounted(() => {
               Có phép: {{ portalData.stats?.absent_with_leave }} &bull; K.phép: {{ portalData.stats?.absent_without_leave }}
             </p>
           </div>
+
+          <!-- Số buổi còn được nghỉ có phép (học nhiều khóa: từng khóa) -->
+          <div class="col-span-2 sm:col-span-1 bg-white rounded-2xl p-4 sm:p-5 border border-orange-100 bg-orange-50/20 shadow-xs space-y-1">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-orange-700">Còn được nghỉ có phép</span>
+            <template v-if="multiCourse">
+              <div v-for="c in leaveByCourse" :key="c.course_item_id" class="flex items-baseline justify-between gap-2 text-xs">
+                <span class="text-slate-600 truncate" :title="c.course_name">{{ c.course_name }}</span>
+                <span class="shrink-0 font-black" :class="c.left > 0 ? 'text-orange-700' : 'text-rose-600'">
+                  {{ c.left }}<span class="font-semibold text-orange-700/70">/{{ c.allowed }}</span>
+                </span>
+              </div>
+            </template>
+            <template v-else>
+              <div class="flex items-baseline gap-1">
+                <span class="text-2xl sm:text-3xl font-black" :class="portalData.stats?.leave_left > 0 ? 'text-orange-700' : 'text-rose-600'">{{ portalData.stats?.leave_left }}</span>
+                <span class="text-xs text-orange-700 font-semibold">/ {{ portalData.stats?.allowed_absences }} buổi</span>
+              </div>
+              <p class="text-[11px] text-orange-700/70 font-medium">
+                Đã dùng: {{ portalData.stats?.leave_used }} buổi
+              </p>
+            </template>
+          </div>
+        </div>
+
+        <!-- Quy định nghỉ học & các buổi đặc biệt -->
+        <div class="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200/90 shadow-xs space-y-3 text-xs">
+          <div class="flex flex-wrap gap-2">
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-50 text-violet-800 border border-violet-200 font-semibold">
+              <CalendarOff class="h-3.5 w-3.5" /> Trung tâm / GV nghỉ: {{ portalData.stats?.off_sessions }}
+            </span>
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-50 text-sky-800 border border-sky-200 font-semibold">
+              <RefreshCw class="h-3.5 w-3.5" /> Buổi bù: {{ portalData.stats?.makeup_sessions }}
+            </span>
+          </div>
+          <ul class="text-[11px] text-slate-500 space-y-0.5 list-disc pl-4">
+            <li v-if="multiCourse">Nghỉ có phép (báo trước) <strong class="text-slate-700">không bị trừ buổi</strong>, tính riêng từng khóa: buổi nghỉ trừ vào số buổi được nghỉ của khóa có buổi học đó.</li>
+            <li v-else>Nghỉ có phép (báo trước) <strong class="text-slate-700">không bị trừ buổi</strong>, tối đa {{ portalData.stats?.allowed_absences }} buổi cho khóa học.</li>
+            <li>Vắng không phép, hoặc nghỉ có phép khi đã hết số buổi được nghỉ: <strong class="text-slate-700">trừ 1 buổi</strong>.</li>
+            <li>Ngày trung tâm nghỉ / giáo viên nghỉ: <strong class="text-slate-700">không trừ buổi</strong>, lịch học tự lùi sang buổi kế tiếp.</li>
+          </ul>
         </div>
 
         <!-- Thanh tiến độ tổng quan lớn -->
         <div class="bg-white rounded-2xl p-5 border border-slate-200/90 shadow-xs space-y-3">
           <div class="flex items-center justify-between text-xs">
-            <span class="font-bold text-slate-700">Tiến độ hoàn thành khóa học</span>
+            <span class="font-bold text-slate-700">Tiến độ khóa học</span>
             <span class="font-extrabold text-indigo-600 text-sm">
-              {{ portalData.stats?.completed_sessions }} / {{ portalData.stats?.total_sessions }} buổi ({{ portalData.stats?.progress_percent }}%)
+              {{ portalData.stats?.used_sessions }} / {{ portalData.stats?.total_sessions }} buổi ({{ portalData.stats?.progress_percent }}%)
             </span>
           </div>
 
@@ -558,7 +647,7 @@ onMounted(() => {
             :class="activeTab === 'sessions' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100' : 'text-slate-600 hover:bg-slate-100'"
           >
             <BookOpen class="h-4 w-4" />
-            <span>Lịch sử & Kế hoạch buổi học ({{ portalData.sessions?.length || 0 }})</span>
+            <span>Lịch học & buổi nghỉ ({{ portalData.sessions?.length || 0 }})</span>
           </button>
 
           <button
@@ -582,43 +671,27 @@ onMounted(() => {
           </button>
         </div>
 
-        <!-- TAB 1: DANH SÁCH TOÀN BỘ CÁC BUỔI HỌC (ĐÃ HỌC, VẮNG, CHƯA HỌC) -->
+        <!-- TAB 1: TOÀN BỘ BUỔI HỌC THEO NGÀY (ĐÃ HỌC, NGHỈ, TRUNG TÂM OFF, BUỔI BÙ, SẮP TỚI) -->
         <div v-if="activeTab === 'sessions'" class="space-y-4">
           <!-- Bộ lọc trạng thái buổi học -->
           <div class="flex flex-wrap items-center justify-between gap-3 bg-white p-3 rounded-2xl border border-slate-200/80">
             <div class="flex flex-wrap items-center gap-1.5 text-xs">
               <span class="text-slate-400 text-[11px] font-semibold mr-1">Bộ lọc:</span>
               <button
+                v-for="f in [
+                  { key: 'all', label: 'Tất cả', count: portalData.sessions?.length, active: 'bg-slate-900 text-white', idle: 'bg-slate-100 text-slate-600 hover:bg-slate-200' },
+                  { key: 'completed', label: 'Đã học', count: countBy((s) => s.is_completed), active: 'bg-emerald-600 text-white', idle: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' },
+                  { key: 'absent', label: 'Nghỉ / vắng', count: countBy((s) => s.is_absent), active: 'bg-amber-600 text-white', idle: 'bg-amber-50 text-amber-800 hover:bg-amber-100' },
+                  { key: 'off', label: 'Trung tâm / GV nghỉ', count: countBy((s) => s.status === 'off'), active: 'bg-violet-600 text-white', idle: 'bg-violet-50 text-violet-700 hover:bg-violet-100' },
+                  { key: 'upcoming', label: 'Sắp học', count: countBy((s) => s.status === 'upcoming'), active: 'bg-indigo-600 text-white', idle: 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100' },
+                ]"
+                :key="f.key"
                 type="button"
-                @click="sessionFilter = 'all'"
+                @click="sessionFilter = f.key"
                 class="px-3 py-1.5 rounded-lg font-bold transition-colors"
-                :class="sessionFilter === 'all' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+                :class="sessionFilter === f.key ? f.active : f.idle"
               >
-                Tất cả ({{ portalData.sessions?.length }})
-              </button>
-              <button
-                type="button"
-                @click="sessionFilter = 'completed'"
-                class="px-3 py-1.5 rounded-lg font-bold transition-colors"
-                :class="sessionFilter === 'completed' ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'"
-              >
-                Đã học ({{ portalData.stats?.completed_sessions }})
-              </button>
-              <button
-                type="button"
-                @click="sessionFilter = 'absent'"
-                class="px-3 py-1.5 rounded-lg font-bold transition-colors"
-                :class="sessionFilter === 'absent' ? 'bg-amber-600 text-white' : 'bg-amber-50 text-amber-800 hover:bg-amber-100'"
-              >
-                Vắng ({{ portalData.stats?.total_absences }})
-              </button>
-              <button
-                type="button"
-                @click="sessionFilter = 'upcoming'"
-                class="px-3 py-1.5 rounded-lg font-bold transition-colors"
-                :class="sessionFilter === 'upcoming' ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'"
-              >
-                Chưa học ({{ portalData.stats?.remaining_sessions }})
+                {{ f.label }} ({{ f.count }})
               </button>
             </div>
 
@@ -629,90 +702,98 @@ onMounted(() => {
 
           <!-- Danh sách card các buổi học -->
           <div class="space-y-3">
+            <p v-if="filteredSessions.length === 0" class="bg-white rounded-2xl p-6 border border-slate-200/80 text-center text-xs text-slate-400">
+              Không có buổi học nào.
+            </p>
             <div
               v-for="s in filteredSessions"
-              :key="s.session_number"
-              class="bg-white rounded-2xl p-4 sm:p-5 border transition-all duration-200"
-              :class="{
-                'border-emerald-200 bg-emerald-50/10 shadow-xs': s.status === 'present',
-                'border-amber-200 bg-amber-50/10 shadow-xs': s.status === 'absent_with_leave',
-                'border-rose-200 bg-rose-50/10 shadow-xs': s.status === 'absent_without_leave',
-                'border-slate-200/80 bg-white opacity-85': s.status === 'upcoming',
-              }"
+              :key="s.key"
+              class="rounded-2xl p-4 sm:p-5 border shadow-xs transition-all duration-200"
+              :class="styleOf(s).card"
             >
-              <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <!-- Session Badge & Details -->
+              <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                 <div class="flex items-start gap-3.5">
-                  <!-- Số thứ tự buổi -->
+                  <!-- Số thứ tự buổi (chỉ buổi trừ vào số buổi học) -->
                   <div
                     class="h-10 w-10 sm:h-11 sm:w-11 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 border"
-                    :class="{
-                      'bg-emerald-500 text-white border-emerald-600': s.status === 'present',
-                      'bg-amber-500 text-white border-amber-600': s.status === 'absent_with_leave',
-                      'bg-rose-500 text-white border-rose-600': s.status === 'absent_without_leave',
-                      'bg-slate-100 text-slate-400 border-slate-200': s.status === 'upcoming',
-                    }"
+                    :class="styleOf(s).number"
                   >
-                    #{{ s.session_number }}
+                    <template v-if="s.session_number">#{{ s.session_number }}</template>
+                    <CalendarOff v-else-if="s.status === 'off'" class="h-5 w-5" />
+                    <Calendar v-else class="h-5 w-5" />
                   </div>
 
                   <div class="space-y-1">
-                    <div class="flex items-center gap-2">
+                    <div class="flex flex-wrap items-center gap-2">
                       <h4 class="text-sm font-extrabold text-slate-900">
-                        Buổi học thứ {{ s.session_number }}
+                        {{ s.session_number ? `Buổi ${s.session_number}` : s.status_label }}
                       </h4>
 
-                      <!-- Status Badge -->
-                      <span
-                        class="px-2.5 py-0.5 rounded-full text-xs font-bold flex items-center gap-1"
-                        :class="{
-                          'bg-emerald-100 text-emerald-800': s.status === 'present',
-                          'bg-amber-100 text-amber-800': s.status === 'absent_with_leave',
-                          'bg-rose-100 text-rose-800': s.status === 'absent_without_leave',
-                          'bg-slate-100 text-slate-500': s.status === 'upcoming',
-                        }"
-                      >
+                      <!-- Trạng thái -->
+                      <span v-if="s.session_number" class="px-2.5 py-0.5 rounded-full text-xs font-bold flex items-center gap-1" :class="styleOf(s).badge">
                         <CheckCircle2 v-if="s.status === 'present'" class="h-3 w-3" />
                         <AlertTriangle v-else-if="s.is_absent" class="h-3 w-3" />
                         <Clock v-else class="h-3 w-3" />
                         <span>{{ s.status_label }}</span>
                       </span>
+
+                      <span v-if="s.is_makeup" class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-sky-100 text-sky-800 flex items-center gap-1">
+                        <RefreshCw class="h-3 w-3" /> Buổi bù
+                      </span>
+
+                      <!-- Có trừ buổi hay không -->
+                      <span v-if="s.is_absent && !s.deducts_session" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-white border border-amber-200 text-amber-700">
+                        Không trừ buổi
+                      </span>
+                      <span v-else-if="s.is_absent" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-white border border-rose-200 text-rose-700">
+                        Trừ 1 buổi
+                      </span>
+                      <span v-else-if="s.status === 'off'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-white border border-violet-200 text-violet-700">
+                        Không trừ buổi · không cần xin nghỉ
+                      </span>
                     </div>
 
-                    <!-- Ngày giờ điểm danh -->
+                    <!-- Ngày giờ học -->
                     <div class="text-xs text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
-                      <span v-if="s.date" class="flex items-center gap-1">
-                        <Calendar class="h-3.5 w-3.5 text-slate-400" />
-                        <span>{{ s.full_datetime || s.date }}</span>
+                      <span v-if="s.date" class="flex items-center gap-1" :class="s.status === 'upcoming' ? 'text-indigo-600 font-medium' : ''">
+                        <Calendar class="h-3.5 w-3.5" />
+                        <span>{{ s.weekday }}, {{ s.date }}</span>
                       </span>
-                      <!-- Buổi chưa học: ngày dự kiến theo lịch học hằng tuần -->
-                      <span v-else-if="s.planned_date" class="flex items-center gap-1 text-indigo-600 font-medium" title="Ngày dự kiến theo lịch học, có thể thay đổi khi nghỉ / học bù">
-                        <Calendar class="h-3.5 w-3.5 text-indigo-400" />
-                        <span>Dự kiến: {{ s.planned_weekday }}, {{ s.planned_date }} · {{ s.planned_time }}</span>
+                      <span v-else class="text-slate-400 italic">Chưa xếp lịch</span>
+                      <span v-if="s.time" class="flex items-center gap-1">
+                        <Clock class="h-3.5 w-3.5 text-slate-400" />
+                        <span>{{ s.time }}</span>
                       </span>
-                      <span v-else class="text-slate-400 italic">
-                        Chưa diễn ra
-                      </span>
-                      <span v-if="s.planned_teacher" class="flex items-center gap-1">
+                      <span v-if="s.teacher" class="flex items-center gap-1">
                         <User class="h-3.5 w-3.5 text-slate-400" />
-                        <span>GV: {{ s.planned_teacher }}</span>
+                        <span>GV: {{ s.teacher }}</span>
                       </span>
-
-                      <span v-if="s.marked_by" class="flex items-center gap-1">
-                        <User class="h-3.5 w-3.5 text-slate-400" />
-                        <span>Ghi nhận: {{ s.marked_by }}</span>
+                      <span v-if="multiCourse && s.course_name" class="flex items-center gap-1">
+                        <BookOpen class="h-3.5 w-3.5 text-slate-400" />
+                        <span>{{ s.course_name }}</span>
                       </span>
                     </div>
                   </div>
                 </div>
 
-                <!-- Nhận xét của giáo viên -->
-                <div class="sm:max-w-md w-full text-xs bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <span class="font-bold text-slate-700 block mb-0.5">Nhận xét buổi học:</span>
-                  <p class="text-slate-600 italic leading-relaxed">
-                    "{{ s.note || 'Hoàn thành buổi học theo giáo trình.' }}"
-                  </p>
-                </div>
+                <!-- Xin nghỉ buổi sắp tới -->
+                <button
+                  v-if="s.can_request_leave"
+                  type="button"
+                  @click="openLeaveModal(s)"
+                  class="self-start shrink-0 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold flex items-center gap-1.5"
+                >
+                  <Calendar class="h-3.5 w-3.5 text-amber-600" />
+                  <span>Xin nghỉ buổi này</span>
+                </button>
+              </div>
+
+              <!-- Nhận xét / lý do -->
+              <div v-if="s.note && s.status !== 'upcoming'" class="mt-3 text-xs bg-white/70 p-3 rounded-xl border border-slate-100">
+                <span class="font-bold text-slate-700 block mb-0.5">
+                  {{ s.status === 'present' ? 'Nhận xét buổi học:' : s.status === 'off' ? 'Lý do:' : 'Ghi chú:' }}
+                </span>
+                <ExpandableText :text="s.note" :lines="4" class="text-slate-600 leading-relaxed" />
               </div>
             </div>
           </div>
@@ -838,18 +919,36 @@ onMounted(() => {
         </div>
 
         <p class="text-xs text-slate-500 leading-relaxed">
-          Gửi thông báo xin phép nghỉ học cho học viên <strong>{{ portalData?.student?.name }}</strong>. Giáo viên và trung tâm sẽ nhận được thông tin để sắp xếp lịch học bù thích hợp.
+          Gửi thông báo xin phép nghỉ học cho học viên <strong>{{ portalData?.student?.name }}</strong>. Giáo viên và trung tâm sẽ nhận được thông tin.
         </p>
+
+        <!-- Số buổi còn được nghỉ có phép -->
+        <div
+          v-if="selectedLeaveSession"
+          class="rounded-xl px-3 py-2 text-xs border"
+          :class="selectedLeave.left > 0 ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-rose-50 border-rose-200 text-rose-800'"
+        >
+          <template v-if="selectedLeave.left > 0">
+            Con còn được nghỉ có phép <strong>{{ selectedLeave.left }}/{{ selectedLeave.allowed }}</strong> buổi<template v-if="multiCourse && selectedLeave.course_name"> của khóa <strong>{{ selectedLeave.course_name }}</strong></template>.
+            Buổi nghỉ này <strong>không bị trừ</strong> vào số buổi học.
+          </template>
+          <template v-else>
+            Con đã nghỉ có phép hết {{ selectedLeave.allowed }} buổi của khóa<template v-if="multiCourse && selectedLeave.course_name"> <strong>{{ selectedLeave.course_name }}</strong></template>.
+            Buổi nghỉ này sẽ <strong>bị trừ 1 buổi</strong> như vắng không phép.
+          </template>
+        </div>
 
         <form @submit.prevent="submitLeaveRequest" class="space-y-3.5 text-xs">
           <div>
-            <label class="block font-bold text-slate-700 mb-1">Ngày xin nghỉ:</label>
-            <input
-              v-model="leaveForm.date"
-              type="date"
+            <label class="block font-bold text-slate-700 mb-1">Buổi xin nghỉ:</label>
+            <select
+              v-model="leaveForm.key"
               required
-              class="w-full px-3 py-2 rounded-xl border border-slate-200 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 outline-none text-slate-800"
-            />
+              class="w-full px-3 py-2 rounded-xl border border-slate-200 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 outline-none text-slate-800 bg-white"
+            >
+              <option value="" disabled>Chọn buổi học</option>
+              <option v-for="s in leaveOptions" :key="s.key" :value="s.key">{{ sessionLabel(s) }}</option>
+            </select>
           </div>
 
           <div>

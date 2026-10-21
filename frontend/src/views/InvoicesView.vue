@@ -9,7 +9,7 @@ import Modal from '../components/Modal.vue';
 import SearchableSelect from '../components/SearchableSelect.vue';
 import DatePickerVN from '../components/DatePickerVN.vue';
 import Pagination from '../components/Pagination.vue';
-import { Receipt, Plus, X, Edit3, Trash2, FileDown, Loader2 } from 'lucide-vue-next';
+import { Receipt, Plus, X, Edit3, Trash2, FileDown, Loader2, Ban, Undo2, Hourglass } from 'lucide-vue-next';
 import MoneyInput from '../components/MoneyInput.vue';
 
 const invoices = ref([]);
@@ -27,8 +27,9 @@ const editingId = ref(null);
 const editingStudentName = ref('');
 const downloadingId = ref(null);
 
+// Không chọn sẵn học viên: bắt buộc chọn đúng người để tránh thu tiền nhầm học viên
 const emptyForm = () => ({
-  student_id: students.value[0]?.id || '',
+  student_id: '',
   course_id: '',
   amount: 3600000,
   sessions_added: 12,
@@ -38,6 +39,23 @@ const emptyForm = () => ({
 });
 
 const form = ref(emptyForm());
+
+// Phiếu chờ thu (phụ huynh chưa đóng), xác nhận khi đã nhận tiền
+const pendingInvoices = ref([]);
+const confirmForm = ref({ id: null, payment_method: 'bank_transfer', paid_at: toLocalDateString() });
+const startConfirm = (inv) => {
+  confirmForm.value = { id: inv.id, payment_method: inv.payment_method || 'bank_transfer', paid_at: toLocalDateString() };
+};
+const confirmPaid = async () => {
+  try {
+    const res = await invoiceApi.markPaid(confirmForm.value.id, confirmForm.value);
+    notify.success(res.data.message);
+    confirmForm.value.id = null;
+    await fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Không xác nhận được phiếu thu');
+  }
+};
 
 const paymentMethodLabels = {
   bank_transfer: 'Chuyển khoản',
@@ -54,9 +72,7 @@ const fetchData = async () => {
     monthlyTotal.value = res.data.monthlyTotal;
     students.value = res.data.students;
     courses.value = res.data.courses;
-    if (students.value.length > 0 && !form.value.student_id) {
-      form.value.student_id = students.value[0].id;
-    }
+    pendingInvoices.value = res.data.pending_invoices || [];
   } catch (err) {
     console.error('Error fetching invoices: ', err);
   }
@@ -128,14 +144,58 @@ const submit = async () => {
   }
 };
 
-const deleteInvoice = async (inv) => {
+// Hủy phiếu thu / gia hạn nhầm: trừ lại số buổi đã cộng, không tính doanh thu; khôi phục được
+const cancelInvoice = async (inv) => {
   const sessionsNote = inv.sessions_added > 0
-    ? ` Học viên ${inv.student?.name || ''} sẽ bị trừ lại ${inv.sessions_added} buổi đã cộng.`
+    ? ` Học viên ${inv.student?.name || ''} sẽ bị trừ lại ${inv.sessions_added} buổi đã cộng (buổi đã học thì không trừ).`
     : '';
   if (!(await confirmDialog({
-    title: 'Xoá phiếu thu?',
-    message: `Phiếu thu "${inv.invoice_code}" sẽ bị xoá khỏi hệ thống.${sessionsNote}`,
-    confirmText: 'Xoá phiếu thu',
+    title: 'Hủy phiếu thu?',
+    message: `Phiếu "${inv.invoice_code}" (${formatVND(inv.amount)}) sẽ không còn tính vào doanh thu.${sessionsNote} Có thể khôi phục lại nếu hủy nhầm.`,
+    confirmText: 'Hủy phiếu',
+  }))) return;
+  try {
+    const res = await invoiceApi.cancel(inv.id, { reason: 'Thu / gia hạn nhầm' });
+    notify.success(res.data.message);
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Không hủy được phiếu thu');
+  }
+};
+
+const restoreInvoice = async (inv) => {
+  try {
+    const res = await invoiceApi.restore(inv.id);
+    notify.success(res.data.message);
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Không khôi phục được phiếu thu');
+  }
+};
+
+// Ghi "đã thu" nhầm khi phụ huynh chưa đóng: về chờ thu, giữ số buổi
+const markUnpaid = async (inv) => {
+  if (!(await confirmDialog({
+    title: 'Chuyển về chờ thu?',
+    message: `Phiếu "${inv.invoice_code}" sẽ chuyển về "Chưa thanh toán" (không tính doanh thu), số buổi của học viên giữ nguyên.`,
+    confirmText: 'Chuyển về chờ thu',
+    variant: 'warning',
+  }))) return;
+  try {
+    const res = await invoiceApi.markUnpaid(inv.id);
+    notify.success(res.data.message);
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Không chuyển được phiếu thu');
+  }
+};
+
+// Chỉ xóa hẳn phiếu đã hủy (số buổi đã trừ lúc hủy)
+const deleteInvoice = async (inv) => {
+  if (!(await confirmDialog({
+    title: 'Xoá hẳn phiếu đã hủy?',
+    message: `Phiếu thu "${inv.invoice_code}" sẽ bị xoá vĩnh viễn, không khôi phục được nữa.`,
+    confirmText: 'Xoá hẳn',
   }))) return;
 
   try {
@@ -211,6 +271,41 @@ const formatDate = (val) => {
       </div>
     </div>
 
+    <!-- Phiếu chờ thu (phụ huynh chưa đóng): không tính vào thực thu cho tới khi xác nhận -->
+    <div v-if="pendingInvoices.length > 0" class="rounded-2xl border border-amber-200 bg-amber-50/40 p-4 space-y-3">
+      <div>
+        <h2 class="text-sm font-bold text-amber-900">Phiếu chờ thu ({{ pendingInvoices.length }})</h2>
+        <p class="text-[11px] text-amber-800/80">Học phí phụ huynh chưa đóng. Cổng phụ huynh hiện "Chưa thanh toán" và chưa tính vào thực thu. Bấm "Xác nhận đã thu" khi nhận tiền (không cộng thêm buổi).</p>
+      </div>
+      <div class="divide-y divide-amber-100 rounded-xl border border-amber-200 bg-white">
+        <div v-for="inv in pendingInvoices" :key="inv.id" class="flex flex-col lg:flex-row lg:items-center justify-between gap-2 px-3 py-2.5 text-xs">
+          <div>
+            <span class="font-bold text-slate-900">{{ inv.student?.name || '—' }}</span>
+            <span class="ml-1.5 font-mono text-slate-400">{{ inv.invoice_code }}</span>
+            <span class="block text-slate-500">
+              {{ inv.course?.name || inv.student?.course?.name || 'Khóa học' }} · lập ngày {{ formatDate(inv.created_at) }}
+              <template v-if="inv.sessions_added"> · {{ inv.sessions_added }} buổi đã cấp</template>
+            </span>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="font-extrabold text-amber-700 text-sm">{{ formatVND(inv.amount) }}</span>
+            <template v-if="confirmForm.id === inv.id">
+              <select v-model="confirmForm.payment_method" class="rounded-lg border border-slate-200 px-2 py-1.5">
+                <option v-for="(label, key) in paymentMethodLabels" :key="key" :value="key">{{ label }}</option>
+              </select>
+              <input v-model="confirmForm.paid_at" type="date" class="rounded-lg border border-slate-200 px-2 py-1" />
+              <button type="button" @click="confirmPaid" class="rounded-lg bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 font-bold text-white">Lưu</button>
+              <button type="button" @click="confirmForm.id = null" class="rounded-lg bg-slate-100 hover:bg-slate-200 px-3 py-1.5 font-semibold text-slate-600">Hủy</button>
+            </template>
+            <button v-else type="button" @click="startConfirm(inv)"
+              class="rounded-lg border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 font-bold text-emerald-700">
+              Xác nhận đã thu
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Invoices Table -->
     <div class="rounded-2xl border border-slate-200 bg-white shadow-xs overflow-hidden">
       <!-- Màn hình nhỏ: bảng giữ độ rộng tối thiểu và cuộn ngang thay vì bóp cột -->
@@ -230,15 +325,19 @@ const formatDate = (val) => {
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100 text-slate-700">
-          <tr v-for="inv in invoices" :key="inv.id" class="hover:bg-slate-50">
-            <td class="py-4 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">{{ inv.invoice_code }}</td>
+          <tr v-for="inv in invoices" :key="inv.id" class="hover:bg-slate-50" :class="inv.status === 'cancelled' ? 'opacity-60' : ''">
+            <td class="py-4 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">
+              {{ inv.invoice_code }}
+              <span v-if="inv.status === 'cancelled'" class="block font-sans text-[11px] font-bold text-rose-600" :title="inv.cancelled_reason || ''">Đã hủy</span>
+              <span v-else-if="inv.status === 'pending'" class="block font-sans text-[11px] font-bold text-amber-600">Chờ thu</span>
+            </td>
             <td class="py-4 px-4">
               <span class="font-bold text-slate-900">{{ inv.student?.name }}</span>
               <span class="block text-slate-400 text-xs">PH: {{ inv.student?.parent_name }}</span>
             </td>
             <td class="py-4 px-4">{{ inv.course?.name || inv.student?.course?.name }}</td>
-            <td class="py-4 px-4 font-extrabold text-emerald-600 text-base whitespace-nowrap">{{ formatVND(inv.amount) }}</td>
-            <td class="py-4 px-4 text-center font-bold text-indigo-600">+{{ inv.sessions_added }} buổi</td>
+            <td class="py-4 px-4 font-extrabold text-base whitespace-nowrap" :class="inv.status === 'cancelled' ? 'text-slate-400 line-through' : 'text-emerald-600'">{{ formatVND(inv.amount) }}</td>
+            <td class="py-4 px-4 text-center font-bold" :class="inv.status === 'cancelled' ? 'text-slate-400 line-through' : 'text-indigo-600'">+{{ inv.sessions_added }} buổi</td>
             <td class="py-4 px-4">
               <Badge variant="gray" size="sm">{{ paymentMethodLabels[inv.payment_method] || inv.payment_method }}</Badge>
             </td>
@@ -256,22 +355,34 @@ const formatDate = (val) => {
                   <Loader2 v-if="downloadingId === inv.id" class="h-4 w-4 animate-spin" />
                   <FileDown v-else class="h-4 w-4" />
                 </button>
-                <button
-                  type="button"
-                  @click="openEdit(inv)"
-                  class="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50"
-                  title="Sửa phiếu thu"
-                >
-                  <Edit3 class="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  @click="deleteInvoice(inv)"
-                  class="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
-                  title="Xoá phiếu thu"
-                >
-                  <Trash2 class="h-4 w-4" />
-                </button>
+                <template v-if="inv.status === 'cancelled'">
+                  <button type="button" @click="restoreInvoice(inv)"
+                    class="p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50" title="Khôi phục phiếu (hủy nhầm)">
+                    <Undo2 class="h-4 w-4" />
+                  </button>
+                  <button type="button" @click="deleteInvoice(inv)"
+                    class="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50" title="Xoá hẳn phiếu đã hủy">
+                    <Trash2 class="h-4 w-4" />
+                  </button>
+                </template>
+                <template v-else>
+                  <button
+                    type="button"
+                    @click="openEdit(inv)"
+                    class="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50"
+                    title="Sửa phiếu thu"
+                  >
+                    <Edit3 class="h-4 w-4" />
+                  </button>
+                  <button v-if="inv.status === 'paid'" type="button" @click="markUnpaid(inv)"
+                    class="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50" title="Ghi nhầm đã thu: chuyển về chờ thu">
+                    <Hourglass class="h-4 w-4" />
+                  </button>
+                  <button type="button" @click="cancelInvoice(inv)"
+                    class="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50" title="Hủy phiếu (thu / gia hạn nhầm), trừ lại số buổi">
+                    <Ban class="h-4 w-4" />
+                  </button>
+                </template>
               </div>
             </td>
           </tr>

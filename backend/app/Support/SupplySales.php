@@ -100,6 +100,67 @@ class SupplySales
     }
 
     /**
+     * Nhập lại kho khi thu hồi học cụ đã giao nhầm. Học cụ đã bị xoá khỏi kho thì bỏ qua (trả về false).
+     *
+     * @param  array{inventory_id?: int|null, name: string, quantity: int}  $item
+     */
+    public static function restock(array $item, ?string $center): bool
+    {
+        $inventory = self::read(self::INVENTORY_PATH);
+        $index = self::findIndex($inventory, $item, $center);
+        if ($index === null) {
+            return false;
+        }
+
+        $inventory[$index]['quantity'] = (int) ($inventory[$index]['quantity'] ?? 0) + (int) $item['quantity'];
+        self::write(self::INVENTORY_PATH, $inventory);
+
+        return true;
+    }
+
+    /**
+     * Bớt doanh thu học cụ khi thu hồi: trừ tiền của số lượng thu hồi khỏi dòng doanh thu lúc giao
+     * (theo revenue_id; học cụ giao trước khi lưu revenue_id thì tìm theo học viên + ngày giao + tên học cụ).
+     * Dòng doanh thu về 0 thì xoá. Trả về số tiền đã bớt.
+     *
+     * @param  array{name: string, price?: float|int|null, delivery_date?: string, revenue_id?: string|null}  $supply
+     */
+    public static function reverseRevenue(array $supply, int $quantity, string $studentName): float
+    {
+        $amount = (float) ($supply['price'] ?? 0) * $quantity;
+        if ($amount <= 0) {
+            return 0;
+        }
+
+        $revenues = self::read(self::REVENUE_PATH);
+        foreach ($revenues as $i => $tx) {
+            $matches = ! empty($supply['revenue_id'])
+                ? ($tx['id'] ?? null) === $supply['revenue_id']
+                : ($tx['type'] ?? null) === 'inventory'
+                    && ($tx['student_name'] ?? null) === $studentName
+                    && ($tx['date'] ?? null) === ($supply['delivery_date'] ?? null)
+                    && str_contains($tx['inventory_name'] ?? '', $supply['name']);
+            if (! $matches) {
+                continue;
+            }
+
+            $remaining = max(0, (float) ($tx['inventory_fee'] ?? 0) - $amount);
+            if ($remaining <= 0) {
+                unset($revenues[$i]);
+            } else {
+                $revenues[$i]['inventory_fee'] = $remaining;
+                $revenues[$i]['total_amount'] = max(0, (float) ($tx['total_amount'] ?? 0) - $amount);
+                $revenues[$i]['note'] = trim(($tx['note'] ?? '')."\nThu hồi {$supply['name']} x{$quantity}");
+            }
+            self::write(self::REVENUE_PATH, $revenues);
+
+            return $amount;
+        }
+
+        return 0;
+    }
+
+    /**
      * Ghi một dòng doanh thu học cụ. Bỏ qua khi tổng tiền bằng 0 (học cụ tặng kèm).
      *
      * @param  list<array{name: string, quantity: int, price?: float|int|null}>  $items

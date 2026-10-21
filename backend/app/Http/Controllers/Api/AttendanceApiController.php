@@ -6,39 +6,19 @@ use App\Http\Controllers\Controller;
 use App\Models\Attendance;
 use App\Models\CourseClass;
 use App\Models\Student;
+use App\Support\AttendanceMarker;
 use App\Support\CenterStore;
+use App\Support\PagePermissions;
 use App\Support\ShiftTime;
+use App\Support\SingleLessons;
 use App\Support\StudentSchedule;
+use App\Support\TeacherLeaves;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 
 class AttendanceApiController extends Controller
 {
-    private function getSingleLessonsPath(): string
-    {
-        return 'scheduled_single_lessons.json';
-    }
-
-    private function loadSingleLessons(): array
-    {
-        $path = $this->getSingleLessonsPath();
-        if (Storage::exists($path)) {
-            $data = json_decode(Storage::get($path), true);
-            if (is_array($data)) {
-                return $data;
-            }
-        }
-
-        return [];
-    }
-
-    private function saveSingleLessons(array $lessons): void
-    {
-        Storage::put($this->getSingleLessonsPath(), json_encode($lessons, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-    }
-
     public function index(Request $request): JsonResponse
     {
         $dateStr = $request->input('date', Carbon::today()->toDateString());
@@ -74,7 +54,7 @@ class AttendanceApiController extends Controller
         $dayAttendances = Attendance::whereDate('attended_at', $dateStr)->get()->groupBy('student_id');
 
         // Lấy tất cả học viên có thể học trong ngày này (học bù, học lẻ, hoặc theo lịch)
-        $singleLessons = $this->loadSingleLessons();
+        $singleLessons = SingleLessons::all();
         // Buổi học lẻ trong ngày, theo student_id (dùng phòng / giáo viên / giờ thật của buổi đó)
         $todayLessons = collect($singleLessons)->where('date', $dateStr)->keyBy('student_id');
         $singleStudentIds = $todayLessons->keys()->all();
@@ -116,21 +96,24 @@ class AttendanceApiController extends Controller
         $dayOfWeek = $carbonDate->dayOfWeek;
 
         // Mỗi ca học trong ngày là một dòng (một học viên có thể có nhiều ca / ngày), cộng buổi học lẻ / học bù
-        $studentsFormatted = $students->flatMap(function ($st) use ($dayAttendances, $todayLessons, $dayOfWeek) {
+        $periods = TeacherLeaves::all();
+        $studentsFormatted = $students->flatMap(function ($st) use ($dayAttendances, $todayLessons, $dayOfWeek, $dateStr, $periods) {
             $records = $dayAttendances->get($st->id, collect());
             $rows = [];
 
             foreach (StudentSchedule::slotsOn($st, $dayOfWeek) as $i => $slot) {
                 $rows[] = ['slot_id' => $slot['id'], 'first' => $i === 0, 'room' => $slot['room'], 'teacher' => $slot['teacher'],
-                    'shift_time' => StudentSchedule::timeLabel($slot), 'is_single_lesson' => false];
+                    'shift_time' => StudentSchedule::timeLabel($slot), 'is_single_lesson' => false, 'is_makeup' => false,
+                    'off' => StudentSchedule::offReason($st, $dateStr, $slot, $periods)];
             }
             if ($lesson = $todayLessons->get($st->id)) {
                 $rows[] = ['slot_id' => $lesson['id'], 'first' => $rows === [], 'room' => $lesson['room'] ?? null, 'teacher' => $lesson['teacher'] ?? null,
-                    'shift_time' => $lesson['time'] ?? null, 'is_single_lesson' => true];
+                    'shift_time' => $lesson['time'] ?? null, 'is_single_lesson' => true, 'is_makeup' => ! empty($lesson['is_makeup']), 'off' => null];
             }
             // Dữ liệu cũ chỉ có lịch dạng chữ (schedule_info) → một dòng chung cho cả ngày
             if ($rows === []) {
-                $rows[] = ['slot_id' => null, 'first' => true, 'room' => $st->room, 'teacher' => $st->teacher, 'shift_time' => null, 'is_single_lesson' => false];
+                $rows[] = ['slot_id' => null, 'first' => true, 'room' => $st->room, 'teacher' => $st->teacher, 'shift_time' => null,
+                    'is_single_lesson' => false, 'is_makeup' => false, 'off' => null];
             }
 
             return array_map(function ($row) use ($st, $records) {
@@ -138,16 +121,23 @@ class AttendanceApiController extends Controller
                 $att = $records->firstWhere('slot_id', $row['slot_id'])
                     ?? ($row['first'] ? $records->first(fn ($r) => $r->slot_id === null) : null);
 
+                // Ca rơi vào ngày trung tâm nghỉ / giáo viên nghỉ (chưa điểm danh) thì không học, không trừ buổi
                 $status = match (true) {
                     $st->status === 'paused' => 'paused',
                     $att !== null => $att->status,
+                    $row['off'] !== null => 'off',
                     default => 'not_checked',
                 };
 
-                $item = StudentSchedule::courseItemForSlot($st, $row['slot_id']);
+                $item = $att?->course_item_id
+                    ? StudentSchedule::courseItem($st, $att->course_item_id)
+                    : StudentSchedule::courseItemForSlot($st, $row['slot_id']);
                 $total = (int) ($item['total_sessions'] ?? $st->total_sessions);
                 $remaining = (int) ($item['remaining_sessions'] ?? $st->remaining_sessions);
-                $currentSession = min($total, ($total - $remaining) + ($status === 'present' ? 0 : 1));
+                // Buổi đã trừ buổi thì đã nằm trong số buổi đã học; chưa điểm danh / nghỉ không trừ buổi thì là buổi kế tiếp
+                $deducts = $att?->deductsSession() ?? false;
+                $currentSession = min($total, ($total - $remaining) + ($deducts ? 0 : 1));
+                $allowedAbsences = (int) ($item['allowed_absences'] ?? $st->allowed_absences ?? 3);
 
                 return [
                     'id' => $st->id,
@@ -170,14 +160,23 @@ class AttendanceApiController extends Controller
                     'teacher' => $row['teacher'],
                     'shift_time' => $row['shift_time'],
                     'is_single_lesson' => $row['is_single_lesson'],
+                    'is_makeup' => $row['is_makeup'],
+                    'off_label' => $row['off'] ? $row['off']['label'].($row['off']['reason'] ? ': '.$row['off']['reason'] : '') : null,
                     'total_sessions' => $total,
                     'remaining_sessions' => $remaining,
                     'current_session' => max(1, $currentSession),
+                    // Số buổi đã học (đã trừ): buổi không trừ (nghỉ có phép trong lượt, buổi off) hiện "Đã học x/y"
+                    'attended_sessions' => max(0, $total - $remaining),
                     'status' => $status,
+                    'deducts_session' => $deducts,
+                    'allowed_absences' => $allowedAbsences,
+                    'leave_left' => StudentSchedule::leaveLeft($st, $item['id'] ?? null),
                     'student_system_status' => $st->status,
                     'checkin_note' => $att?->note ?: '',
+                    // Giáo viên đã báo bài buổi này → nút báo bài hiện màu xanh
+                    'has_report' => $att?->hasLessonReport() ?? false,
                     'marked_by' => $att?->marked_by,
-                    'is_parent_request' => $att && ($att->marked_by === 'Phụ huynh (Cổng PH)' || str_contains($att->note ?? '', 'Cổng phụ huynh')),
+                    'is_parent_request' => $att && ($att->marked_by === AttendanceMarker::PARENT_PORTAL || str_contains($att->note ?? '', 'Cổng phụ huynh')),
                 ];
             }, $rows);
         })->sortBy(fn ($r) => ($r['shift_time'] ?? '99').'|'.$r['name'])->values();
@@ -200,6 +199,7 @@ class AttendanceApiController extends Controller
         $pausedCount = $studentsFormatted->where('status', 'paused')->count();
         $absentCount = $studentsFormatted->whereIn('status', ['absent_with_leave', 'absent_without_leave'])->count();
         $notCheckedCount = $studentsFormatted->where('status', 'not_checked')->count();
+        $offCount = $studentsFormatted->where('status', 'off')->count();
 
         $metrics = [
             'total_today' => $totalToday,
@@ -207,6 +207,7 @@ class AttendanceApiController extends Controller
             'paused' => $pausedCount,
             'absent' => $absentCount,
             'not_checked' => $notCheckedCount,
+            'off' => $offCount,
         ];
 
         $centers = CenterStore::names();
@@ -221,7 +222,7 @@ class AttendanceApiController extends Controller
         $parentLeaveRequests = Attendance::with(['student.course'])
             ->where('status', 'absent_with_leave')
             ->where(function ($q) {
-                $q->where('marked_by', 'Phụ huynh (Cổng PH)')
+                $q->where('marked_by', AttendanceMarker::PARENT_PORTAL)
                     ->orWhere('note', 'like', '%Cổng phụ huynh%');
             })
             ->whereDate('attended_at', '>=', Carbon::today()->subDays(7))
@@ -252,6 +253,8 @@ class AttendanceApiController extends Controller
         }
 
         return response()->json([
+            // Giáo viên chỉ xem + ghi báo bài, không điểm danh
+            'can_mark' => PagePermissions::canMarkAttendance($request->user()),
             'date' => $dateStr,
             'day_of_week' => $dayOfWeekVi,
             'day_of_week_en' => $dayOfWeekEn,
@@ -266,8 +269,19 @@ class AttendanceApiController extends Controller
         ]);
     }
 
+    private function forbidTeacher(Request $request): ?JsonResponse
+    {
+        return PagePermissions::canMarkAttendance($request->user())
+            ? null
+            : response()->json(['message' => 'Giáo viên không điểm danh được, giáo vụ / quản lý sẽ điểm danh. Giáo viên chỉ ghi báo bài.'], 403);
+    }
+
     public function markAttendance(Request $request, Student $student): JsonResponse
     {
+        if ($denied = $this->forbidTeacher($request)) {
+            return $denied;
+        }
+
         $validated = $request->validate([
             'date' => 'required|date',
             'status' => 'required|string|in:present,absent_with_leave,absent_without_leave,not_checked',
@@ -276,91 +290,47 @@ class AttendanceApiController extends Controller
             'slot_id' => 'nullable|string|max:60',
         ]);
 
-        $dateStr = $validated['date'];
-        $newStatus = $validated['status'];
-        $note = $validated['note'] ?? '';
+        $result = AttendanceMarker::mark(
+            $student,
+            $validated['date'],
+            $validated['status'],
+            $validated['note'] ?? '',
+            $validated['slot_id'] ?? null,
+        );
+
+        return response()->json([
+            'message' => $result['message'],
+            'student' => $student,
+            // Nghỉ có phép mà đã hết lượt nghỉ → bị trừ buổi, màn điểm danh hiện cảnh báo
+            'deducts_session' => (bool) $result['attendance']?->deducts_session,
+        ]);
+    }
+
+    /**
+     * Ghi báo bài (nhận xét) cho buổi đã được điểm danh, không đổi trạng thái điểm danh. Giáo viên dùng được.
+     */
+    public function saveNote(Request $request, Student $student): JsonResponse
+    {
+        $validated = $request->validate([
+            'date' => 'required|date',
+            'slot_id' => 'nullable|string|max:60',
+            'note' => 'required|string',
+        ]);
         $slotId = $validated['slot_id'] ?? null;
 
-        $daySlots = StudentSchedule::slotsOn($student, Carbon::parse($dateStr)->dayOfWeek);
-        $isFirstSlot = $slotId === null || ($daySlots[0]['id'] ?? null) === $slotId;
+        // Bản ghi của đúng ca (bản ghi cũ không có ca được tính cho ca đầu tiên trong ngày)
+        $daySlots = StudentSchedule::slotsOn($student, Carbon::parse($validated['date'])->dayOfWeek);
+        $records = Attendance::where('student_id', $student->id)->whereDate('attended_at', $validated['date'])->get();
+        $attendance = $records->firstWhere('slot_id', $slotId)
+            ?? (($slotId === null || ($daySlots[0]['id'] ?? null) === $slotId) ? $records->first(fn ($r) => $r->slot_id === null) : null);
 
-        // Điểm danh đã có của đúng ca này (bản ghi cũ không có ca được tính cho ca đầu tiên)
-        $records = Attendance::where('student_id', $student->id)->whereDate('attended_at', $dateStr)->get();
-        $existing = $records->firstWhere('slot_id', $slotId)
-            ?? ($isFirstSlot ? $records->first(fn ($r) => $r->slot_id === null) : null);
-
-        $item = $existing?->course_item_id
-            ? collect($student->registered_courses_list)->firstWhere('id', $existing->course_item_id)
-            : StudentSchedule::courseItemForSlot($student, $slotId);
-        $itemId = $item['id'] ?? null;
-        $outOfSessions = fn () => (int) ($item['remaining_sessions'] ?? $student->remaining_sessions) <= 0;
-
-        if ($newStatus === 'not_checked') {
-            if ($existing) {
-                if ($existing->status === 'present') {
-                    StudentSchedule::consume($student, $existing->course_item_id ?? $itemId, -1);
-                } elseif ($student->consecutive_absences > 0) {
-                    $student->consecutive_absences--;
-                }
-                $existing->delete();
-                $student->save();
-            }
-
-            return response()->json(['message' => "Đã hoàn tác điểm danh cho {$student->name}.", 'student' => $student]);
+        if (! $attendance) {
+            return response()->json(['message' => 'Buổi này chưa được điểm danh. Báo bài sau khi giáo vụ đã điểm danh học viên.'], 422);
         }
 
-        if ($existing) {
-            if ($existing->status === 'present' && $newStatus !== 'present') {
-                StudentSchedule::consume($student, $existing->course_item_id ?? $itemId, -1);
-                $student->consecutive_absences++;
-            } elseif ($existing->status !== 'present' && $newStatus === 'present') {
-                if ($outOfSessions()) {
-                    return response()->json(['message' => 'Học viên đã hết buổi của khóa này!'], 422);
-                }
-                StudentSchedule::consume($student, $itemId, 1);
-                $student->consecutive_absences = 0;
-            }
+        $attendance->update(['note' => $validated['note']]);
 
-            $existing->status = $newStatus;
-            $existing->note = $note ?: $existing->note;
-            $existing->slot_id ??= $slotId;
-            $existing->course_item_id ??= $itemId;
-            $existing->save();
-        } else {
-            if ($newStatus === 'present') {
-                if ($outOfSessions()) {
-                    return response()->json(['message' => 'Học viên đã hết buổi của khóa này!'], 422);
-                }
-                StudentSchedule::consume($student, $itemId, 1);
-                $student->consecutive_absences = 0;
-            } else {
-                $student->consecutive_absences++;
-            }
-
-            // Giờ của buổi học: theo ca; buổi học lẻ theo giờ đã đặt; không có thì giờ bấm (hôm nay) hoặc đầu ngày
-            $slot = StudentSchedule::find($student, $slotId);
-            $lesson = $slot ? null : collect($this->loadSingleLessons())->firstWhere('id', $slotId);
-            $time = $slot['start']
-                ?? (isset($lesson['time']) && preg_match('/\d{1,2}:\d{2}/', $lesson['time'], $m) ? $m[0] : null)
-                ?? (Carbon::parse($dateStr)->isToday() ? Carbon::now()->format('H:i') : '00:00');
-            $attendedCount = (int) ($student->total_sessions - $student->remaining_sessions);
-
-            Attendance::create([
-                'student_id' => $student->id,
-                'course_id' => $item['course_id'] ?? $student->course_id,
-                'slot_id' => $slotId,
-                'course_item_id' => $itemId,
-                'session_number' => max(1, $attendedCount),
-                'attended_at' => Carbon::parse("{$dateStr} {$time}"),
-                'status' => $newStatus,
-                'note' => $note ?: ($newStatus === 'present' ? "Điểm danh buổi #{$attendedCount}" : 'Vắng học'),
-                'marked_by' => 'Giáo viên / Admin',
-            ]);
-        }
-
-        $student->save();
-
-        return response()->json(['message' => "Điểm danh thành công cho {$student->name}!", 'student' => $student]);
+        return response()->json(['message' => "Đã lưu báo bài cho {$student->name}.", 'attendance' => $attendance]);
     }
 
     public function availableGroupSlots(Request $request): JsonResponse
@@ -437,6 +407,10 @@ class AttendanceApiController extends Controller
 
     public function scheduleSingleLesson(Request $request): JsonResponse
     {
+        if ($denied = $this->forbidTeacher($request)) {
+            return $denied;
+        }
+
         $validated = $request->validate([
             'student_id' => 'required|exists:students,id',
             'date' => 'required|date',
@@ -448,10 +422,10 @@ class AttendanceApiController extends Controller
             'merged_slot_id' => 'nullable|string',
             'merged_class_id' => 'nullable',
             'note' => 'nullable|string',
+            'is_makeup' => 'nullable|boolean',
         ]);
 
-        $singleLessons = $this->loadSingleLessons();
-        $singleLessons[] = [
+        SingleLessons::add([
             'id' => uniqid('lesson_'),
             'student_id' => (int) $validated['student_id'],
             'date' => $validated['date'],
@@ -463,11 +437,11 @@ class AttendanceApiController extends Controller
             'merged_slot_id' => $validated['merged_slot_id'] ?? null,
             'merged_class_id' => $validated['merged_class_id'] ?? null,
             'is_merged' => ! empty($validated['merged_slot_id']),
+            // Buổi học bù (bù cho buổi nghỉ / ngày trung tâm off): cổng phụ huynh hiển thị là "Buổi bù"
+            'is_makeup' => (bool) ($validated['is_makeup'] ?? false),
             'note' => $validated['note'] ?? 'Buổi học lẻ / học bù',
             'created_at' => Carbon::now()->toDateTimeString(),
-        ];
-
-        $this->saveSingleLessons($singleLessons);
+        ]);
 
         $student = Student::find($validated['student_id']);
 

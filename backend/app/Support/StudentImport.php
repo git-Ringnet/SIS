@@ -328,6 +328,7 @@ class StudentImport
                 'course_id' => $course->id,
                 'total_sessions' => $sessions,
                 'remaining_sessions' => $sessions,
+                'allowed_absences' => $course->allowed_absences ?? 3,
                 'status' => self::status($get($row, 'status')),
                 'join_date' => $joinDate ?: Carbon::today()->toDateString(),
                 'notes' => $get($row, 'notes') ?: null,

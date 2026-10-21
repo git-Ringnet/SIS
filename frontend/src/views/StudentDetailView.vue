@@ -10,6 +10,8 @@ import AddSupplyModal from '../components/AddSupplyModal.vue';
 import MessageTemplateModal from '../components/MessageTemplateModal.vue';
 import RetentionNoteModal from '../components/RetentionNoteModal.vue';
 import RenewModal from '../components/RenewModal.vue';
+import { tuitionState, TUITION_BUTTON } from '../services/tuition';
+import ReturnSupplyModal from '../components/ReturnSupplyModal.vue';
 import {
   ArrowLeft,
   BookOpen,
@@ -38,6 +40,8 @@ const router = useRouter();
 const studentId = route.params.id;
 
 const student = ref(null);
+// Học cụ đang thu hồi (giao nhầm)
+const returningSupply = ref(null);
 const courses = ref([]);
 
 const showTemplateModal = ref(false);
@@ -324,10 +328,10 @@ const openParentPortalInNewTab = () => {
           <!-- [ Học phí ] -->
           <button
             @click="showRenewModal = true"
-            class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3 py-1.5 font-semibold text-slate-700 transition-colors shrink-0 shadow-2xs"
+            :class="['inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 font-semibold transition-colors shrink-0 shadow-2xs', TUITION_BUTTON[tuitionState(student)].class]"
           >
-            <CreditCard class="h-3.5 w-3.5 text-slate-500" />
-            <span>Học phí</span>
+            <CreditCard class="h-3.5 w-3.5" :class="TUITION_BUTTON[tuitionState(student)].icon" />
+            <span>{{ TUITION_BUTTON[tuitionState(student)].label }}</span>
           </button>
 
           <!-- [ Ngày đã học ] -->
@@ -546,7 +550,13 @@ const openParentPortalInNewTab = () => {
                 <span class="font-bold text-slate-800">{{ sup.name }}</span>
                 <span class="text-slate-400 ml-2 text-[11px]">(Ngày: {{ formatDate(sup.delivery_date) }})</span>
               </div>
-              <span class="font-bold text-slate-700">SL: {{ sup.quantity }}</span>
+              <span class="flex items-center gap-2">
+                <span class="font-bold text-slate-700">SL: {{ sup.quantity }}</span>
+                <button v-if="sup.id" type="button" @click="returningSupply = sup"
+                  class="rounded-lg px-2 py-0.5 text-[11px] font-semibold text-rose-600 hover:bg-rose-50" title="Thu hồi học cụ giao nhầm">
+                  Thu hồi
+                </button>
+              </span>
             </div>
           </div>
         </div>
@@ -595,6 +605,9 @@ const openParentPortalInNewTab = () => {
     </Modal>
 
     <RetentionNoteModal :show="showNoteModal" :student="student" @close="showNoteModal = false" @saved="fetchData" />
+    <!-- Thu hồi học cụ giao nhầm -->
+    <ReturnSupplyModal :show="!!returningSupply" :student="student" :supply="returningSupply"
+      @close="returningSupply = null" @returned="fetchData" />
     <RenewModal :show="showRenewModal" :student="student" @close="showRenewModal = false" @renewed="fetchData" />
 
     <!-- Modal Cổng phụ huynh (Parent Portal) matching SenyApp -->

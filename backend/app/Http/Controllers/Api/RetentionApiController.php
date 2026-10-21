@@ -8,6 +8,7 @@ use App\Models\Invoice;
 use App\Models\MessageTemplate;
 use App\Models\RetentionLog;
 use App\Models\Student;
+use App\Support\StudentSchedule;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -106,8 +107,8 @@ class RetentionApiController extends Controller
             $amount = $validated['renew_amount'] ?? ($student->course ? $student->course->price : 0);
             $payMethod = $validated['payment_method'] ?? 'bank_transfer';
 
-            $student->remaining_sessions += $sessionsToAdd;
-            $student->total_sessions += $sessionsToAdd;
+            // Cộng vào khóa đang học (không chỉ tổng của học viên, vì tổng được tính lại từ các khóa khi điểm danh)
+            StudentSchedule::addSessions($student, $student->course_id, (int) $sessionsToAdd);
 
             Invoice::create([
                 'invoice_code' => Invoice::nextInvoiceCodeForCenter($student->center),

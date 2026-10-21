@@ -216,6 +216,137 @@ class StudentSchedule
         $student->remaining_sessions = array_sum(array_column($list, 'remaining_sessions'));
     }
 
+    /**
+     * Cộng (delta > 0) / bớt (delta < 0) số buổi đã mua khi thu học phí, vào khoá đăng ký gần nhất của $courseId
+     * (không có thì khoá đang học gần nhất). Phải cộng vào khoá, vì tổng của học viên luôn được tính lại từ các khoá
+     * mỗi lần điểm danh. Không lưu: người gọi save() học viên.
+     */
+    public static function addSessions(Student $student, ?int $courseId, int $delta): void
+    {
+        if (empty($student->registered_courses)) {
+            $student->total_sessions = max(0, (int) $student->total_sessions + $delta);
+            $student->remaining_sessions = max(0, (int) $student->remaining_sessions + $delta);
+
+            return;
+        }
+
+        $list = $student->registered_courses;
+        $keys = array_keys($list);
+        $key = collect($keys)->last(fn ($k) => (int) ($list[$k]['course_id'] ?? 0) === (int) $courseId)
+            ?? collect($keys)->last(fn ($k) => ($list[$k]['status'] ?? 'active') !== 'completed')
+            ?? end($keys);
+
+        $attended = (int) ($list[$key]['attended_sessions'] ?? 0);
+        $list[$key]['total_sessions'] = max($attended, (int) $list[$key]['total_sessions'] + $delta);
+        $list[$key]['remaining_sessions'] = $list[$key]['total_sessions'] - $attended;
+        $list[$key]['status'] = $list[$key]['remaining_sessions'] > 0 ? 'active' : 'completed';
+
+        $student->registered_courses = $list;
+        $student->total_sessions = array_sum(array_column($list, 'total_sessions'));
+        $student->remaining_sessions = array_sum(array_column($list, 'remaining_sessions'));
+    }
+
+    /**
+     * Khoá học đã đăng ký theo id (danh sách tự dựng từ cột cũ nếu học viên chưa có registered_courses).
+     */
+    public static function courseItem(Student $student, ?int $courseItemId): ?array
+    {
+        return $courseItemId === null ? null : collect($student->registered_courses_list)->firstWhere('id', $courseItemId);
+    }
+
+    public static function remainingSessions(Student $student, ?int $courseItemId): int
+    {
+        return (int) (self::courseItem($student, $courseItemId)['remaining_sessions'] ?? $student->remaining_sessions);
+    }
+
+    public static function attendedSessions(Student $student, ?int $courseItemId): int
+    {
+        $item = self::courseItem($student, $courseItemId);
+
+        return (int) ($item['attended_sessions'] ?? ((int) $student->total_sessions - (int) $student->remaining_sessions));
+    }
+
+    /**
+     * Số buổi còn được nghỉ có phép của khoá (số buổi được nghỉ của khoá − số buổi đã nghỉ có phép).
+     */
+    public static function leaveLeft(Student $student, ?int $courseItemId): int
+    {
+        $item = self::courseItem($student, $courseItemId);
+        $allowed = (int) ($item['allowed_absences'] ?? $student->allowed_absences ?? 3);
+
+        return max(0, $allowed - (int) ($item['absences_used'] ?? $student->absences_used ?? 0));
+    }
+
+    /**
+     * Dùng (delta = 1) hoặc trả lại (delta = -1) một lượt nghỉ có phép của khoá. Không lưu: người gọi save() học viên.
+     */
+    public static function useLeave(Student $student, ?int $courseItemId, int $delta): void
+    {
+        $student->absences_used = max(0, (int) $student->absences_used + $delta);
+
+        if (empty($student->registered_courses) || $courseItemId === null) {
+            return;
+        }
+
+        $list = $student->registered_courses;
+        foreach ($list as $key => $item) {
+            if ((int) ($item['id'] ?? 0) === $courseItemId) {
+                $list[$key]['absences_used'] = max(0, (int) ($item['absences_used'] ?? 0) + $delta);
+                break;
+            }
+        }
+        $student->registered_courses = $list;
+    }
+
+    // ------------------------------------------------------------------ Ngày nghỉ (trung tâm off / giáo viên nghỉ)
+
+    /**
+     * Ca $slot ngày $date không học vì trung tâm nghỉ hoặc giáo viên của ca nghỉ phép mà không có người dạy thay.
+     *
+     * @return array{type: 'center'|'teacher', label: string, reason: ?string}|null
+     */
+    public static function offReason(Student $student, string $date, array $slot, ?array $periods = null): ?array
+    {
+        $periods ??= TeacherLeaves::all();
+
+        if ($off = TeacherLeaves::centerOffFor($student->center, $date, $periods)) {
+            return ['type' => 'center', 'label' => 'Trung tâm nghỉ', 'reason' => $off['reason'] ?? null];
+        }
+
+        $teacher = $slot['teacher'] ?? null;
+        if ($teacher && ! TeacherLeaves::substitutionFor($teacher, $date, $periods)
+            && $leave = TeacherLeaves::leaveFor($teacher, $date, $periods)) {
+            return ['type' => 'teacher', 'label' => 'Giáo viên nghỉ', 'reason' => $leave['reason'] ?? null];
+        }
+
+        return null;
+    }
+
+    /**
+     * Các ca trong lịch tuần rơi vào ngày nghỉ, từ $from đến $to (tối đa 2 năm).
+     *
+     * @return list<array{date: Carbon, slot: array, off: array}>
+     */
+    public static function offSessions(Student $student, Carbon $from, Carbon $to): array
+    {
+        $periods = TeacherLeaves::all();
+        if ($periods['center_offs'] === [] && $periods['leaves'] === []) {
+            return [];
+        }
+
+        $result = [];
+        $day = $from->copy()->startOfDay();
+        for ($i = 0; $i < 730 && $day->lte($to); $i++, $day = $day->copy()->addDay()) {
+            foreach (self::slotsOn($student, $day->dayOfWeek) as $slot) {
+                if ($off = self::offReason($student, $day->toDateString(), $slot, $periods)) {
+                    $result[] = ['date' => $day->copy(), 'slot' => $slot, 'off' => $off];
+                }
+            }
+        }
+
+        return $result;
+    }
+
     // ------------------------------------------------------------------ Điểm danh theo ca
 
     /**
@@ -247,8 +378,9 @@ class StudentSchedule
 
     /**
      * Ngày học dự kiến của $count buổi tiếp theo, đi lần lượt theo các ca trong lịch tuần.
-     * Bắt đầu từ hôm nay (bỏ các ca hôm nay đã điểm danh), học viên tạm dừng thì từ ngày hết bảo lưu,
-     * và không sớm hơn ngày nhập học. Học viên đã nghỉ / chưa có lịch thì không có ngày dự kiến.
+     * Bắt đầu từ hôm nay, học viên tạm dừng thì từ ngày hết bảo lưu, và không sớm hơn ngày nhập học.
+     * Bỏ các ca đã điểm danh / đã xin nghỉ trước và các ca rơi vào ngày nghỉ (trung tâm off, giáo viên nghỉ),
+     * nên ngày kết thúc tự lùi lại. Học viên đã nghỉ / chưa có lịch thì không có ngày dự kiến.
      * $slotIds: chỉ tính các ca của một khoá (null = mọi ca). $from: ngày bắt đầu khoá nếu muộn hơn hôm nay.
      *
      * @return list<array{date: Carbon, slot: array}>
@@ -274,22 +406,25 @@ class StudentSchedule
             $day = Carbon::parse($student->paused_until)->startOfDay();
         }
 
-        // Ca hôm nay đã điểm danh (có mặt / vắng) thì không còn là buổi sắp tới
-        $markedToday = [];
-        if ($day->isToday()) {
-            $marked = Attendance::where('student_id', $student->id)->whereDate('attended_at', $day->toDateString())->pluck('slot_id')->all();
-            foreach (self::slotsOn($student, $day->dayOfWeek) as $i => $slot) {
-                if (in_array($slot['id'], $marked, true) || ($i === 0 && in_array(null, $marked, true))) {
-                    $markedToday[] = $slot['id'];
-                }
-            }
-        }
+        // Ca đã điểm danh (có mặt / vắng) hoặc phụ huynh đã xin nghỉ trước thì không còn là buổi sắp tới.
+        // Bản ghi cũ không có ca được tính cho ca đầu tiên trong ngày.
+        $marked = Attendance::where('student_id', $student->id)->whereDate('attended_at', '>=', $day->toDateString())
+            ->get(['attended_at', 'slot_id'])
+            ->groupBy(fn ($a) => $a->attended_at->toDateString())
+            ->map(fn ($g) => $g->pluck('slot_id')->all());
+        $isMarked = function (Carbon $date, array $slot) use ($marked, $student): bool {
+            $ids = $marked->get($date->toDateString(), []);
+
+            return in_array($slot['id'], $ids, true)
+                || (in_array(null, $ids, true) && (self::slotsOn($student, $date->dayOfWeek)[0]['id'] ?? null) === $slot['id']);
+        };
+        $periods = TeacherLeaves::all();
 
         $result = [];
         // Giới hạn 2 năm để không lặp vô hạn khi lịch lỗi
         for ($i = 0; $i < 730 && count($result) < $count; $i++, $day = $day->copy()->addDay()) {
             foreach ($slotsOn($day->dayOfWeek) as $slot) {
-                if ($i === 0 && in_array($slot['id'], $markedToday, true)) {
+                if ($isMarked($day, $slot) || self::offReason($student, $day->toDateString(), $slot, $periods)) {
                     continue;
                 }
                 $result[] = ['date' => $day->copy(), 'slot' => $slot];

@@ -162,21 +162,21 @@ class MultiSlotScheduleTest extends TestCase
         $this->assertSame('present', $sessions[0]['status']);
         $this->assertSame(
             ['19/10/2026 15:00 - 16:00', '25/10/2026 15:30 - 16:30', '26/10/2026 09:00 - 10:00', '26/10/2026 15:00 - 16:00'],
-            $upcoming->take(4)->map(fn ($s) => $s['planned_date'].' '.$s['planned_time'])->all(),
+            $upcoming->take(4)->map(fn ($s) => $s['date'].' '.$s['time'])->all(),
         );
-        $this->assertSame(['Thứ 2', 'Chủ nhật'], $upcoming->take(2)->pluck('planned_weekday')->all());
-        $this->assertSame('Thầy Bình', $upcoming[0]['planned_teacher']);
-        $this->assertTrue($upcoming->every(fn ($s) => ! empty($s['planned_date']))); // đủ ngày cho mọi buổi chưa học
+        $this->assertSame(['Thứ 2', 'Chủ nhật'], $upcoming->take(2)->pluck('weekday')->all());
+        $this->assertSame('Thầy Bình', $upcoming[0]['teacher']);
+        $this->assertTrue($upcoming->every(fn ($s) => ! empty($s['date']))); // đủ ngày cho mọi buổi chưa học
 
         // Tạm dừng đến 01/11 → buổi sắp tới tính từ ngày đó (CN 01/11)
         $student->update(['status' => 'paused', 'paused_until' => '2026-11-01']);
         $first = collect($this->postJson("/api/portal/students/{$student->id}/verify", ['phone_last4' => '0000'])->json('sessions'))->firstWhere('status', 'upcoming');
-        $this->assertSame('01/11/2026', $first['planned_date']);
+        $this->assertSame('01/11/2026', $first['date']);
 
         // Đã nghỉ học → không còn ngày dự kiến
         $student->update(['status' => 'inactive']);
         $first = collect($this->postJson("/api/portal/students/{$student->id}/verify", ['phone_last4' => '0000'])->json('sessions'))->firstWhere('status', 'upcoming');
-        $this->assertArrayNotHasKey('planned_date', $first);
+        $this->assertNull($first['date']);
     }
 
     public function test_course_end_date_is_estimated_from_schedule_when_missing(): void

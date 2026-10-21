@@ -8,8 +8,11 @@ use App\Models\Course;
 use App\Models\CourseClass;
 use App\Models\Invoice;
 use App\Models\Student;
+use App\Support\ActivityLogger;
+use App\Support\AttendanceMarker;
 use App\Support\BrandSettings;
 use App\Support\CenterStore;
+use App\Support\PagePermissions;
 use App\Support\ScheduleConflicts;
 use App\Support\StudentImport;
 use App\Support\StudentSchedule;
@@ -43,7 +46,7 @@ class StudentApiController extends Controller
         $sortBy = $request->input('sort_by', 'newest');
 
         $query = Student::query()
-            ->with(['course', 'latestAttendance', 'latestRetentionLog', 'attendances']);
+            ->with(['course', 'latestAttendance', 'latestRetentionLog', 'attendances', 'latestPaidInvoice', 'pendingInvoice']);
 
         if ($search) {
             $query->where(function ($q) use ($search) {
@@ -273,10 +276,13 @@ class StudentApiController extends Controller
             'notes' => 'nullable|string',
             'create_invoice' => 'nullable|boolean',
             'invoice_amount' => 'nullable|numeric|min:0',
+            // Phụ huynh đã đóng học phí lúc đăng ký chưa; chưa đóng thì phiếu ở trạng thái chờ thu (công nợ)
+            'invoice_paid' => 'nullable|boolean',
             ...$this->scheduleRules(),
         ]);
 
         $code = Student::nextCode();
+        $course = Course::find($validated['course_id']);
 
         $student = Student::create([
             'code' => $code,
@@ -290,6 +296,8 @@ class StudentApiController extends Controller
             'course_id' => $validated['course_id'],
             'total_sessions' => $validated['total_sessions'],
             'remaining_sessions' => $validated['total_sessions'],
+            // Số buổi được nghỉ có phép theo khóa (1 tháng = 1 buổi, 3 tháng = 3 buổi...)
+            'allowed_absences' => $course?->allowed_absences ?? 3,
             'status' => $validated['status'],
             'join_date' => $validated['join_date'] ?? Carbon::today(),
             'notes' => $validated['notes'] ?? null,
@@ -298,8 +306,8 @@ class StudentApiController extends Controller
         ]);
 
         if (! empty($validated['create_invoice'])) {
-            $course = Course::find($validated['course_id']);
             $amount = $validated['invoice_amount'] ?? ($course ? $course->price : 0);
+            $paid = (bool) ($validated['invoice_paid'] ?? false);
 
             Invoice::create([
                 'invoice_code' => Invoice::nextInvoiceCodeForCenter($student->center),
@@ -309,9 +317,10 @@ class StudentApiController extends Controller
                 'amount' => $amount,
                 'sessions_added' => $student->total_sessions,
                 'payment_method' => 'bank_transfer',
-                'status' => 'paid',
-                'paid_at' => Carbon::now(),
-                'note' => 'Học phí nhập học ban đầu',
+                // Chưa đóng: không tính doanh thu, cổng phụ huynh hiện "Chưa thanh toán" cho tới khi xác nhận đã thu
+                'status' => $paid ? 'paid' : 'pending',
+                'paid_at' => $paid ? Carbon::now() : null,
+                'note' => $paid ? 'Học phí nhập học ban đầu' : 'Học phí nhập học ban đầu (chờ thu)',
                 'recorded_by' => 'Admin Thu Ngân',
             ]);
         }
@@ -433,6 +442,10 @@ class StudentApiController extends Controller
 
     public function recordAttendance(Request $request, Student $student): JsonResponse
     {
+        if (! PagePermissions::canMarkAttendance($request->user())) {
+            return response()->json(['message' => 'Giáo viên không điểm danh được, giáo vụ / quản lý sẽ điểm danh.'], 403);
+        }
+
         if ($student->remaining_sessions <= 0) {
             return response()->json([
                 'error' => "Học viên {$student->name} đã hết buổi học! Vui lòng gia hạn thêm khóa học.",
@@ -447,44 +460,30 @@ class StudentApiController extends Controller
             ], 422);
         }
 
-        $item = StudentSchedule::courseItemForSlot($student, $slot['id'] ?? null);
-        StudentSchedule::consume($student, $item['id'] ?? null, 1);
-        $attendedCount = $student->total_sessions - $student->remaining_sessions;
-
-        $attendance = Attendance::create([
-            'student_id' => $student->id,
-            'course_id' => $item['course_id'] ?? $student->course_id,
-            'slot_id' => $slot['id'] ?? null,
-            'course_item_id' => $item['id'] ?? null,
-            'session_number' => max(1, $attendedCount),
-            'attended_at' => $slot ? Carbon::parse(Carbon::today()->toDateString().' '.$slot['start']) : Carbon::now(),
-            'status' => 'present',
-            'note' => $request->input('note', "Điểm danh buổi #{$attendedCount}"),
-            'marked_by' => 'Giáo viên / Admin',
-        ]);
-
-        $student->consecutive_absences = 0;
-        $student->save();
+        // Cùng quy tắc trừ buổi với trang Điểm danh
+        $result = AttendanceMarker::mark($student, Carbon::today()->toDateString(), 'present', $request->input('note'), $slot['id'] ?? null);
         $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
 
         return response()->json([
             'message' => "Điểm danh thành công cho {$student->name}. Còn lại {$student->remaining_sessions} buổi.",
             'student' => $student,
-            'attendance' => $attendance,
+            'attendance' => $result['attendance'],
         ]);
     }
 
-    public function undoAttendance(Student $student): JsonResponse
+    public function undoAttendance(Request $request, Student $student): JsonResponse
     {
+        if (! PagePermissions::canMarkAttendance($request->user())) {
+            return response()->json(['message' => 'Giáo viên không điểm danh được, giáo vụ / quản lý sẽ điểm danh.'], 403);
+        }
+
         $latestAttendance = Attendance::where('student_id', $student->id)
             ->where('status', 'present')
             ->latest('attended_at')
             ->first();
 
         if ($latestAttendance) {
-            StudentSchedule::consume($student, $latestAttendance->course_item_id, -1);
-            $latestAttendance->delete();
-            $student->save();
+            AttendanceMarker::mark($student, $latestAttendance->attended_at->toDateString(), 'not_checked', null, $latestAttendance->slot_id);
             $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
 
             return response()->json([
@@ -498,26 +497,34 @@ class StudentApiController extends Controller
 
     public function recordAbsence(Request $request, Student $student): JsonResponse
     {
+        if (! PagePermissions::canMarkAttendance($request->user())) {
+            return response()->json(['message' => 'Giáo viên không điểm danh được, giáo vụ / quản lý sẽ điểm danh.'], 403);
+        }
+
         $isWithLeave = $request->boolean('with_leave', false);
 
-        $attendance = Attendance::create([
-            'student_id' => $student->id,
-            'course_id' => $student->course_id,
-            'session_number' => ($student->total_sessions - $student->remaining_sessions),
-            'attended_at' => Carbon::now(),
-            'status' => $isWithLeave ? 'absent_with_leave' : 'absent_without_leave',
-            'note' => $request->input('note', $isWithLeave ? 'Nghỉ có phép' : 'Nghỉ không phép'),
-            'marked_by' => 'Giáo viên / Admin',
-        ]);
+        // Ghi vắng cho ca kế tiếp chưa điểm danh hôm nay, cùng quy tắc trừ buổi với trang Điểm danh
+        // (có phép trong số buổi được nghỉ: không trừ buổi; không phép / hết lượt nghỉ: trừ 1 buổi)
+        [$slot, $allDone] = StudentSchedule::nextUnmarkedSlotToday($student);
+        if ($allDone && $slot === null && StudentSchedule::slotsOn($student, Carbon::today()->dayOfWeek) !== []) {
+            return response()->json([
+                'error' => "Học viên {$student->name} đã được điểm danh đủ các ca hôm nay.",
+            ], 422);
+        }
 
-        $student->increment('consecutive_absences');
-        $student->save();
+        $result = AttendanceMarker::mark(
+            $student,
+            Carbon::today()->toDateString(),
+            $isWithLeave ? 'absent_with_leave' : 'absent_without_leave',
+            $request->input('note') ?: ($isWithLeave ? 'Nghỉ có phép' : 'Vắng không phép'),
+            $slot['id'] ?? null,
+        );
         $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
 
         return response()->json([
-            'message' => "Đã ghi nhận vắng học cho {$student->name} (Vắng liên tiếp: {$student->consecutive_absences} buổi).",
+            'message' => $result['message']." (Vắng liên tiếp: {$student->consecutive_absences} buổi).",
             'student' => $student,
-            'attendance' => $attendance,
+            'attendance' => $result['attendance'],
         ]);
     }
 
@@ -544,6 +551,18 @@ class StudentApiController extends Controller
             ], 422);
         }
 
+        // Giao học cụ = xuất kho + ghi doanh thu học cụ (nếu có giá)
+        SupplySales::deductStock($validated['items'], $center);
+        $revenue = SupplySales::recordRevenue($validated['items'], [
+            'date' => $validated['delivery_date'],
+            'student_name' => $student->name,
+            'center' => $center,
+            'payment_method' => $validated['payment_method'] ?? 'Tiền mặt',
+            'recorded_by' => $request->user()?->name ?? 'Admin',
+            'note' => 'Giao học cụ cho học viên '.$student->code,
+        ]);
+
+        // Lưu kèm học cụ trong kho và dòng doanh thu để thu hồi được đúng (nhập lại kho, bớt doanh thu)
         $currentSupplies = $student->supplies ?? [];
         foreach ($validated['items'] as $item) {
             $currentSupplies[] = [
@@ -551,6 +570,8 @@ class StudentApiController extends Controller
                 'name' => $item['name'],
                 'quantity' => $item['quantity'],
                 'price' => $item['price'] ?? 0,
+                'inventory_id' => $item['inventory_id'] ?? null,
+                'revenue_id' => $revenue['id'] ?? null,
                 'delivery_date' => $validated['delivery_date'],
                 'center' => $center,
                 'status' => 'delivered',
@@ -561,21 +582,59 @@ class StudentApiController extends Controller
         $student->supplies = $currentSupplies;
         $student->save();
 
-        // Giao học cụ = xuất kho + ghi doanh thu học cụ (nếu có giá)
-        SupplySales::deductStock($validated['items'], $center);
-        SupplySales::recordRevenue($validated['items'], [
-            'date' => $validated['delivery_date'],
-            'student_name' => $student->name,
-            'center' => $center,
-            'payment_method' => $validated['payment_method'] ?? 'Tiền mặt',
-            'recorded_by' => $request->user()?->name ?? 'Admin',
-            'note' => 'Giao học cụ cho học viên '.$student->code,
-        ]);
-
         return response()->json([
             'message' => "Đã thêm học cụ cho học viên {$student->name} thành công!",
             'student' => $student,
             'supplies' => $currentSupplies,
+        ]);
+    }
+
+    /**
+     * Thu hồi học cụ giao nhầm (toàn bộ hoặc một phần): bỏ khỏi danh sách học cụ của học viên,
+     * nhập lại kho và bớt doanh thu học cụ tương ứng. Ghi nhật ký hoạt động để tra lại.
+     */
+    public function returnSupply(Request $request, Student $student, string $supplyId): JsonResponse
+    {
+        $supplies = $student->supplies ?? [];
+        $index = collect($supplies)->search(fn ($s) => ($s['id'] ?? null) === $supplyId);
+        if ($index === false) {
+            return response()->json(['message' => 'Không tìm thấy học cụ đã giao.'], 404);
+        }
+
+        $supply = $supplies[$index];
+        $validated = $request->validate([
+            'quantity' => 'nullable|integer|min:1|max:'.max(1, (int) $supply['quantity']),
+            'reason' => 'nullable|string|max:255',
+        ]);
+        $quantity = (int) ($validated['quantity'] ?? $supply['quantity']);
+
+        if ($quantity >= (int) $supply['quantity']) {
+            unset($supplies[$index]);
+        } else {
+            $supplies[$index]['quantity'] = (int) $supply['quantity'] - $quantity;
+        }
+        $student->supplies = array_values($supplies);
+        $student->save();
+
+        $center = $supply['center'] ?? $student->center;
+        $restocked = SupplySales::restock([...$supply, 'quantity' => $quantity], $center);
+        $refund = SupplySales::reverseRevenue($supply, $quantity, $student->name);
+
+        ActivityLogger::log('updated', 'student', $student->name, $student->id, ActivityLogger::diff(
+            ['note' => "Đã giao {$supply['name']} x{$supply['quantity']} ngày {$supply['delivery_date']}"],
+            ['note' => "Thu hồi {$supply['name']} x{$quantity}".(! empty($validated['reason']) ? " ({$validated['reason']})" : '')],
+        ), $center);
+
+        $message = "Đã thu hồi {$supply['name']} x{$quantity} của {$student->name}.";
+        $message .= $restocked ? ' Đã nhập lại kho.' : ' Học cụ không còn trong kho nên chưa nhập lại kho, hãy kiểm tra màn Học cụ.';
+        if ($refund > 0) {
+            $message .= ' Đã bớt '.number_format($refund, 0, ',', '.').'đ doanh thu học cụ.';
+        }
+
+        return response()->json([
+            'message' => $message,
+            'student' => $student,
+            'supplies' => $student->supplies,
         ]);
     }
 
@@ -647,7 +706,7 @@ class StudentApiController extends Controller
             'end_date' => $validated['end_date'] ?? null,
             'schedule_info' => ! empty($validated['sessions_per_week']) ? "{$validated['sessions_per_week']} buổi/tuần" : '1 buổi/tuần',
             'sessions_per_week' => $validated['sessions_per_week'] ?? '',
-            'allowed_absences' => 3,
+            'allowed_absences' => $course->allowed_absences ?? 3,
             'absences_used' => 0,
             'status' => 'active',
         ];

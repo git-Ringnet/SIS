@@ -32,6 +32,7 @@ const isSubmitting = ref(false);
 const form = ref({
   name: '',
   default_sessions: 12,
+  allowed_absences: '',
   price: 3600000,
   description: '',
 });
@@ -79,6 +80,7 @@ const openCreate = () => {
   form.value = {
     name: '',
     default_sessions: 12,
+    allowed_absences: '',
     price: 3600000,
     description: '',
   };
@@ -91,6 +93,7 @@ const openEdit = (c) => {
   form.value = {
     name: c.name,
     default_sessions: c.default_sessions,
+    allowed_absences: c.allowed_absences ?? '',
     price: Number(c.price),
     description: c.description || '',
   };
@@ -392,6 +395,7 @@ const removeClass = async (card) => {
                 <span class="inline-block px-2 py-0.5 rounded-md bg-slate-100 font-bold text-xs">
                   {{ c.default_sessions }} buổi
                 </span>
+                <p class="text-[11px] text-slate-400 mt-0.5">Nghỉ phép: {{ c.allowed_absences ?? 3 }} buổi</p>
               </td>
 
               <!-- Học phí -->
@@ -533,6 +537,24 @@ const removeClass = async (card) => {
                 class="w-full rounded-xl border border-slate-200 px-3.5 py-2 text-xs sm:text-sm font-bold text-emerald-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
               />
             </div>
+          </div>
+
+          <!-- Số buổi được nghỉ có phép -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">
+              Số buổi được nghỉ có phép
+            </label>
+            <input
+              type="number"
+              min="0"
+              v-model="form.allowed_absences"
+              placeholder="Mặc định 3 buổi"
+              class="w-full rounded-xl border border-slate-200 px-3.5 py-2 text-xs sm:text-sm font-bold text-slate-800 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+            />
+            <p class="text-[11px] text-slate-400 mt-1">
+              VD: khóa 1 tháng = 1 buổi, 3 tháng = 3 buổi, 6 tháng = 6 buổi. Nghỉ có phép trong số buổi này không bị trừ
+              buổi; vượt quá thì trừ như vắng không phép. Áp dụng cho học viên đăng ký khóa từ nay.
+            </p>
           </div>
 
           <!-- Mô tả -->

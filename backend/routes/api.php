@@ -64,6 +64,7 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::post('/{student}/attendance/undo', [StudentApiController::class, 'undoAttendance']);
         Route::post('/{student}/absence', [StudentApiController::class, 'recordAbsence']);
         Route::post('/{student}/supplies', [StudentApiController::class, 'addSupplies']);
+        Route::post('/{student}/supplies/{supplyId}/return', [StudentApiController::class, 'returnSupply']);
         Route::put('/{student}/progress', [StudentApiController::class, 'updateCourseProgress']);
         Route::post('/{student}/courses', [StudentApiController::class, 'addCourse']);
         Route::put('/{student}/courses/{courseIndex}', [StudentApiController::class, 'updateCourseItem']);
@@ -118,6 +119,10 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::post('/', [InvoiceApiController::class, 'store']);
         Route::put('/{invoice}', [InvoiceApiController::class, 'update']);
         Route::delete('/{invoice}', [InvoiceApiController::class, 'destroy']);
+        Route::post('/{invoice}/mark-paid', [InvoiceApiController::class, 'markPaid']);
+        Route::post('/{invoice}/mark-unpaid', [InvoiceApiController::class, 'markUnpaid']);
+        Route::post('/{invoice}/cancel', [InvoiceApiController::class, 'cancel']);
+        Route::post('/{invoice}/restore', [InvoiceApiController::class, 'restore']);
         Route::get('/{invoice}/pdf', [InvoiceApiController::class, 'pdf']);
     });
 
@@ -220,6 +225,7 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::post('/checkin', [TeacherCheckinApiController::class, 'checkin']);
         Route::post('/absence', [TeacherCheckinApiController::class, 'recordAbsence']);
         Route::post('/{id}/reset', [TeacherCheckinApiController::class, 'resetShift'])->whereNumber('id');
+        Route::post('/{id}/restore', [TeacherCheckinApiController::class, 'restoreShift'])->whereNumber('id');
         Route::put('/{id}', [TeacherCheckinApiController::class, 'updateShift'])->whereNumber('id');
         Route::delete('/{id}', [TeacherCheckinApiController::class, 'destroyShift'])->whereNumber('id');
         Route::get('/qr-token', [TeacherCheckinApiController::class, 'qrToken']);
@@ -231,7 +237,8 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::get('/leaves', [TeacherLeaveApiController::class, 'index']);
         Route::post('/leaves', [TeacherLeaveApiController::class, 'storeLeave']);
         Route::post('/substitutions', [TeacherLeaveApiController::class, 'storeSubstitution']);
-        Route::delete('/{type}/{id}', [TeacherLeaveApiController::class, 'destroy'])->where('type', 'leaves|substitutions');
+        Route::post('/center-offs', [TeacherLeaveApiController::class, 'storeCenterOff']);
+        Route::delete('/{type}/{id}', [TeacherLeaveApiController::class, 'destroy'])->where('type', 'leaves|substitutions|center-offs');
     });
 
     // Attendance / Điểm danh học viên hàng ngày
@@ -240,5 +247,6 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::get('/available-group-slots', [AttendanceApiController::class, 'availableGroupSlots']);
         Route::post('/single-lesson', [AttendanceApiController::class, 'scheduleSingleLesson']);
         Route::post('/{student}/mark', [AttendanceApiController::class, 'markAttendance']);
+        Route::post('/{student}/note', [AttendanceApiController::class, 'saveNote']);
     });
 });

@@ -96,6 +96,116 @@ class TeacherPayAndLeaveTest extends TestCase
         $this->assertEquals(370000, $m['total_salary']);
     }
 
+    /**
+     * Đăng nhập bằng một nhân sự ở màn Nhân sự với vai trò cho trước.
+     */
+    private function loginAs(string $name, string $role): void
+    {
+        $user = User::factory()->create(['name' => $name]);
+        Storage::put('staff_data.json', json_encode(['members' => [[
+            'id' => 9, 'name' => $name, 'email' => $user->email, 'role' => $role,
+            'blocked_pages' => PagePermissions::defaultBlockedPages($role),
+        ]]]));
+        Sanctum::actingAs($user);
+    }
+
+    public function test_only_owner_and_manager_see_everyone_pay_others_see_their_own(): void
+    {
+        $this->student('A', 'Cô Mai', $this->guitar, 'G1');
+        $this->student('C', 'Thầy Bình', $this->piano, 'P1', '19:00');
+        $this->saveRates([
+            ['name' => 'Cô Mai', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 150000],
+            ['name' => 'Thầy Bình', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 120000],
+        ]);
+        $s = $this->shifts();
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $s['Cô Mai']['id']])->assertOk();
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $s['Thầy Bình']['id']])->assertOk();
+        $this->assertEquals(270000, $this->monthly()['total_salary']);
+
+        // Chủ trung tâm xuất Excel riêng một giáo viên
+        $csv = $this->get('/api/teacher-checkin/export?month=2026-10&teacher='.urlencode('Thầy Bình'))->assertOk()->streamedContent();
+        $this->assertStringContainsString('Thầy Bình', $csv);
+        $this->assertStringNotContainsString('Cô Mai', $csv);
+
+        // Giáo viên: chỉ thù lao của mình, không xem / sửa đơn giá
+        $this->loginAs('Cô Mai', 'Giáo viên');
+        $m = $this->monthly();
+        $this->assertSame(['Cô Mai'], collect($m['shifts'])->pluck('earner')->all());
+        $this->assertEquals(150000, $m['total_salary']);
+        $this->getJson('/api/teacher-checkin/rates')->assertForbidden();
+        // Giáo viên truyền tên người khác vẫn chỉ xuất được của mình
+        $csv = $this->get('/api/teacher-checkin/export?month=2026-10&teacher='.urlencode('Thầy Bình'))->assertOk()->streamedContent();
+        $this->assertStringNotContainsString('Thầy Bình', $csv);
+
+        // Giáo vụ vào được trang Check-in nhưng không thấy thù lao của giáo viên
+        $this->loginAs('Chị Lan', 'Giáo vụ');
+        $m = $this->monthly();
+        $this->assertSame([], $m['shifts']);
+        $this->assertEquals(0, $m['total_salary']);
+        $this->assertArrayNotHasKey('unit_rate', $this->shifts()['Cô Mai']);
+        $this->getJson('/api/teacher-checkin/rates')->assertForbidden();
+        $this->postJson('/api/teacher-checkin/rates', ['teachers' => []])->assertForbidden();
+        $this->putJson("/api/teacher-checkin/{$s['Cô Mai']['id']}", ['checkin_time' => '17:30', 'unit_rate' => 1])->assertForbidden();
+
+        // Quản lý xem được tất cả
+        $this->loginAs('Anh Quản Lý', 'Quản lý / Lễ tân');
+        $this->assertEquals(270000, $this->monthly()['total_salary']);
+        $this->getJson('/api/teacher-checkin/rates')->assertOk();
+    }
+
+    public function test_only_owner_can_delete_a_paid_shift(): void
+    {
+        $owner = auth()->user();
+        $this->student('C', 'Thầy Bình', $this->piano, 'P1');
+        $this->saveRates([['name' => 'Thầy Bình', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 120000]]);
+        $id = $this->shifts()['Thầy Bình']['id'];
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $id])->assertOk();
+
+        $this->loginAs('Anh Quản Lý', 'Quản lý / Lễ tân');
+        $this->deleteJson("/api/teacher-checkin/{$id}")->assertForbidden();
+
+        Sanctum::actingAs($owner);
+        $this->deleteJson("/api/teacher-checkin/{$id}")->assertOk();
+        $m = $this->monthly();
+        $this->assertSame([], $m['shifts']);
+        $this->assertEquals(0, $m['total_salary']);
+        // Xoá nháp: hiện ở danh sách đã xoá kèm thù lao trước khi xoá
+        $this->assertSame([[$id, 120000, true]], collect($m['deleted_shifts'])->map(fn ($s) => [$s['id'], (int) $s['amount'], $s['restorable']])->all());
+    }
+
+    public function test_deleted_shift_is_excluded_everywhere_until_restored(): void
+    {
+        $this->student('C', 'Thầy Bình', $this->piano, 'P1');
+        $this->saveRates([['name' => 'Thầy Bình', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 120000]]);
+        $id = $this->shifts()['Thầy Bình']['id'];
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $id, 'checkin_time' => '17:40'])->assertOk();
+        $this->deleteJson("/api/teacher-checkin/{$id}")->assertOk();
+
+        // Không tính ở đâu: ca trong ngày (không tự sinh lại), bảng tháng, Excel, check-in / báo vắng / sửa / xoá lại
+        $this->assertArrayNotHasKey('Thầy Bình', $this->shifts());
+        $this->assertEquals(0, $this->monthly()['total_salary']);
+        $this->assertStringNotContainsString('Thầy Bình', $this->get('/api/teacher-checkin/export?month=2026-10')->streamedContent());
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $id])->assertNotFound();
+        $this->postJson('/api/teacher-checkin/absence', ['shift_id' => $id, 'status' => 'skipped'])->assertNotFound();
+        $this->putJson("/api/teacher-checkin/{$id}", ['checkin_time' => '17:30'])->assertNotFound();
+        $this->deleteJson("/api/teacher-checkin/{$id}")->assertNotFound();
+
+        // Quản lý không khôi phục được; chủ trung tâm khôi phục → về đúng như trước (giờ check-in, đơn giá đã chốt)
+        $owner = auth()->user();
+        $manager = User::factory()->create();
+        Storage::put('staff_data.json', json_encode(['members' => [['id' => 9, 'name' => 'QL', 'email' => $manager->email, 'role' => 'Quản lý / Lễ tân']]]));
+        Sanctum::actingAs($manager);
+        $this->postJson("/api/teacher-checkin/{$id}/restore")->assertForbidden();
+
+        Sanctum::actingAs($owner);
+        $this->postJson("/api/teacher-checkin/{$id}/restore")->assertOk();
+        $m = $this->monthly();
+        $this->assertEquals(120000, $m['total_salary']);
+        $this->assertSame('17:40', $m['shifts'][0]['checkin_time']);
+        $this->assertSame([], $m['deleted_shifts']);
+        $this->postJson("/api/teacher-checkin/{$id}/restore")->assertNotFound();
+    }
+
     public function test_rates_list_courses_from_schedule_slots_and_checkin_uses_that_course_rate(): void
     {
         // Khoá chính của học viên là Guitar, nhưng ca Thứ 3 (Cô Mai dạy) thuộc khoá Piano

@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
-import { ArrowLeft, CalendarX, Repeat, Trash2 } from 'lucide-vue-next';
+import { ArrowLeft, CalendarOff, CalendarX, Repeat, Trash2 } from 'lucide-vue-next';
 import { teacherCheckinApi } from '../services/api';
 import { notify, errorMessage } from '../services/notify';
 import { confirmDialog } from '../services/useConfirm';
@@ -12,13 +12,17 @@ const today = toLocalDateString();
 // Bộ lọc danh sách
 const filters = ref({ teacher: '', status: 'all', from: '', to: '' });
 const teachers = ref([]);
+const centers = ref([]);
 const leaves = ref([]);
 const substitutions = ref([]);
+const centerOffs = ref([]);
 
 const leaveForm = ref({ teacher: '', from: today, to: today, reason: '' });
 const subForm = ref({ original: '', substitute: '', from: today, to: today, reason: '' });
+const offForm = ref({ center: '', from: today, to: today, reason: '' });
 const savingLeave = ref(false);
 const savingSub = ref(false);
+const savingOff = ref(false);
 
 const STATUS_LABELS = {
   upcoming: { label: 'Sắp tới', class: 'bg-blue-50 text-blue-700' },
@@ -40,7 +44,9 @@ const fetchData = async () => {
     const res = await teacherCheckinApi.getLeaves(params);
     leaves.value = res.data.leaves || [];
     substitutions.value = res.data.substitutions || [];
+    centerOffs.value = res.data.center_offs || [];
     teachers.value = res.data.teachers || [];
+    centers.value = res.data.centers || [];
   } catch (err) {
     notify.apiError(err, 'Không tải được danh sách nghỉ phép / dạy thay');
   }
@@ -76,8 +82,25 @@ const saveSubstitution = async () => {
   }
 };
 
+const saveCenterOff = async () => {
+  try {
+    savingOff.value = true;
+    const res = await teacherCheckinApi.createCenterOff(offForm.value);
+    notify.success(res.data.message);
+    offForm.value = { center: '', from: today, to: today, reason: '' };
+    await fetchData();
+  } catch (err) {
+    notify.error('Không lưu được ngày nghỉ của trung tâm', { description: errorMessage(err, err.message) });
+  } finally {
+    savingOff.value = false;
+  }
+};
+
 const removePeriod = async (type, item) => {
-  const what = type === 'leaves' ? `nghỉ phép của ${item.teacher}` : `phân công ${item.substitute} dạy thay ${item.original}`;
+  const what = {
+    leaves: `nghỉ phép của ${item.teacher}`,
+    'center-offs': `ngày nghỉ của ${item.center || 'tất cả cơ sở'}`,
+  }[type] || `phân công ${item.substitute} dạy thay ${item.original}`;
   if (!(await confirmDialog({
     title: 'Xoá đợt này?',
     message: `Xoá ${what} (${formatDate(item.from)} → ${formatDate(item.to)}). Các ca chưa check-in trong khoảng ngày này sẽ trở lại bình thường.`,
@@ -101,8 +124,8 @@ const inputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2
     <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
       <div>
         <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Nghỉ phép & dạy thay</h1>
-        <p class="text-xs sm:text-sm text-slate-500 mt-1">Gán vắng có phép theo khoảng ngày và phân công giáo viên dạy
-          thay cho ca dạy.</p>
+        <p class="text-xs sm:text-sm text-slate-500 mt-1">Ngày nghỉ của trung tâm, gán vắng có phép theo khoảng ngày và
+          phân công giáo viên dạy thay cho ca dạy.</p>
       </div>
       <router-link to="/teacher-checkin"
         class="inline-flex items-center gap-1.5 self-start rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs sm:text-sm font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs">
@@ -137,6 +160,72 @@ const inputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2
         <div class="text-[11px] font-medium text-slate-500">
           Đến ngày
           <DatePickerVN v-model="filters.to" :default-today="false" class="mt-1" @change="fetchData" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Ngày nghỉ của trung tâm (lễ, Tết...) -->
+    <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
+      <div>
+        <h2 class="flex items-center gap-2 text-sm sm:text-base font-bold text-slate-900">
+          <CalendarOff class="h-4 w-4 text-slate-600" /> Ngày nghỉ của trung tâm
+        </h2>
+        <p class="text-xs text-slate-500 mt-1">
+          Các buổi học trong khoảng ngày này là "Trung tâm nghỉ": học viên không bị trừ buổi, không tính vào số buổi
+          được nghỉ, lịch học tự lùi lại và cổng phụ huynh hiển thị rõ buổi off. Giáo viên nghỉ phép mà không có người
+          dạy thay thì các buổi của giáo viên đó cũng được tính là buổi off.
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <form @submit.prevent="saveCenterOff" class="space-y-3">
+          <label class="block text-[11px] font-semibold text-slate-600">
+            Cơ sở
+            <select v-model="offForm.center" :class="[inputClass, 'mt-1']">
+              <option value="">Tất cả cơ sở</option>
+              <option v-for="c in centers" :key="c" :value="c">{{ c }}</option>
+            </select>
+          </label>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="text-[11px] font-semibold text-slate-600">Từ ngày
+              <DatePickerVN v-model="offForm.from" class="mt-1" required />
+            </div>
+            <div class="text-[11px] font-semibold text-slate-600">Đến ngày
+              <DatePickerVN v-model="offForm.to" class="mt-1" required />
+            </div>
+          </div>
+          <label class="block text-[11px] font-semibold text-slate-600">
+            Lý do (tuỳ chọn)
+            <input v-model="offForm.reason" placeholder="Nghỉ lễ 2/9, nghỉ Tết..." :class="[inputClass, 'mt-1']" />
+          </label>
+          <button type="submit" :disabled="savingOff"
+            class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 px-4 py-2 text-xs sm:text-sm font-bold text-white">
+            Lưu ngày nghỉ
+          </button>
+        </form>
+
+        <div class="space-y-2">
+          <p class="text-xs font-semibold text-slate-600">Danh sách ngày nghỉ ({{ centerOffs.length }})</p>
+          <p v-if="centerOffs.length === 0"
+            class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
+            Không có ngày nghỉ nào khớp bộ lọc.
+          </p>
+          <div v-for="o in centerOffs" :key="o.id"
+            class="flex items-start justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2.5 text-xs">
+            <div>
+              <p class="font-bold text-slate-900">{{ o.center || 'Tất cả cơ sở' }}</p>
+              <p class="text-slate-600">{{ formatDate(o.from) }} → {{ formatDate(o.to) }}<template v-if="o.reason"> · {{
+                  o.reason }}</template>
+              </p>
+              <span
+                :class="['mt-1 inline-block rounded-md px-1.5 py-0.5 text-[11px] font-semibold', STATUS_LABELS[o.status]?.class]">{{
+                  STATUS_LABELS[o.status]?.label }}</span>
+            </div>
+            <button type="button" @click="removePeriod('center-offs', o)"
+              class="p-1 rounded-lg text-rose-500 hover:bg-rose-50" title="Xoá">
+              <Trash2 class="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </div>
     </div>
