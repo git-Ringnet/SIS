@@ -145,7 +145,7 @@ class DashboardApiController extends Controller
             ->whereJsonContains('class_days', $today->dayOfWeek)
             ->get()
             ->filter(function ($st) use ($todayRecords, $today) {
-                $slots = StudentSchedule::slotsOn($st, $today->dayOfWeek);
+                $slots = StudentSchedule::slotsOnDate($st, $today->toDateString());
                 $marked = $todayRecords->get($st->id, collect())->pluck('slot_id')->all();
                 foreach ($slots as $i => $slot) {
                     if (! in_array($slot['id'], $marked, true) && ! ($i === 0 && in_array(null, $marked, true))) {

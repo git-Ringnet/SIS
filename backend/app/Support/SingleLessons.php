@@ -33,6 +33,20 @@ class SingleLessons
         return $lesson;
     }
 
+    /**
+     * Xóa buổi theo id, trả về buổi đã xóa (null nếu không có).
+     */
+    public static function remove(string $id): ?array
+    {
+        $lessons = self::all();
+        $removed = collect($lessons)->firstWhere('id', $id);
+        if ($removed !== null) {
+            self::save(array_values(array_filter($lessons, fn ($l) => ($l['id'] ?? null) !== $id)));
+        }
+
+        return $removed;
+    }
+
     public static function forStudent(int $studentId): array
     {
         return array_values(array_filter(self::all(), fn ($l) => (int) ($l['student_id'] ?? 0) === $studentId));

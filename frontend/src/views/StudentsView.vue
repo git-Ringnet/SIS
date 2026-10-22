@@ -339,7 +339,8 @@ const submitAddCourse = async (student) => {
       course_id: form.course_id,
       total_sessions: Number(form.total_sessions),
       start_date: form.start_date || null,
-      end_date: form.end_date || null,
+      // Ngày tự tính không lưu (backend tự tính theo lịch); chỉ lưu ngày sửa tay
+      end_date: form.end_touched ? form.end_date || null : null,
       sessions_per_week: form.sessions_per_week || null,
     });
     notify.success(res.data.message || 'Đã thêm khóa học cho học viên thành công!');
@@ -448,11 +449,14 @@ const saveCourseAllowedAbsences = async (student, courseItem) => {
 const DAY_SHORT = { 1: 'T2', 2: 'T3', 3: 'T4', 4: 'T5', 5: 'T6', 6: 'T7', 0: 'CN' };
 const slotLabel = (slot) => `${DAY_SHORT[slot.day] ?? ''} · ${slot.start}${slot.end ? ` - ${slot.end}` : ''}`;
 
-// Các ca của khoá: đã chọn riêng thì theo danh sách chọn, không thì dùng chung mọi ca
+// Các ca của khoá: đã chọn riêng thì theo danh sách chọn, không thì các ca chưa thuộc khóa nào khác (hết thì mọi ca)
 const courseSlots = (student, courseItem) => {
   const all = student.schedule_slots || [];
   const ids = courseItem?.schedule_ids || [];
-  return ids.length ? all.filter((x) => ids.includes(x.id)) : all;
+  if (ids.length) return all.filter((x) => ids.includes(x.id));
+  const claimed = getStudentCourses(student).flatMap((c) => c.schedule_ids || []);
+  const free = all.filter((x) => !claimed.includes(x.id));
+  return free.length ? free : all;
 };
 
 const slotPicker = ref({ key: null, ids: [] });
@@ -513,20 +517,24 @@ const savingCourseDates = ref(false);
 
 const toIsoDate = (val) => (val ? String(val).slice(0, 10) : '');
 
-// Ngày kết thúc dự kiến = buổi học cuối cùng trong tuần cuối:
-// số tuần = tổng buổi ÷ buổi/tuần (làm tròn lên); trong tuần cuối lấy ngày học muộn nhất theo lịch học của học viên.
+// Ngày kết thúc dự kiến (cố định, không lùi theo nghỉ phép / buổi bù), cùng cách tính với backend:
+// có lịch học thì đếm lần lượt các buổi theo lịch từ ngày bắt đầu đến đủ tổng buổi;
+// chưa có lịch thì số tuần = tổng buổi ÷ buổi/tuần (làm tròn lên), lấy ngày cuối của tuần cuối.
 const computeCourseEndDate = (startIso, totalSessions, perWeek, classDays) => {
   if (!startIso || !totalSessions || !perWeek) return '';
-  const weeks = Math.ceil(totalSessions / perWeek);
-  const lastWeekStart = new Date(`${startIso}T00:00:00`);
-  lastWeekStart.setDate(lastWeekStart.getDate() + (weeks - 1) * 7);
   const days = (classDays || []).map(Number);
-  for (let offset = 6; offset >= 0; offset--) {
-    const d = new Date(lastWeekStart);
-    d.setDate(d.getDate() + offset);
-    if (days.length === 0 || days.includes(d.getDay())) return toLocalDateString(d);
+  if (days.length) {
+    const d = new Date(`${startIso}T00:00:00`);
+    for (let count = 0, i = 0; i < 3650; i++, d.setDate(d.getDate() + 1)) {
+      count += days.filter((x) => x === d.getDay()).length;
+      if (count >= totalSessions) return toLocalDateString(d);
+    }
+    return '';
   }
-  return '';
+  const weeks = Math.ceil(totalSessions / perWeek);
+  const end = new Date(`${startIso}T00:00:00`);
+  end.setDate(end.getDate() + (weeks - 1) * 7 + 6);
+  return toLocalDateString(end);
 };
 
 const coursePerWeek = (student, courseItem) =>
@@ -581,13 +589,14 @@ const recomputeCourseEnd = () => {
 };
 
 const submitCourseDates = async () => {
-  const { student, item, start, perWeek, end } = courseDatesState.value;
+  const { student, item, start, perWeek, end, endTouched } = courseDatesState.value;
   try {
     savingCourseDates.value = true;
     const res = await studentApi.updateCourseItem(student.id, item.id, {
       start_date: start || null,
       sessions_per_week: perWeek ? Number(perWeek) : null,
-      end_date: end || null,
+      // Ngày tự tính không lưu (backend tự tính theo lịch); chỉ lưu ngày sửa tay
+      end_date: endTouched ? end || null : null,
     });
     notify.success('Đã lưu thời gian khóa học!');
     if (res.data.student) Object.assign(student, res.data.student);
@@ -2331,8 +2340,8 @@ const getAttendanceSummaryTooltip = (student) => {
             <DatePickerVN v-model="courseDatesState.end" :default-today="false" class="mt-1" @change="courseDatesState.endTouched = true" />
           </div>
           <p class="text-[11px] leading-relaxed text-slate-500">
-            Tự tính từ tổng {{ courseDatesState.item?.total_sessions }} buổi ÷ buổi/tuần, và lấy đúng buổi học cuối cùng trong tuần cuối
-            (theo lịch học của học viên). Sửa tay sẽ giữ nguyên ngày bạn chọn.
+            Tự tính: đếm đủ {{ courseDatesState.item?.total_sessions }} buổi theo lịch học từ ngày bắt đầu. Ngày này cố định,
+            không lùi khi học viên nghỉ phép, trung tâm nghỉ hay có buổi bù. Sửa tay sẽ giữ nguyên ngày bạn chọn.
             <button
               v-if="courseDatesState.endTouched"
               type="button"

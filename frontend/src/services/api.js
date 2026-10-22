@@ -267,6 +267,7 @@ export const dailyAttendanceApi = {
   mark: (studentId, data) => api.post(`/attendance/${studentId}/mark`, data),
   saveNote: (studentId, data) => api.post(`/attendance/${studentId}/note`, data),
   scheduleSingleLesson: (data) => api.post('/attendance/single-lesson', data),
+  deleteSingleLesson: (id) => api.delete(`/attendance/single-lesson/${id}`),
 };
 
 export const parentPortalApi = {

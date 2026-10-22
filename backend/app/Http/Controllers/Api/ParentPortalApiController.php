@@ -168,6 +168,7 @@ class ParentPortalApiController extends Controller
                 'leave_by_course' => $leaveByCourse,
                 'off_sessions' => count(array_filter($sessions, fn ($s) => $s['status'] === 'off')),
                 'makeup_sessions' => count(array_filter($sessions, fn ($s) => $s['is_makeup'])),
+                'pending_makeup_sessions' => count(array_filter($sessions, fn ($s) => str_starts_with($s['key'], 'pending-makeup-'))),
                 'progress_percent' => $totalSessions > 0 ? round(($usedSessions / $totalSessions) * 100) : 0,
             ],
             'sessions' => $sessions,
@@ -256,8 +257,13 @@ class ParentPortalApiController extends Controller
             ]);
         }
 
-        // Buổi sắp tới theo lịch tuần cho đủ số buổi còn lại (buổi bù đã đặt cũng dùng số buổi còn lại)
-        $regularCount = max(0, (int) $student->remaining_sessions - $upcomingLessons->count());
+        // Buổi nghỉ có phép không trừ buổi thì chờ trung tâm xếp buổi bù, không tự thêm buổi vào cuối lịch.
+        // Mỗi buổi bù đã đặt (đã học hay sắp tới) bù cho một buổi nghỉ.
+        $excused = $attendances->filter(fn ($a) => $a->status === 'absent_with_leave' && ! $a->deductsSession())->count();
+        $pendingMakeup = max(0, $excused - $lessons->filter(fn ($l) => ! empty($l['is_makeup']))->count());
+
+        // Buổi sắp tới theo lịch tuần cho đủ số buổi còn lại (buổi bù đã đặt / chờ xếp cũng dùng số buổi còn lại)
+        $regularCount = max(0, (int) $student->remaining_sessions - $upcomingLessons->count() - $pendingMakeup);
         $planned = StudentSchedule::upcomingSessions($student, $regularCount);
         foreach ($planned as ['date' => $date, 'slot' => $slot]) {
             $rows[] = $this->row([
@@ -294,6 +300,11 @@ class ParentPortalApiController extends Controller
         }
 
         usort($rows, fn ($a, $b) => $a['sort'] <=> $b['sort']);
+
+        for ($i = 0; $i < min($pendingMakeup, max(0, (int) $student->remaining_sessions - $upcomingLessons->count())); $i++) {
+            $rows[] = $this->row(['key' => 'pending-makeup-'.$i, 'status' => 'upcoming', 'status_label' => 'Chờ xếp buổi bù',
+                'note' => 'Bù cho buổi nghỉ có phép, trung tâm sẽ báo lịch học bù']);
+        }
 
         // Học viên chưa có lịch tuần: các buổi còn lại chưa có ngày dự kiến
         for ($i = count($planned); $i < $regularCount; $i++) {

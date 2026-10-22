@@ -97,6 +97,75 @@ class StudentSchedule
         return array_values(array_filter(self::slots($student), fn ($s) => (int) $s['day'] === $dayOfWeek));
     }
 
+    /**
+     * Các ca thật sự có học vào ngày $date: theo thứ trong tuần, nhưng không có ca nào trước "Ngày bắt đầu học"
+     * của học viên, và ca gán cho khóa đăng ký thêm chỉ bắt đầu từ ngày bắt đầu của khóa đó.
+     * Dùng cho trang Điểm danh và sinh ca dạy giáo viên (tránh hiện / tính tiền buổi chưa bắt đầu học).
+     */
+    public static function slotsOnDate(Student $student, string $date): array
+    {
+        $date = Carbon::parse($date)->toDateString();
+        if ($student->join_date && Carbon::parse($student->join_date)->toDateString() > $date) {
+            return [];
+        }
+
+        $items = $student->registered_courses_list;
+        $firstItemId = $items[0]['id'] ?? null;
+
+        return array_values(array_filter(self::slotsOn($student, Carbon::parse($date)->dayOfWeek), function ($slot) use ($items, $firstItemId, $date) {
+            foreach ($items as $item) {
+                if (in_array($slot['id'], $item['schedule_ids'] ?? [], true)) {
+                    // Khóa đầu tiên theo "Ngày bắt đầu học" (đã xét ở trên), khóa thêm theo ngày bắt đầu của khóa
+                    return ($item['id'] ?? null) === $firstItemId
+                        || empty($item['start_date'])
+                        || Carbon::parse($item['start_date'])->toDateString() <= $date;
+                }
+            }
+
+            return true;
+        }));
+    }
+
+    /**
+     * Các ca của một khóa: các ca đã chọn cho khóa; khóa không chọn ca riêng thì các ca chưa thuộc khóa nào khác
+     * (tránh hai khóa cùng tính trên một ca). Không còn ca nào thì dùng mọi ca.
+     */
+    public static function courseSlots(Student $student, ?array $item): array
+    {
+        $slots = self::slots($student);
+        if ($ids = $item['schedule_ids'] ?? []) {
+            return array_values(array_filter($slots, fn ($s) => in_array($s['id'], $ids, true)));
+        }
+
+        $claimed = array_merge(...array_map(fn ($i) => $i['schedule_ids'] ?? [], $student->registered_courses_list));
+
+        return array_values(array_filter($slots, fn ($s) => ! in_array($s['id'], $claimed, true))) ?: $slots;
+    }
+
+    /**
+     * Ngày kết thúc theo kế hoạch của khóa: đi lần lượt các ca trong lịch tuần của khóa từ ngày bắt đầu, đủ tổng số buổi.
+     * Không xét ngày trung tâm / giáo viên nghỉ, buổi nghỉ phép hay buổi bù, nên ngày này cố định
+     * (vd bắt đầu 04/09, 2 buổi/tuần, 24 buổi → 23/11, có thêm buổi bù cũng không đổi).
+     */
+    public static function plannedEndDate(Student $student, ?array $item, string $from): ?Carbon
+    {
+        $total = (int) ($item['total_sessions'] ?? $student->total_sessions);
+        $perDay = array_count_values(array_map(fn ($s) => (int) $s['day'], self::courseSlots($student, $item)));
+        if ($total <= 0 || $perDay === []) {
+            return null;
+        }
+
+        $day = Carbon::parse($from)->startOfDay();
+        for ($count = 0, $i = 0; $i < 3650; $i++, $day = $day->copy()->addDay()) {
+            $count += $perDay[$day->dayOfWeek] ?? 0;
+            if ($count >= $total) {
+                return $day;
+            }
+        }
+
+        return null;
+    }
+
     public static function find(Student $student, ?string $slotId): ?array
     {
         foreach (self::slots($student) as $slot) {
@@ -337,7 +406,7 @@ class StudentSchedule
         $result = [];
         $day = $from->copy()->startOfDay();
         for ($i = 0; $i < 730 && $day->lte($to); $i++, $day = $day->copy()->addDay()) {
-            foreach (self::slotsOn($student, $day->dayOfWeek) as $slot) {
+            foreach (self::slotsOnDate($student, $day->toDateString()) as $slot) {
                 if ($off = self::offReason($student, $day->toDateString(), $slot, $periods)) {
                     $result[] = ['date' => $day->copy(), 'slot' => $slot, 'off' => $off];
                 }
@@ -356,7 +425,7 @@ class StudentSchedule
     public static function nextUnmarkedSlotToday(Student $student): array
     {
         $today = now();
-        $slots = self::slotsOn($student, $today->dayOfWeek);
+        $slots = self::slotsOnDate($student, $today->toDateString());
         $marked = Attendance::where('student_id', $student->id)->whereDate('attended_at', $today->toDateString())->get();
 
         if ($slots === []) {
@@ -423,8 +492,9 @@ class StudentSchedule
         $result = [];
         // Giới hạn 2 năm để không lặp vô hạn khi lịch lỗi
         for ($i = 0; $i < 730 && count($result) < $count; $i++, $day = $day->copy()->addDay()) {
+            $started = array_column(self::slotsOnDate($student, $day->toDateString()), 'id');
             foreach ($slotsOn($day->dayOfWeek) as $slot) {
-                if ($isMarked($day, $slot) || self::offReason($student, $day->toDateString(), $slot, $periods)) {
+                if (! in_array($slot['id'], $started, true) || $isMarked($day, $slot) || self::offReason($student, $day->toDateString(), $slot, $periods)) {
                     continue;
                 }
                 $result[] = ['date' => $day->copy(), 'slot' => $slot];

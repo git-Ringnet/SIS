@@ -53,7 +53,8 @@ class TeacherCheckinApiController extends Controller
         // Từng ca của học viên trong ngày; ca có giáo viên mới sinh ca dạy
         $entries = $students->flatMap(fn ($st) => array_map(
             fn ($slot) => ['student' => $st, 'slot' => $slot],
-            array_filter(StudentSchedule::slotsOn($st, $carbonDate->dayOfWeek), fn ($slot) => ! empty($slot['teacher'])),
+            // Không sinh ca dạy cho buổi học viên chưa bắt đầu học (tránh tính tiền buổi không có thật)
+            array_filter(StudentSchedule::slotsOnDate($st, $date), fn ($slot) => ! empty($slot['teacher'])),
         ));
 
         // Ca dạy = gom các học viên cùng giáo viên + giờ + phòng + cơ sở

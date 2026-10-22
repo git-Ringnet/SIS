@@ -97,11 +97,12 @@ class AttendanceApiController extends Controller
 
         // Mỗi ca học trong ngày là một dòng (một học viên có thể có nhiều ca / ngày), cộng buổi học lẻ / học bù
         $periods = TeacherLeaves::all();
-        $studentsFormatted = $students->flatMap(function ($st) use ($dayAttendances, $todayLessons, $dayOfWeek, $dateStr, $periods) {
+        $studentsFormatted = $students->flatMap(function ($st) use ($dayAttendances, $todayLessons, $dateStr, $periods) {
             $records = $dayAttendances->get($st->id, collect());
             $rows = [];
 
-            foreach (StudentSchedule::slotsOn($st, $dayOfWeek) as $i => $slot) {
+            // Chỉ các ca đã bắt đầu học (không hiện buổi trước "Ngày bắt đầu học" / trước ngày bắt đầu của khóa thêm)
+            foreach (StudentSchedule::slotsOnDate($st, $dateStr) as $i => $slot) {
                 $rows[] = ['slot_id' => $slot['id'], 'first' => $i === 0, 'room' => $slot['room'], 'teacher' => $slot['teacher'],
                     'shift_time' => StudentSchedule::timeLabel($slot), 'is_single_lesson' => false, 'is_makeup' => false,
                     'off' => StudentSchedule::offReason($st, $dateStr, $slot, $periods)];
@@ -111,7 +112,7 @@ class AttendanceApiController extends Controller
                     'shift_time' => $lesson['time'] ?? null, 'is_single_lesson' => true, 'is_makeup' => ! empty($lesson['is_makeup']), 'off' => null];
             }
             // Dữ liệu cũ chỉ có lịch dạng chữ (schedule_info) → một dòng chung cho cả ngày
-            if ($rows === []) {
+            if ($rows === [] && StudentSchedule::slots($st) === [] && ! ($st->join_date && $st->join_date->toDateString() > $dateStr)) {
                 $rows[] = ['slot_id' => null, 'first' => true, 'room' => $st->room, 'teacher' => $st->teacher, 'shift_time' => null,
                     'is_single_lesson' => false, 'is_makeup' => false, 'off' => null];
             }
@@ -448,5 +449,32 @@ class AttendanceApiController extends Controller
         return response()->json([
             'message' => "Đã đặt buổi học lẻ ngày {$validated['date']} cho học viên {$student->name}!",
         ], 201);
+    }
+
+    /**
+     * Xóa buổi học lẻ / học bù đặt nhầm. Buổi đã điểm danh phải hoàn tác trước để trả lại buổi đã trừ.
+     */
+    public function destroySingleLesson(Request $request, string $id): JsonResponse
+    {
+        if ($denied = $this->forbidTeacher($request)) {
+            return $denied;
+        }
+
+        $lesson = SingleLessons::find($id);
+        if (! $lesson) {
+            return response()->json(['message' => 'Không tìm thấy buổi học lẻ / học bù này.'], 404);
+        }
+
+        if (Attendance::where('student_id', $lesson['student_id'])->where('slot_id', $id)->exists()) {
+            return response()->json(['message' => 'Buổi này đã được điểm danh. Hoàn tác điểm danh trước khi xóa buổi.'], 422);
+        }
+
+        SingleLessons::remove($id);
+        $label = ! empty($lesson['is_makeup']) ? 'buổi học bù' : 'buổi học lẻ';
+        $student = Student::find($lesson['student_id']);
+
+        return response()->json([
+            'message' => "Đã xóa {$label} ngày ".Carbon::parse($lesson['date'])->format('d/m/Y').($student ? " của học viên {$student->name}" : '').'.',
+        ]);
     }
 }

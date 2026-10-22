@@ -24,6 +24,7 @@ import {
   Mail,
   Info,
   CalendarOff,
+  Trash2,
 } from 'lucide-vue-next';
 
 // Bộ lọc
@@ -331,6 +332,19 @@ const submitSingleLesson = async () => {
     await fetchData();
   } catch (err) {
     notify.apiError(err, err.message);
+  }
+};
+
+// Xóa buổi học lẻ / học bù đặt nhầm (slot_id của dòng là id buổi)
+const deleteSingleLesson = async (st) => {
+  const label = st.is_makeup ? 'buổi học bù' : 'buổi học lẻ';
+  if (!confirm(`Xóa ${label} ${st.shift_time || ''} của học viên ${st.name}?`)) return;
+  try {
+    const res = await dailyAttendanceApi.deleteSingleLesson(st.slot_id);
+    notify.success(res.data.message);
+    await fetchData();
+  } catch (err) {
+    notify.apiError(err, `Không xóa được ${label}`);
   }
 };
 
@@ -715,6 +729,14 @@ const openMessageModal = (student) => {
                 title="Hoàn tác trạng thái chưa điểm danh"
                 class="rounded-xl border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 cursor-pointer">
                 <RotateCcw class="h-3.5 w-3.5" />
+              </button>
+
+              <!-- Nút [ Xóa buổi học lẻ / học bù ] đặt nhầm -->
+              <button v-if="st.is_single_lesson" type="button" @click="deleteSingleLesson(st)"
+                :disabled="st.status !== 'not_checked'"
+                :title="st.status !== 'not_checked' ? 'Hoàn tác điểm danh trước khi xóa buổi' : (st.is_makeup ? 'Xóa buổi học bù' : 'Xóa buổi học lẻ')"
+                class="rounded-xl border border-rose-200 p-1.5 text-rose-600 hover:bg-rose-50 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
+                <Trash2 class="h-3.5 w-3.5" />
               </button>
               </template>
               <span v-else-if="st.status === 'not_checked'" class="text-[11px] text-slate-400 italic">Chờ giáo vụ điểm danh</span>
