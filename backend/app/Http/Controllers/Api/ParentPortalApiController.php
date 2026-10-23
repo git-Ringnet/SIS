@@ -221,8 +221,8 @@ class ParentPortalApiController extends Controller
                 'status' => $att->status,
                 'status_label' => match (true) {
                     $att->status === 'present' => 'Đã học',
-                    $att->status === 'absent_with_leave' && ! $deducts => 'Nghỉ có phép',
-                    $att->status === 'absent_with_leave' => 'Nghỉ có phép (hết lượt nghỉ)',
+                    $att->status === 'absent_with_leave' && ! $deducts => 'Vắng có phép',
+                    $att->status === 'absent_with_leave' => 'Vắng có phép (hết lượt nghỉ)',
                     $att->status === 'absent_without_leave' => 'Vắng không phép',
                     default => 'Đã điểm danh',
                 },
@@ -257,13 +257,14 @@ class ParentPortalApiController extends Controller
             ]);
         }
 
-        // Buổi nghỉ có phép không trừ buổi thì chờ trung tâm xếp buổi bù, không tự thêm buổi vào cuối lịch.
-        // Mỗi buổi bù đã đặt (đã học hay sắp tới) bù cho một buổi nghỉ.
-        $excused = $attendances->filter(fn ($a) => $a->status === 'absent_with_leave' && ! $a->deductsSession())->count();
-        $pendingMakeup = max(0, $excused - $lessons->filter(fn ($l) => ! empty($l['is_makeup']))->count());
+        // Buổi đã học trước khi dùng hệ thống (đã trừ vào số buổi còn lại nhưng không có điểm danh)
+        $priorSessions = max(0, ((int) $student->total_sessions - (int) $student->remaining_sessions)
+            - $attendances->filter(fn ($a) => $a->status === 'present' || $a->deductsSession())->count());
 
-        // Buổi sắp tới theo lịch tuần cho đủ số buổi còn lại (buổi bù đã đặt / chờ xếp cũng dùng số buổi còn lại)
-        $regularCount = max(0, (int) $student->remaining_sessions - $upcomingLessons->count() - $pendingMakeup);
+        // Buổi sắp tới theo lịch tuần cho đủ tổng số buổi của học viên
+        // (trừ buổi học trước khi dùng hệ thống, các buổi đã có điểm danh và buổi lẻ/bù đã đặt)
+        $total = (int) ($student->total_sessions ?: $student->remaining_sessions);
+        $regularCount = max(0, $total - $priorSessions - $attendances->count() - $upcomingLessons->count());
         $planned = StudentSchedule::upcomingSessions($student, $regularCount);
         foreach ($planned as ['date' => $date, 'slot' => $slot]) {
             $rows[] = $this->row([
@@ -301,21 +302,17 @@ class ParentPortalApiController extends Controller
 
         usort($rows, fn ($a, $b) => $a['sort'] <=> $b['sort']);
 
-        for ($i = 0; $i < min($pendingMakeup, max(0, (int) $student->remaining_sessions - $upcomingLessons->count())); $i++) {
-            $rows[] = $this->row(['key' => 'pending-makeup-'.$i, 'status' => 'upcoming', 'status_label' => 'Chờ xếp buổi bù',
-                'note' => 'Bù cho buổi nghỉ có phép, trung tâm sẽ báo lịch học bù']);
-        }
-
         // Học viên chưa có lịch tuần: các buổi còn lại chưa có ngày dự kiến
         for ($i = count($planned); $i < $regularCount; $i++) {
             $rows[] = $this->row(['key' => 'todo-'.$i, 'status' => 'upcoming', 'status_label' => 'Chưa học', 'note' => 'Buổi học trong kế hoạch đào tạo']);
         }
 
-        // Đánh số buổi: chỉ buổi trừ vào số buổi học. Buổi đã học trước khi dùng hệ thống (không có điểm danh) tính ở đầu.
-        $number = max(0, ((int) $student->total_sessions - (int) $student->remaining_sessions)
-            - $attendances->filter(fn ($a) => $a->deductsSession())->count());
+        // Đánh số buổi: mọi buổi học (đã học, vắng có phép, vắng không phép, buổi bù, buổi sắp tới) đều được đánh số "Buổi n".
+        // Chỉ các ngày trung tâm / giáo viên nghỉ (status = 'off') là không đánh số.
+        // Buổi đã học trước khi dùng hệ thống tính ở đầu.
+        $number = $priorSessions;
         foreach ($rows as &$row) {
-            if ($row['deducts_session'] || $row['status'] === 'upcoming') {
+            if ($row['status'] !== 'off') {
                 $row['session_number'] = ++$number;
             }
             unset($row['sort']);

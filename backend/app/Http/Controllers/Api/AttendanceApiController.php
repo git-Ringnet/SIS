@@ -55,8 +55,8 @@ class AttendanceApiController extends Controller
 
         // Lấy tất cả học viên có thể học trong ngày này (học bù, học lẻ, hoặc theo lịch)
         $singleLessons = SingleLessons::all();
-        // Buổi học lẻ trong ngày, theo student_id (dùng phòng / giáo viên / giờ thật của buổi đó)
-        $todayLessons = collect($singleLessons)->where('date', $dateStr)->keyBy('student_id');
+        // Buổi học lẻ trong ngày, theo student_id (dùng phòng / giáo viên / giờ thật của buổi đó); một ngày có thể có nhiều buổi
+        $todayLessons = collect($singleLessons)->where('date', $dateStr)->groupBy('student_id');
         $singleStudentIds = $todayLessons->keys()->all();
 
         // Từ khoá lịch kiểu cũ (schedule_info dạng chữ) để tương thích dữ liệu chưa nhập lịch theo thứ
@@ -107,7 +107,7 @@ class AttendanceApiController extends Controller
                     'shift_time' => StudentSchedule::timeLabel($slot), 'is_single_lesson' => false, 'is_makeup' => false,
                     'off' => StudentSchedule::offReason($st, $dateStr, $slot, $periods)];
             }
-            if ($lesson = $todayLessons->get($st->id)) {
+            foreach ($todayLessons->get($st->id, []) as $lesson) {
                 $rows[] = ['slot_id' => $lesson['id'], 'first' => $rows === [], 'room' => $lesson['room'] ?? null, 'teacher' => $lesson['teacher'] ?? null,
                     'shift_time' => $lesson['time'] ?? null, 'is_single_lesson' => true, 'is_makeup' => ! empty($lesson['is_makeup']), 'off' => null];
             }

@@ -257,7 +257,7 @@ class Student extends Model
                     'start_date' => $this->join_date ? Carbon::parse($this->join_date)->format('Y-m-d') : null,
                     'end_date' => $this->end_date ? Carbon::parse($this->end_date)->format('Y-m-d') : null,
                     'schedule_info' => $this->schedule_info ?? '1 buổi/tuần',
-                    'sessions_per_week' => '1 buổi/tuần',
+                    'sessions_per_week' => '',
                     'allowed_absences' => (int) ($this->allowed_absences ?? 3),
                     'absences_used' => (int) ($this->absences_used ?? 0),
                     'status' => $this->remaining_sessions <= 0 ? 'completed' : 'active',
@@ -296,15 +296,15 @@ class Student extends Model
 
         // Ngày kết thúc theo kế hoạch: từ ngày bắt đầu khóa, đủ tổng số buổi theo lịch tuần của khóa.
         // Cố định, không lùi theo buổi nghỉ phép / ngày nghỉ / buổi bù (trung tâm hẹn ngày này với phụ huynh).
-        // Tính từ ngày bắt đầu nhập ở "Thời gian khóa học", chưa nhập thì ngày bắt đầu học của học viên.
         $estimate = function () use ($item) {
-            $from = ! empty($item['start_date']) ? Carbon::parse($item['start_date'])->toDateString() : $this->courseItemFrom($item);
+            $from = $this->plannedFrom($item);
 
             return $from ? StudentSchedule::plannedEndDate($this, $item, $from)?->format('d/m/Y') : null;
         };
 
         // Ưu tiên: ngày đã nhập của khóa → tự tính theo khóa → ngày kết thúc chung của học viên
-        $end = $format($item['end_date'] ?? null);
+        // Không có khóa (khóa của hóa đơn không còn trong danh sách) thì ngày kết thúc chung của học viên là ngày đã nhập
+        $end = $format($item === null ? $this->end_date : ($item['end_date'] ?? null));
         $estimated = false;
         if (! $end && ($end = $estimate())) {
             $estimated = true;
@@ -323,9 +323,8 @@ class Student extends Model
 
     /**
      * Ngày bắt đầu thật của một khóa (học nhiều khóa thì mỗi khóa một ngày):
-     * - đã học: ngày buổi điểm danh đầu tiên của khóa (bản ghi cũ chưa gắn khóa được tính cho khóa đầu tiên);
-     * - chưa học: buổi đầu tiên theo lịch của khóa (dự kiến), tính từ ngày bắt đầu nhập cho khóa
-     *   (khóa đầu tiên = "Ngày bắt đầu học" của học viên, khóa đăng ký thêm = ngày bắt đầu của khóa).
+     * ngày bắt đầu đã nhập cho khóa (vd 09/10 dù buổi T5 đầu tiên là 15/10; lịch và ngày kết thúc vẫn đếm từ buổi T5),
+     * hoặc ngày buổi điểm danh đầu tiên nếu sớm hơn (bản ghi cũ chưa gắn khóa được tính cho khóa đầu tiên).
      *
      * @return array{date: ?string, estimated: bool} ngày dạng d/m/Y
      */
@@ -340,16 +339,19 @@ class Student extends Model
             ->filter(fn ($a) => ($a->course_item_id !== null && (int) $a->course_item_id === $itemId) || ($isFirstCourse && $a->course_item_id === null))
             ->sortBy('attended_at')
             ->first();
-        if ($first) {
-            return ['date' => $first->attended_at->format('d/m/Y'), 'estimated' => false];
-        }
+        // Hiện đúng ngày bắt đầu đã nhập (như popup "Thời gian khóa học"); đã điểm danh sớm hơn ngày đó thì lấy ngày điểm danh thật
+        $entered = $this->plannedFrom($item) ?? $from;
+        $date = collect([$entered, $first?->attended_at->toDateString()])->filter()->min();
 
-        $planned = StudentSchedule::upcomingSessions($this, 1, array_column(StudentSchedule::courseSlots($this, $item), 'id'), $from);
-        if ($planned !== []) {
-            return ['date' => $planned[0]['date']->format('d/m/Y'), 'estimated' => true];
-        }
+        return ['date' => $date ? Carbon::parse($date)->format('d/m/Y') : null, 'estimated' => false];
+    }
 
-        return ['date' => $from ? Carbon::parse($from)->format('d/m/Y') : null, 'estimated' => false];
+    /**
+     * Mốc tính lịch dự kiến của khóa: ngày bắt đầu nhập ở "Thời gian khóa học", chưa nhập thì ngày bắt đầu học của học viên.
+     */
+    private function plannedFrom(?array $item): ?string
+    {
+        return ! empty($item['start_date']) ? Carbon::parse($item['start_date'])->toDateString() : $this->courseItemFrom($item);
     }
 
     private function isFirstCourse(?array $item): bool

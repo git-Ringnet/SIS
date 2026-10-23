@@ -186,7 +186,7 @@ class MultiSlotScheduleTest extends TestCase
         $student->refresh();
 
         // Guitar: 19/10, 25/10, 26/10, 01/11 ... buổi thứ 12 là CN 29/11
-        $this->assertSame(['start' => null, 'start_estimated' => true, 'end' => '29/11/2026', 'end_estimated' => true], [...$student->courseDates($this->guitar->id), 'start' => null]);
+        $this->assertSame(['start' => null, 'start_estimated' => false, 'end' => '29/11/2026', 'end_estimated' => true], [...$student->courseDates($this->guitar->id), 'start' => null]);
         // Piano chỉ học T2 15:00: 10 buổi → T2 21/12
         $this->assertSame('21/12/2026', $student->courseDates($this->piano->id)['end']);
 

@@ -92,7 +92,7 @@ class ParentPortalTest extends TestCase
             'parent_phone' => '0908123456',
             'course_id' => $course->id,
             'total_sessions' => 12,
-            'remaining_sessions' => 9,
+            'remaining_sessions' => 10, // 2 buổi có mặt bị trừ, buổi vắng có phép không trừ
             'status' => 'active',
         ]);
 
@@ -136,7 +136,7 @@ class ParentPortalTest extends TestCase
             'verified' => true,
             'stats' => [
                 'total_sessions' => 12,
-                'remaining_sessions' => 9,
+                'remaining_sessions' => 10,
                 'total_absences' => 1,
                 'absent_with_leave' => 1,
             ],

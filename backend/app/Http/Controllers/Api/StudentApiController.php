@@ -235,8 +235,14 @@ class StudentApiController extends Controller
             ]);
         }
 
+        $students = $query->get();
+        foreach ($students as $st) {
+            $st->setAttribute('course_dates', collect($st->registered_courses_list)
+                ->mapWithKeys(fn ($item) => [$item['id'] => $st->courseItemDates($item)]));
+        }
+
         return response()->json([
-            'students' => $query->get(),
+            'students' => $students,
             'courses' => $courses,
             'centers' => $centers,
             'teachers' => $teachers,
@@ -369,8 +375,33 @@ class StudentApiController extends Controller
             ...$this->scheduleRules(),
         ]);
 
+        $slotsBefore = StudentSchedule::slots($student);
         $student->update([...$validated, ...$this->scheduleAttributes($validated)]);
+
+        // Đồng bộ lại registered_courses khi lịch học thay đổi:
+        // cập nhật số buổi/tuần và mô tả lịch cho các khóa không chọn ca riêng (schedule_ids rỗng).
+        // Lịch không đổi hoặc bị xóa hết thì giữ nguyên số buổi/tuần đã nhập tay.
+        $slots = StudentSchedule::slots($student);
+        $slotCount = count($slots);
+        $courses = $student->registered_courses;
+        if ($slotCount > 0 && $slots != $slotsBefore &&! empty($courses) && is_array($courses)) {
+            $changed = false;
+            foreach ($courses as $key => $cItem) {
+                if (empty($cItem['schedule_ids'])) {
+                    $courses[$key]['schedule_info'] = "{$slotCount} buổi/tuần";
+                    $courses[$key]['sessions_per_week'] = (string) $slotCount;
+                    $changed = true;
+                }
+            }
+            if ($changed) {
+                $student->registered_courses = $courses;
+                $student->save();
+            }
+        }
+
         $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
+        $student->setAttribute('course_dates', collect($student->registered_courses_list)
+            ->mapWithKeys(fn ($item) => [$item['id'] => $student->courseItemDates($item)]));
 
         return response()->json([
             'message' => "Cập nhật học viên {$student->name} thành công!",
@@ -829,6 +860,8 @@ class StudentApiController extends Controller
         $student->remaining_sessions = array_sum(array_column($list, 'remaining_sessions'));
         $student->save();
         $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
+        $student->setAttribute('course_dates', collect($student->registered_courses_list)
+            ->mapWithKeys(fn ($item) => [$item['id'] => $student->courseItemDates($item)]));
 
         return response()->json([
             'message' => 'Cập nhật khóa học thành công!',

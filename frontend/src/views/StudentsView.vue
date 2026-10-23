@@ -310,7 +310,7 @@ const recomputeAddCourseEnd = (student) => {
   form.end_date = computeCourseEndDate(
     form.start_date,
     Number(form.total_sessions),
-    Number(form.sessions_per_week) || slots.length || 1,
+    form.sessions_per_week ? Number(form.sessions_per_week) : null,
     slots.map((x) => x.day),
   );
 };
@@ -518,11 +518,14 @@ const savingCourseDates = ref(false);
 const toIsoDate = (val) => (val ? String(val).slice(0, 10) : '');
 
 // Ngày kết thúc dự kiến (cố định, không lùi theo nghỉ phép / buổi bù), cùng cách tính với backend:
-// có lịch học thì đếm lần lượt các buổi theo lịch từ ngày bắt đầu đến đủ tổng buổi;
-// chưa có lịch thì số tuần = tổng buổi ÷ buổi/tuần (làm tròn lên), lấy ngày cuối của tuần cuối.
+// - Nếu khóa học đã có thứ rồi thì ngày kết thúc tính theo thứ đó: đếm lần lượt các ca từ ngày bắt đầu;
+// - Chưa có thứ: tính theo số buổi/tuần (buổi cuối cùng thứ với ngày bắt đầu ở tuần cuối).
 const computeCourseEndDate = (startIso, totalSessions, perWeek, classDays) => {
-  if (!startIso || !totalSessions || !perWeek) return '';
+  if (!startIso || !totalSessions) return '';
   const days = (classDays || []).map(Number);
+  const numPerWeek = Number(perWeek) || null;
+
+  // Nếu khóa học đã có thứ rồi thì ngày kết thúc tính theo thứ đó:
   if (days.length) {
     const d = new Date(`${startIso}T00:00:00`);
     for (let count = 0, i = 0; i < 3650; i++, d.setDate(d.getDate() + 1)) {
@@ -531,14 +534,19 @@ const computeCourseEndDate = (startIso, totalSessions, perWeek, classDays) => {
     }
     return '';
   }
-  const weeks = Math.ceil(totalSessions / perWeek);
-  const end = new Date(`${startIso}T00:00:00`);
-  end.setDate(end.getDate() + (weeks - 1) * 7 + 6);
-  return toLocalDateString(end);
+
+  // Chưa có thứ: tính theo số buổi/tuần (buổi cuối cùng thứ với ngày bắt đầu ở tuần cuối)
+  const weeks = Math.ceil(totalSessions / (numPerWeek || 1));
+  const endDate = new Date(`${startIso}T00:00:00`);
+  endDate.setDate(endDate.getDate() + (weeks - 1) * 7);
+  return toLocalDateString(endDate);
 };
 
-const coursePerWeek = (student, courseItem) =>
-  Number(courseItem.sessions_per_week) || courseSlots(student, courseItem).length || 1;
+// Số buổi/tuần khi khóa chưa có thứ (cùng cách với backend): số đã nhập, chưa nhập thì đọc "n buổi" trong mô tả lịch
+const coursePerWeek = (student, courseItem) => {
+  const m = String(courseItem.schedule_info ?? student.schedule_info ?? '').match(/(\d+)\s*buổi/u);
+  return Number(courseItem.sessions_per_week) || (m ? Number(m[1]) : null);
+};
 
 // Ngày kết thúc hiển thị trên thẻ khóa: ngày đã lưu, nếu chưa có thì tự tính.
 // Ngày bắt đầu / kết thúc hiển thị trên thẻ khóa: backend tính theo từng khóa (cùng cách tính với Cổng phụ huynh):
@@ -556,13 +564,14 @@ const courseDatesLabel = (student, courseItem) => {
 };
 
 const courseEndDate = (student, courseItem) =>
-  toIsoDate(courseItem.end_date || student.end_date) ||
+  toIsoDate(courseItem.end_date) ||
   computeCourseEndDate(
     toIsoDate(courseItem.start_date || student.join_date),
     Number(courseItem.total_sessions),
     coursePerWeek(student, courseItem),
     courseSlots(student, courseItem).map((x) => x.day),
-  );
+  ) ||
+  toIsoDate(student.end_date);
 
 const openCourseDates = (student, courseItem) => {
   const key = `${student.id}_${courseItem.id}`;
@@ -570,7 +579,7 @@ const openCourseDates = (student, courseItem) => {
     courseDatesState.value.key = null;
     return;
   }
-  const perWeek = Number(courseItem.sessions_per_week) || (courseSlots(student, courseItem).length || null);
+  const perWeek = courseItem.sessions_per_week ? Number(courseItem.sessions_per_week) : null;
   courseDatesState.value = {
     key,
     student,
@@ -578,14 +587,19 @@ const openCourseDates = (student, courseItem) => {
     start: toIsoDate(courseItem.start_date || student.join_date),
     perWeek,
     end: courseEndDate(student, courseItem),
-    endTouched: !!(courseItem.end_date || student.end_date),
+    endTouched: !!courseItem.end_date,
   };
 };
 
 const recomputeCourseEnd = () => {
   const st = courseDatesState.value;
   if (st.endTouched || !st.item) return;
-  st.end = computeCourseEndDate(st.start, Number(st.item.total_sessions), Number(st.perWeek), courseSlots(st.student, st.item).map((x) => x.day));
+  st.end = computeCourseEndDate(
+    st.start,
+    Number(st.item.total_sessions),
+    Number(st.perWeek) || coursePerWeek(st.student, { ...st.item, sessions_per_week: '' }),
+    courseSlots(st.student, st.item).map((x) => x.day),
+  );
 };
 
 const submitCourseDates = async () => {
@@ -599,7 +613,12 @@ const submitCourseDates = async () => {
       end_date: endTouched ? end || null : null,
     });
     notify.success('Đã lưu thời gian khóa học!');
-    if (res.data.student) Object.assign(student, res.data.student);
+    if (res.data.student) {
+      Object.assign(student, res.data.student);
+      if (res.data.student.course_dates) {
+        student.course_dates = res.data.student.course_dates;
+      }
+    }
     courseDatesState.value.key = null;
     fetchData();
   } catch (err) {

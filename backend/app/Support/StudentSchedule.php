@@ -150,20 +150,32 @@ class StudentSchedule
     public static function plannedEndDate(Student $student, ?array $item, string $from): ?Carbon
     {
         $total = (int) ($item['total_sessions'] ?? $student->total_sessions);
-        $perDay = array_count_values(array_map(fn ($s) => (int) $s['day'], self::courseSlots($student, $item)));
-        if ($total <= 0 || $perDay === []) {
+        if ($total <= 0) {
             return null;
         }
 
-        $day = Carbon::parse($from)->startOfDay();
-        for ($count = 0, $i = 0; $i < 3650; $i++, $day = $day->copy()->addDay()) {
-            $count += $perDay[$day->dayOfWeek] ?? 0;
-            if ($count >= $total) {
-                return $day;
+        $slots = self::courseSlots($student, $item);
+        $perDay = array_count_values(array_map(fn ($s) => (int) $s['day'], $slots));
+
+        // Nếu khóa học đã có thứ rồi thì ngày kết thúc tính theo thứ đó:
+        // đếm lần lượt các ca theo lịch từ ngày bắt đầu đến khi đủ tổng số buổi
+        if ($perDay !== []) {
+            $day = Carbon::parse($from)->startOfDay();
+            for ($count = 0, $i = 0; $i < 3650; $i++, $day = $day->copy()->addDay()) {
+                $count += $perDay[$day->dayOfWeek] ?? 0;
+                if ($count >= $total) {
+                    return $day;
+                }
             }
+
+            return null;
         }
 
-        return null;
+        // Chưa có thứ: tính theo số buổi/tuần (buổi cuối cùng thứ với ngày bắt đầu ở tuần cuối)
+        $perWeek = (int) ($item['sessions_per_week'] ?? 0)
+            ?: (preg_match('/(\d+)\s*buổi/u', (string) ($item['schedule_info'] ?? $student->schedule_info), $m) ? (int) $m[1] : 1);
+
+        return Carbon::parse($from)->startOfDay()->addWeeks((int) ceil($total / max(1, $perWeek)) - 1);
     }
 
     public static function find(Student $student, ?string $slotId): ?array
