@@ -483,56 +483,56 @@ const openMessageModal = (student) => {
       <!-- 5 Metric Cards (Khớp 100% màu sắc và viền trong hình tham khảo) -->
       <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 pt-2">
         <!-- 1. HỌC VIÊN HÔM NAY (Viền tím) -->
-        <div class="rounded-xl border border-indigo-300 bg-indigo-50/30 p-3 space-y-1">
-          <div class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-indigo-900">
+        <div class="rounded-xl border border-indigo-300 bg-indigo-50/30 p-3 space-y-1 dark:bg-slate-900/80 dark:border-indigo-500/40">
+          <div class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-indigo-900 dark:text-indigo-300">
             <span class="h-2 w-2 rounded-full bg-indigo-600"></span>
             <span>HỌC VIÊN HÔM NAY</span>
           </div>
-          <div class="text-2xl font-black text-indigo-700">
+          <div class="text-2xl font-black text-indigo-700 dark:text-indigo-400">
             {{ metrics.total_today || 0 }}
           </div>
         </div>
 
         <!-- 2. ĐI HỌC THỰC TẾ (Viền xanh dương) -->
-        <div class="rounded-xl border border-blue-300 bg-blue-50/30 p-3 space-y-1">
-          <div class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-blue-900">
+        <div class="rounded-xl border border-blue-300 bg-blue-50/30 p-3 space-y-1 dark:bg-slate-900/80 dark:border-blue-500/40">
+          <div class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-blue-900 dark:text-blue-300">
             <span class="h-2 w-2 rounded-full bg-blue-600"></span>
             <span>ĐI HỌC THỰC TẾ</span>
           </div>
-          <div class="text-2xl font-black text-blue-700">
+          <div class="text-2xl font-black text-blue-700 dark:text-blue-400">
             {{ metrics.actual_present || 0 }}
           </div>
         </div>
 
         <!-- 3. ĐANG TẠM DỪNG (Viền vàng / cam) -->
-        <div class="rounded-xl border border-amber-300 bg-amber-50/30 p-3 space-y-1">
-          <div class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-amber-900">
+        <div class="rounded-xl border border-amber-300 bg-amber-50/30 p-3 space-y-1 dark:bg-slate-900/80 dark:border-amber-500/40">
+          <div class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-amber-900 dark:text-amber-300">
             <span class="h-2 w-2 rounded-full bg-amber-500"></span>
             <span>ĐANG TẠM DỪNG</span>
           </div>
-          <div class="text-2xl font-black text-amber-700">
+          <div class="text-2xl font-black text-amber-700 dark:text-amber-400">
             {{ metrics.paused || 0 }}
           </div>
         </div>
 
         <!-- 4. HỌC SINH VẮNG (Viền đỏ / rose) -->
-        <div class="rounded-xl border border-rose-300 bg-rose-50/30 p-3 space-y-1">
-          <div class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-rose-900">
+        <div class="rounded-xl border border-rose-300 bg-rose-50/30 p-3 space-y-1 dark:bg-slate-900/80 dark:border-rose-500/40">
+          <div class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-rose-900 dark:text-rose-300">
             <span class="h-2 w-2 rounded-full bg-rose-600"></span>
             <span>HỌC SINH VẮNG</span>
           </div>
-          <div class="text-2xl font-black text-rose-700">
+          <div class="text-2xl font-black text-rose-700 dark:text-rose-400">
             {{ metrics.absent || 0 }}
           </div>
         </div>
 
         <!-- 5. CHƯA ĐIỂM DANH (Viền xanh teal / ngọc) -->
-        <div class="rounded-xl border border-teal-300 bg-teal-50/30 p-3 space-y-1">
-          <div class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-teal-900">
+        <div class="rounded-xl border border-teal-300 bg-teal-50/30 p-3 space-y-1 dark:bg-slate-900/80 dark:border-teal-500/40">
+          <div class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-teal-900 dark:text-teal-300">
             <span class="h-2 w-2 rounded-full bg-teal-600"></span>
             <span>CHƯA ĐIỂM DANH</span>
           </div>
-          <div class="text-2xl font-black text-teal-700">
+          <div class="text-2xl font-black text-teal-700 dark:text-teal-400">
             {{ metrics.not_checked || 0 }}
           </div>
         </div>
@@ -605,12 +605,12 @@ const openMessageModal = (student) => {
             <div class="space-y-1">
               <div class="flex items-center gap-2 flex-wrap">
                 <router-link :to="`/students/${st.id}`"
-                  class="font-bold text-slate-900 hover:text-blue-600 text-sm sm:text-base uppercase">
+                  class="font-bold text-slate-900 hover:text-blue-600 text-sm sm:text-base uppercase dark:text-white dark:hover:text-blue-400">
                   {{ st.name }}
                 </router-link>
-                <span class="text-xs font-mono text-slate-400">({{ st.code }})</span>
+                <span class="text-xs font-mono text-slate-400 dark:text-white/60">({{ st.code }})</span>
                 <span v-if="st.is_makeup"
-                  class="rounded-full bg-sky-100 text-sky-800 border border-sky-200 px-2 py-0.5 text-[11px] font-bold">
+                  class="rounded-full bg-sky-100 text-sky-800 border border-sky-200 px-2 py-0.5 text-[11px] font-bold dark:bg-sky-950/60 dark:text-sky-300 dark:border-sky-700/60">
                   Buổi bù
                 </span>
 
@@ -620,64 +620,68 @@ const openMessageModal = (student) => {
                   <Mail class="h-3 w-3" /> PH xin nghỉ qua Cổng
                 </span>
                 <span v-else-if="st.status === 'present'"
-                  class="rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 text-xs font-bold inline-flex items-center gap-1">
+                  class="rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 text-xs font-bold inline-flex items-center gap-1 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-700/60">
                   <CheckCircle2 class="h-3 w-3" /> Đi học thực tế
                 </span>
                 <span v-else-if="st.status === 'absent_with_leave'"
-                  class="rounded-full bg-amber-100 text-amber-800 border border-amber-200 px-2.5 py-0.5 text-xs font-bold inline-flex items-center gap-1">
+                  class="rounded-full bg-amber-100 text-amber-800 border border-amber-200 px-2.5 py-0.5 text-xs font-bold inline-flex items-center gap-1 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-700/60">
                   <AlertTriangle class="h-3 w-3" /> Vắng có phép
                 </span>
                 <span v-else-if="st.status === 'absent_without_leave'"
-                  class="rounded-full bg-rose-100 text-rose-800 border border-rose-200 px-2.5 py-0.5 text-xs font-bold inline-flex items-center gap-1">
+                  class="rounded-full bg-rose-100 text-rose-800 border border-rose-200 px-2.5 py-0.5 text-xs font-bold inline-flex items-center gap-1 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-700/60">
                   <XCircle class="h-3 w-3" /> Vắng không phép
                 </span>
                 <span v-else-if="st.status === 'paused'"
-                  class="rounded-full bg-slate-200 text-slate-700 px-2.5 py-0.5 text-xs font-bold">
+                  class="rounded-full bg-slate-200 text-slate-700 px-2.5 py-0.5 text-xs font-bold dark:bg-slate-800 dark:text-white/80">
                   Đang tạm dừng
                 </span>
                 <span v-else-if="st.status === 'off'"
-                  class="rounded-full bg-violet-100 text-violet-800 border border-violet-200 px-2.5 py-0.5 text-xs font-bold inline-flex items-center gap-1">
+                  class="rounded-full bg-violet-100 text-violet-800 border border-violet-200 px-2.5 py-0.5 text-xs font-bold inline-flex items-center gap-1 dark:bg-violet-950/60 dark:text-violet-300 dark:border-violet-700/60">
                   <CalendarOff class="h-3 w-3" /> {{ st.off_label }}
                 </span>
                 <span v-else
-                  class="rounded-full bg-teal-100 text-teal-800 border border-teal-200 px-2.5 py-0.5 text-xs font-semibold">
+                  class="rounded-full bg-teal-100 text-teal-800 border border-teal-200 px-2.5 py-0.5 text-xs font-semibold dark:bg-teal-950/60 dark:text-teal-300 dark:border-teal-700/60">
                   Chưa điểm danh
                 </span>
               </div>
 
-              <div class="text-xs text-slate-600 flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                <span v-if="st.course" class="font-semibold text-blue-700">
+              <div class="text-xs text-slate-600 flex flex-wrap items-center gap-x-3 gap-y-0.5 dark:text-white/70">
+                <span v-if="st.course" class="font-semibold text-blue-700 dark:text-blue-400">
                   [{{ st.course.name }}]
                 </span>
-                <span>Phòng: <strong class="text-slate-800">{{ st.room }}</strong></span>
-                <span>Giờ: <strong class="text-slate-800">{{ st.shift_time }}</strong></span>
-                <span>GV: {{ st.teacher }}</span>
+                <span>Phòng: <strong class="text-slate-800 dark:text-white">{{ st.room }}</strong></span>
+                <span>Giờ: <strong class="text-slate-800 dark:text-white">{{ st.shift_time }}</strong></span>
+                <span>GV: <span class="dark:text-white/90">{{ st.teacher }}</span></span>
                 <span>
-                  <!-- Buổi hôm nay đã tính (đi học / vắng bị trừ buổi): "Buổi N". Chưa điểm danh, nghỉ không trừ, buổi off: chỉ hiện số đã học -->
-                  <template v-if="st.deducts_session">
-                    Tiến độ: <strong class="text-indigo-700">Buổi {{ st.current_session }}/{{ st.total_sessions }}</strong>
+                  <!-- Buổi chính thức đã tính (đi học / vắng bị trừ buổi): "Buổi N" như Cổng phụ huynh. Học bù / học lẻ không
+                       có số buổi chính thức. Chưa điểm danh, nghỉ không trừ, buổi off: chỉ hiện số đã học -->
+                  <template v-if="st.deducts_session && st.current_session">
+                    Tiến độ: <strong class="text-indigo-700 dark:text-indigo-400">Buổi {{ st.current_session }}/{{ st.total_sessions }}</strong>
+                  </template>
+                  <template v-else-if="st.deducts_session">
+                    Tiến độ: <strong class="text-indigo-700 dark:text-indigo-400">{{ st.is_makeup ? 'Buổi bù' : 'Buổi học lẻ' }}</strong> · đã trừ 1 buổi
                   </template>
                   <template v-else>
-                    Tiến độ: <strong class="text-indigo-700">Đã học {{ st.attended_sessions }}/{{ st.total_sessions }}</strong>
+                    Tiến độ: <strong class="text-indigo-700 dark:text-indigo-400">Đã học {{ st.attended_sessions }}/{{ st.total_sessions }}</strong>
                   </template>
                   (Còn {{ st.remaining_sessions }} buổi)
                 </span>
                 <!-- Nghỉ có phép trong số buổi được nghỉ thì không trừ buổi; vắng không phép / hết lượt nghỉ thì trừ 1 buổi -->
-                <span v-if="st.status === 'absent_with_leave' && !st.deducts_session" class="font-semibold text-amber-700">
+                <span v-if="st.status === 'absent_with_leave' && !st.deducts_session" class="font-semibold text-amber-700 dark:text-amber-400">
                   Không trừ buổi · còn được nghỉ {{ st.leave_left }}/{{ st.allowed_absences }}
                 </span>
-                <span v-else-if="st.status.startsWith('absent') && st.deducts_session" class="font-semibold text-rose-700">
+                <span v-else-if="st.status.startsWith('absent') && st.deducts_session" class="font-semibold text-rose-700 dark:text-rose-400">
                   Đã trừ 1 buổi{{ st.status === 'absent_with_leave' ? ' (hết lượt nghỉ có phép)' : '' }}
                 </span>
-                <span v-else-if="st.status === 'off'" class="font-semibold text-violet-700">Không trừ buổi</span>
-                <span v-else class="text-slate-500">
+                <span v-else-if="st.status === 'off'" class="font-semibold text-violet-700 dark:text-violet-400">Không trừ buổi</span>
+                <span v-else class="text-slate-500 dark:text-white/60">
                   Được nghỉ có phép: còn {{ st.leave_left }}/{{ st.allowed_absences }}
                 </span>
               </div>
 
               <!-- Ghi chú nhận xét bài học -->
               <div v-if="st.checkin_note" class="text-xs pt-0.5"
-                :class="st.is_parent_request ? 'text-amber-900 bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-200 inline-block' : 'text-slate-500 italic'">
+                :class="st.is_parent_request ? 'text-amber-900 bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-200 inline-block dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-700/60' : 'text-slate-500 italic dark:text-white/60'">
                 <span class="font-bold">{{ st.is_parent_request ? '📩 Lý do phụ huynh xin nghỉ:' : '📝 Nhận xét:'
                   }}</span>
                 <!-- Giữ xuống dòng của nhận xét / báo bài; dài thì thu gọn, có Xem thêm -->
@@ -686,7 +690,7 @@ const openMessageModal = (student) => {
             </div>
 
             <!-- Buổi trung tâm nghỉ / giáo viên nghỉ: không điểm danh -->
-            <p v-if="st.status === 'off'" class="text-xs text-violet-700 italic shrink-0">
+            <p v-if="st.status === 'off'" class="text-xs text-violet-700 italic shrink-0 dark:text-violet-300">
               Không có buổi học, không cần điểm danh
             </p>
 
@@ -699,7 +703,7 @@ const openMessageModal = (student) => {
                 'rounded-xl px-3 py-1.5 text-xs font-bold shadow-2xs transition-all cursor-pointer',
                 st.status === 'present'
                   ? 'bg-emerald-600 text-white'
-                  : 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                  : 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:border-emerald-700/60 dark:text-emerald-300 dark:hover:bg-emerald-900/60'
               ]">
                 ✔ Đi học
               </button>
@@ -709,7 +713,7 @@ const openMessageModal = (student) => {
                 'rounded-xl px-2.5 py-1.5 text-xs font-medium transition-all cursor-pointer',
                 st.status === 'absent_with_leave'
                   ? 'bg-amber-500 text-white font-bold'
-                  : 'border border-amber-200 bg-amber-50/70 text-amber-800 hover:bg-amber-100'
+                  : 'border border-amber-200 bg-amber-50/70 text-amber-800 hover:bg-amber-100 dark:bg-amber-950/40 dark:border-amber-700/60 dark:text-amber-300 dark:hover:bg-amber-900/60'
               ]">
                 Vắng có phép
               </button>
@@ -719,7 +723,7 @@ const openMessageModal = (student) => {
                 'rounded-xl px-2.5 py-1.5 text-xs font-medium transition-all cursor-pointer',
                 st.status === 'absent_without_leave'
                   ? 'bg-rose-600 text-white font-bold'
-                  : 'border border-rose-200 bg-rose-50/70 text-rose-700 hover:bg-rose-100'
+                  : 'border border-rose-200 bg-rose-50/70 text-rose-700 hover:bg-rose-100 dark:bg-rose-950/40 dark:border-rose-700/60 dark:text-rose-300 dark:hover:bg-rose-900/60'
               ]">
                 Vắng K.phép
               </button>
@@ -727,7 +731,7 @@ const openMessageModal = (student) => {
               <!-- Nút [ Hoàn tác ] -->
               <button v-if="st.status !== 'not_checked'" type="button" @click="markStudent(st, 'not_checked')"
                 title="Hoàn tác trạng thái chưa điểm danh"
-                class="rounded-xl border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 cursor-pointer">
+                class="rounded-xl border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 cursor-pointer dark:border-slate-700 dark:text-white/70 dark:hover:bg-slate-800 dark:hover:text-white">
                 <RotateCcw class="h-3.5 w-3.5" />
               </button>
 
@@ -735,11 +739,11 @@ const openMessageModal = (student) => {
               <button v-if="st.is_single_lesson" type="button" @click="deleteSingleLesson(st)"
                 :disabled="st.status !== 'not_checked'"
                 :title="st.status !== 'not_checked' ? 'Hoàn tác điểm danh trước khi xóa buổi' : (st.is_makeup ? 'Xóa buổi học bù' : 'Xóa buổi học lẻ')"
-                class="rounded-xl border border-rose-200 p-1.5 text-rose-600 hover:bg-rose-50 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
+                class="rounded-xl border border-rose-200 p-1.5 text-rose-600 hover:bg-rose-50 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed dark:border-rose-800/60 dark:bg-rose-950/30 dark:text-rose-400 dark:hover:bg-rose-900/50">
                 <Trash2 class="h-3.5 w-3.5" />
               </button>
               </template>
-              <span v-else-if="st.status === 'not_checked'" class="text-[11px] text-slate-400 italic">Chờ giáo vụ điểm danh</span>
+              <span v-else-if="st.status === 'not_checked'" class="text-[11px] text-slate-400 italic dark:text-white/60">Chờ giáo vụ điểm danh</span>
 
               <!-- Nút [ Nhận xét bài học ] -->
               <!-- Đã báo bài thì nút màu xanh -->
@@ -750,14 +754,14 @@ const openMessageModal = (student) => {
                   'rounded-xl border p-1.5 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
                   st.has_report
                     ? 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700'
-                    : 'border-slate-200 text-slate-600 hover:bg-slate-50',
+                    : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-white/70 dark:hover:bg-slate-800 dark:hover:text-white',
                 ]">
                 <FileEdit class="h-3.5 w-3.5" />
               </button>
 
               <!-- Nút [ Mẫu tin nhắn ] -->
               <button type="button" @click="openMessageModal(st)" title="Mẫu tin nhắn báo cáo buổi học"
-                class="rounded-xl border border-blue-200 bg-blue-50/50 p-1.5 text-blue-600 hover:bg-blue-100 cursor-pointer">
+                class="rounded-xl border border-blue-200 bg-blue-50/50 p-1.5 text-blue-600 hover:bg-blue-100 cursor-pointer dark:border-blue-700/60 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-900/60">
                 <MessageSquare class="h-3.5 w-3.5" />
               </button>
             </div>

@@ -5,6 +5,7 @@ namespace App\Support;
 use App\Models\Attendance;
 use App\Models\Student;
 use Carbon\Carbon;
+use Illuminate\Support\Collection;
 
 /**
  * Lịch học nhiều ca của học viên (students.schedules):
@@ -124,6 +125,19 @@ class StudentSchedule
 
             return true;
         }));
+    }
+
+    /**
+     * Ca đầu tiên trong ngày (như dòng đầu tiên trên trang Điểm danh): ca theo lịch, không có thì buổi học lẻ / học bù
+     * đầu tiên của ngày. Bản ghi điểm danh cũ không có ca (slot_id = null) được tính cho ca này.
+     */
+    public static function firstSlotIdOn(Student $student, string $date): ?string
+    {
+        $date = Carbon::parse($date)->toDateString();
+
+        return self::slotsOnDate($student, $date)[0]['id']
+            ?? collect(SingleLessons::forStudent($student->id))->firstWhere('date', $date)['id']
+            ?? null;
     }
 
     /**
@@ -347,6 +361,83 @@ class StudentSchedule
         return (int) ($item['attended_sessions'] ?? ((int) $student->total_sessions - (int) $student->remaining_sessions));
     }
 
+    // ------------------------------------------------------------------ Số buổi chính thức
+
+    /**
+     * Buổi chính thức: buổi theo lịch có trừ buổi (đã học, vắng không phép, nghỉ có phép hết lượt).
+     * Học bù / học lẻ (ca là buổi học lẻ) không tính vào số buổi chính thức, dù vẫn trừ vào số buổi còn lại.
+     */
+    public static function isOfficial(Student $student, Attendance $attendance, array $lessonIds): bool
+    {
+        return $attendance->deductsSession() && ! in_array(self::slotIdOf($student, $attendance), $lessonIds, true);
+    }
+
+    /**
+     * Ca của bản ghi điểm danh; bản ghi không có ca được tính cho ca đầu tiên trong ngày như trang Điểm danh
+     * (ngày không có ca theo lịch thì là buổi học lẻ / học bù đầu tiên của ngày).
+     */
+    public static function slotIdOf(Student $student, Attendance $attendance): ?string
+    {
+        return $attendance->slot_id ?? self::firstSlotIdOn($student, $attendance->attended_at->toDateString());
+    }
+
+    /**
+     * Khóa của một bản ghi điểm danh (bản ghi cũ chưa gắn khóa tính cho khóa đầu tiên), dạng chuỗi để làm khóa mảng.
+     */
+    public static function itemKey(Student $student, ?int $courseItemId): string
+    {
+        return (string) ($courseItemId ?? $student->registered_courses_list[0]['id'] ?? '');
+    }
+
+    /**
+     * Đánh số "Buổi n" chính thức, riêng từng khóa, theo thứ tự thời gian (cùng cách với Cổng phụ huynh và trang Điểm danh).
+     * Buổi đã học trước khi dùng hệ thống (đã trừ vào số buổi nhưng không có điểm danh) tính ở đầu.
+     *
+     * @return array{numbers: array<int, int>, last: array<string, int>} số của từng bản ghi (id => n) và số cuối của từng khóa
+     */
+    public static function officialNumbers(Student $student, Collection $attendances): array
+    {
+        $lessonIds = array_column(SingleLessons::forStudent($student->id), 'id');
+
+        $last = [];
+        foreach ($student->registered_courses_list ?: [null] as $item) {
+            $key = self::itemKey($student, $item['id'] ?? null);
+            $deducting = $attendances->filter(fn ($a) => $a->deductsSession() && self::itemKey($student, $a->course_item_id) === $key)->count();
+            $last[$key] = max(0, self::attendedSessions($student, $item['id'] ?? null) - $deducting);
+        }
+
+        $numbers = [];
+        foreach ($attendances->sortBy([fn ($a, $b) => $a->attended_at <=> $b->attended_at, fn ($a, $b) => $a->id <=> $b->id]) as $a) {
+            if (self::isOfficial($student, $a, $lessonIds)) {
+                $key = self::itemKey($student, $a->course_item_id);
+                $numbers[$a->id] = $last[$key] = ($last[$key] ?? 0) + 1;
+            }
+        }
+
+        return ['numbers' => $numbers, 'last' => $last];
+    }
+
+    /**
+     * Lưu lại số buổi chính thức vào các bản ghi điểm danh của học viên (xuất Excel, chấm điểm danh gần đây),
+     * và sửa số trong ghi chú tự điền "Điểm danh buổi #n". Gọi sau mỗi lần điểm danh / hoàn tác.
+     */
+    public static function syncOfficialNumbers(Student $student): void
+    {
+        $attendances = Attendance::where('student_id', $student->id)->get();
+        $numbers = self::officialNumbers($student, $attendances)['numbers'];
+
+        foreach ($attendances as $a) {
+            $number = $numbers[$a->id] ?? null;
+            $a->session_number = $number;
+            if (preg_match('/^Điểm danh buổi #\d*$/u', trim((string) $a->note))) {
+                $a->note = $number ? "Điểm danh buổi #{$number}" : 'Điểm danh buổi bù / học lẻ';
+            }
+            if ($a->isDirty()) {
+                $a->saveQuietly();
+            }
+        }
+    }
+
     /**
      * Số buổi còn được nghỉ có phép của khoá (số buổi được nghỉ của khoá − số buổi đã nghỉ có phép).
      */
@@ -394,9 +485,12 @@ class StudentSchedule
             return ['type' => 'center', 'label' => 'Trung tâm nghỉ', 'reason' => $off['reason'] ?? null];
         }
 
+        // Giáo viên nghỉ theo khung giờ chỉ làm off các ca trong khung giờ đó, ca khác trong ngày vẫn học
         $teacher = $slot['teacher'] ?? null;
-        if ($teacher && ! TeacherLeaves::substitutionFor($teacher, $date, $periods)
-            && $leave = TeacherLeaves::leaveFor($teacher, $date, $periods)) {
+        $start = $slot['start'] ?? null;
+        $end = $slot['end'] ?? null;
+        if ($teacher && ! TeacherLeaves::substitutionFor($teacher, $date, $periods, $start, $end)
+            && $leave = TeacherLeaves::leaveFor($teacher, $date, $periods, $start, $end)) {
             return ['type' => 'teacher', 'label' => 'Giáo viên nghỉ', 'reason' => $leave['reason'] ?? null];
         }
 
@@ -431,13 +525,15 @@ class StudentSchedule
     // ------------------------------------------------------------------ Điểm danh theo ca
 
     /**
-     * Ca hôm nay chưa được điểm danh (để nút "Điểm danh hôm nay" điểm danh ca kế tiếp).
+     * Ca hôm nay chưa được điểm danh (để nút "Điểm danh hôm nay" điểm danh ca kế tiếp): các ca theo lịch rồi tới buổi
+     * học lẻ / học bù của hôm nay (giống thứ tự dòng ở trang Điểm danh), để buổi bù được gắn đúng buổi bù.
      * Trả về [slot|null, đã hết ca chưa điểm danh hay chưa].
      */
     public static function nextUnmarkedSlotToday(Student $student): array
     {
         $today = now();
-        $slots = self::slotsOnDate($student, $today->toDateString());
+        $lessons = array_values(array_filter(SingleLessons::forStudent($student->id), fn ($l) => ($l['date'] ?? null) === $today->toDateString()));
+        $slots = [...self::slotsOnDate($student, $today->toDateString()), ...array_map(fn ($l) => ['id' => $l['id']], $lessons)];
         $marked = Attendance::where('student_id', $student->id)->whereDate('attended_at', $today->toDateString())->get();
 
         if ($slots === []) {

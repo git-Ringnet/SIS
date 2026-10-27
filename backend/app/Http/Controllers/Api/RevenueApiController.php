@@ -8,6 +8,8 @@ use App\Models\Invoice;
 use App\Models\Student;
 use App\Support\BrandSettings;
 use App\Support\CenterStore;
+use App\Support\PagePermissions;
+use App\Support\TeacherPayroll;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -227,7 +229,18 @@ class RevenueApiController extends Controller
             return true;
         });
         $filteredExpenses = array_values($filteredExpenses);
-        $totalExpense = array_sum(array_column($filteredExpenses, 'amount'));
+        $manualExpense = array_sum(array_column($filteredExpenses, 'amount'));
+
+        // Lương giáo viên / giáo vụ trong tháng: tự tính từ các ca đã check-in (cùng số với trang Check-in ca dạy).
+        // Chỉ chủ trung tâm / quản lý xem được lương từng người; người khác chỉ thấy tổng.
+        $payroll = TeacherPayroll::monthly(sprintf('%04d-%02d', $activeYear, $activeMonth), $center);
+        if (! PagePermissions::seesAllPay($request->user())) {
+            $payroll['teachers'] = [];
+        }
+        $totalExpense = $manualExpense + $payroll['total'];
+        // Tháng này đã có khoản "Lương giáo viên" nhập tay trước đây → có thể bị tính hai lần
+        $payroll['month'] = sprintf('%02d/%04d', $activeMonth, $activeYear);
+        $payroll['manual_overlap'] = collect($filteredExpenses)->contains(fn ($ex) => ($ex['category'] ?? '') === 'Lương giáo viên');
 
         // 7. Lợi nhuận
         $grossProfit = $revenueMonthTotal - $totalExpense;
@@ -272,9 +285,12 @@ class RevenueApiController extends Controller
             'transactions' => $pageTransactions,
             'pagination' => $pagination,
             'expenses' => $filteredExpenses,
+            'payroll' => $payroll,
             'profit' => [
                 'total_revenue' => $revenueMonthTotal,
                 'total_expense' => $totalExpense,
+                'manual_expense' => $manualExpense,
+                'payroll_expense' => $payroll['total'],
                 'gross_profit' => $grossProfit,
                 'profit_margin' => $profitMargin,
             ],

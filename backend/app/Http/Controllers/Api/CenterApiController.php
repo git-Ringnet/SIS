@@ -40,11 +40,8 @@ class CenterApiController extends Controller
             'logo_url' => 'nullable|string|max:2000',
             'bank_info' => 'nullable|string|max:5000',
             'qr_url' => 'nullable|string|max:2000',
-            // Mức "Dạy tự do" mặc định cho giáo viên chưa đặt riêng (màn Đơn giá ca dạy)
-            'free_threshold' => 'nullable|integer|min:1',
-            'free_per_student' => 'nullable|numeric|min:0',
-            'free_per_shift' => 'nullable|numeric|min:0',
-            'free_require_qr' => 'nullable|boolean',
+            // Sĩ số lớp nhóm: số HV đi học ≤ một nửa thì giáo viên nhận 50% lương ca
+            'group_size' => 'nullable|integer|min:2|max:100',
         ]);
 
         $centers = $this->loadCentersData();
@@ -57,10 +54,7 @@ class CenterApiController extends Controller
             'logo_url' => $validated['logo_url'] ?? '',
             'bank_info' => $validated['bank_info'] ?? '',
             'qr_url' => $validated['qr_url'] ?? '',
-            'free_threshold' => $validated['free_threshold'] ?? null,
-            'free_per_student' => $validated['free_per_student'] ?? null,
-            'free_per_shift' => $validated['free_per_shift'] ?? null,
-            'free_require_qr' => $validated['free_require_qr'] ?? true,
+            'group_size' => $validated['group_size'] ?? null,
             'is_main' => count($centers) === 0,
             'rooms' => [],
         ];
@@ -88,11 +82,8 @@ class CenterApiController extends Controller
             'logo_url' => 'nullable|string|max:2000',
             'bank_info' => 'nullable|string|max:5000',
             'qr_url' => 'nullable|string|max:2000',
-            // Mức "Dạy tự do" mặc định cho giáo viên chưa đặt riêng (màn Đơn giá ca dạy)
-            'free_threshold' => 'nullable|integer|min:1',
-            'free_per_student' => 'nullable|numeric|min:0',
-            'free_per_shift' => 'nullable|numeric|min:0',
-            'free_require_qr' => 'nullable|boolean',
+            // Sĩ số lớp nhóm: số HV đi học ≤ một nửa thì giáo viên nhận 50% lương ca
+            'group_size' => 'nullable|integer|min:2|max:100',
         ]);
 
         $centers = $this->loadCentersData();
@@ -106,10 +97,7 @@ class CenterApiController extends Controller
                 $c['logo_url'] = $validated['logo_url'] ?? '';
                 $c['bank_info'] = $validated['bank_info'] ?? '';
                 $c['qr_url'] = $validated['qr_url'] ?? '';
-                $c['free_threshold'] = $validated['free_threshold'] ?? null;
-                $c['free_per_student'] = $validated['free_per_student'] ?? null;
-                $c['free_per_shift'] = $validated['free_per_shift'] ?? null;
-                $c['free_require_qr'] = $validated['free_require_qr'] ?? true;
+                $c['group_size'] = $validated['group_size'] ?? null;
                 ActivityLogger::log('updated', 'center', $c['name'], $id, ActivityLogger::diff(
                     array_intersect_key($before, $validated),
                     array_intersect_key($c, $validated),

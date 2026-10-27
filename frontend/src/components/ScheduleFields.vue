@@ -34,7 +34,8 @@ onMounted(async () => {
   try {
     const res = await staffApi.getStaff();
     teachers.value = (res.data?.members || [])
-      .filter((m) => (m.role || '').includes('Giáo viên'))
+      // Giáo vụ cũng đứng lớp và được tính lương ca (khớp TeacherName::teaches ở backend)
+      .filter((m) => /Giáo viên|Giáo vụ/.test(m.role || ''))
       .map((m) => m.name);
   } catch (err) {
     console.error('Lỗi tải danh sách giáo viên:', err);

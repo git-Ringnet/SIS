@@ -98,7 +98,6 @@ class TeacherCheckinTest extends TestCase
 
         $this->getJson('/api/teacher-checkin?date=2026-10-20')->assertJsonPath('today_shifts.0.checked_in_by', 'Cô Mai');
         $this->postJson('/api/teacher-checkin/absence', ['shift_id' => $ids['Cô Mai'], 'status' => 'skipped'])->assertForbidden();
-        $this->postJson('/api/teacher-checkin/rates', ['one_on_one' => 1, 'group' => 1, 'trial' => 1])->assertForbidden();
         $this->postJson("/api/teacher-checkin/{$ids['Cô Mai']}/reset")->assertForbidden();
         $this->putJson("/api/teacher-checkin/{$ids['Cô Mai']}", ['checkin_time' => '07:00'])->assertForbidden();
         $this->deleteJson("/api/teacher-checkin/{$ids['Cô Mai']}")->assertForbidden();

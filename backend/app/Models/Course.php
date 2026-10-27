@@ -13,6 +13,9 @@ class Course extends Model
 
     public const ACTIVITY_SUBJECT = 'course';
 
+    /** Hình thức học: lớp nhóm / cá nhân 1:1 (null = theo số học viên trong ca). */
+    public const CLASS_TYPES = ['group', 'individual'];
+
     protected $guarded = [];
 
     protected $casts = [
@@ -50,6 +53,20 @@ class Course extends Model
         } while (static::where('code', $code)->exists());
 
         return $code;
+    }
+
+    /**
+     * Đoán hình thức học theo tên khóa: "NHÓM" → group; "CÁ NHÂN", "1:1", "1-1", "KÈM RIÊNG" → individual.
+     */
+    public static function guessClassType(?string $name): ?string
+    {
+        $name = mb_strtoupper((string) $name);
+
+        return match (true) {
+            str_contains($name, 'NHÓM') => 'group',
+            str_contains($name, 'CÁ NHÂN') || preg_match('/\b1\s*[:\-]\s*1\b/u', $name) === 1 || str_contains($name, 'KÈM RIÊNG') => 'individual',
+            default => null,
+        };
     }
 
     public function leads(): HasMany

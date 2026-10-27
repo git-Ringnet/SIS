@@ -69,21 +69,46 @@ class TeacherLeaveApiController extends Controller
         ];
     }
 
+    /**
+     * Khung giờ nghỉ / dạy thay trong ngày (tuỳ chọn, để trống = cả ngày): chỉ các ca giao với khung giờ này bị ảnh hưởng.
+     */
+    private function timeRules(): array
+    {
+        return [
+            'start_time' => 'nullable|date_format:H:i|required_with:end_time',
+            'end_time' => 'nullable|date_format:H:i|required_with:start_time|after:start_time',
+        ];
+    }
+
+    private const TIME_MESSAGES = [
+        'start_time.required_with' => 'Vui lòng nhập Từ giờ (hoặc để trống cả hai = cả ngày)',
+        'end_time.required_with' => 'Vui lòng nhập Đến giờ (hoặc để trống cả hai = cả ngày)',
+        'end_time.after' => 'Đến giờ phải sau Từ giờ',
+    ];
+
+    private function periodNote(array $p): string
+    {
+        return "{$p['from']} → {$p['to']}".TeacherLeaves::timeLabel($p).(! empty($p['reason']) ? " ({$p['reason']})" : '');
+    }
+
     public function storeLeave(Request $request): JsonResponse
     {
         if ($denied = $this->forbidTeacher($request)) {
             return $denied;
         }
 
-        $validated = $request->validate(['teacher' => 'required|string|max:255', ...$this->periodRules()], [
+        $validated = $request->validate(['teacher' => 'required|string|max:255', ...$this->periodRules(), ...$this->timeRules()], [
             'teacher.required' => 'Vui lòng chọn giáo viên',
             'to.after_or_equal' => 'Đến ngày phải sau hoặc bằng Từ ngày',
+            ...self::TIME_MESSAGES,
         ]);
 
         $data = TeacherLeaves::all();
         $leave = [
             'id' => (string) Str::uuid(),
             ...$validated,
+            'start_time' => $validated['start_time'] ?? null,
+            'end_time' => $validated['end_time'] ?? null,
             'reason' => $validated['reason'] ?? null,
             'created_by' => $request->user()?->name,
             'created_at' => Carbon::now()->toDateTimeString(),
@@ -92,7 +117,7 @@ class TeacherLeaveApiController extends Controller
         TeacherLeaves::save($data);
 
         ActivityLogger::log('created', 'teacher_checkin', "Nghỉ phép: {$leave['teacher']}", null, ActivityLogger::diff([], [
-            'note' => "{$leave['from']} → {$leave['to']}".($leave['reason'] ? " ({$leave['reason']})" : ''),
+            'note' => $this->periodNote($leave),
         ]));
 
         return response()->json(['message' => "Đã lưu nghỉ phép cho {$leave['teacher']}.", 'leave' => $leave], 201);
@@ -108,10 +133,12 @@ class TeacherLeaveApiController extends Controller
             'original' => 'required|string|max:255',
             'substitute' => 'required|string|max:255',
             ...$this->periodRules(),
+            ...$this->timeRules(),
         ], [
             'original.required' => 'Vui lòng chọn giáo viên gốc',
             'substitute.required' => 'Vui lòng chọn giáo viên dạy thay',
             'to.after_or_equal' => 'Đến ngày phải sau hoặc bằng Từ ngày',
+            ...self::TIME_MESSAGES,
         ]);
 
         if (TeacherName::same($validated['original'], $validated['substitute'])) {
@@ -122,6 +149,8 @@ class TeacherLeaveApiController extends Controller
         $sub = [
             'id' => (string) Str::uuid(),
             ...$validated,
+            'start_time' => $validated['start_time'] ?? null,
+            'end_time' => $validated['end_time'] ?? null,
             'reason' => $validated['reason'] ?? null,
             'created_by' => $request->user()?->name,
             'created_at' => Carbon::now()->toDateTimeString(),
@@ -130,7 +159,7 @@ class TeacherLeaveApiController extends Controller
         TeacherLeaves::save($data);
 
         ActivityLogger::log('created', 'teacher_checkin', "Dạy thay: {$sub['substitute']} thay {$sub['original']}", null, ActivityLogger::diff([], [
-            'note' => "{$sub['from']} → {$sub['to']}".($sub['reason'] ? " ({$sub['reason']})" : ''),
+            'note' => $this->periodNote($sub),
         ]));
 
         return response()->json(['message' => "Đã phân công {$sub['substitute']} dạy thay {$sub['original']}.", 'substitution' => $sub], 201);
@@ -195,7 +224,7 @@ class TeacherLeaveApiController extends Controller
             'center_offs' => 'Trung tâm nghỉ: '.($removed['center'] ?? 'tất cả cơ sở'),
             default => "Dạy thay: {$removed['substitute']} thay {$removed['original']}",
         };
-        ActivityLogger::log('deleted', 'teacher_checkin', $label, null, ActivityLogger::diff(['note' => "{$removed['from']} → {$removed['to']}"], []));
+        ActivityLogger::log('deleted', 'teacher_checkin', $label, null, ActivityLogger::diff(['note' => $this->periodNote([...$removed, 'reason' => null])], []));
 
         return response()->json(['message' => 'Đã xoá. Các ca chưa check-in trong khoảng ngày này trở lại bình thường.']);
     }

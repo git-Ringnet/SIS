@@ -27,8 +27,7 @@ class AttendanceMarker
      */
     public static function mark(Student $student, string $date, string $status, ?string $note, ?string $slotId, string $markedBy = 'Giáo viên / Admin'): array
     {
-        $daySlots = StudentSchedule::slotsOn($student, Carbon::parse($date)->dayOfWeek);
-        $isFirstSlot = $slotId === null || ($daySlots[0]['id'] ?? null) === $slotId;
+        $isFirstSlot = $slotId === null || StudentSchedule::firstSlotIdOn($student, $date) === $slotId;
 
         // Điểm danh đã có của đúng ca này (bản ghi cũ không có ca được tính cho ca đầu tiên)
         $records = Attendance::where('student_id', $student->id)->whereDate('attended_at', $date)->get();
@@ -49,6 +48,7 @@ class AttendanceMarker
                 }
                 $existing->delete();
                 $student->save();
+                StudentSchedule::syncOfficialNumbers($student);
             }
 
             return ['attendance' => null, 'message' => "Đã hoàn tác điểm danh cho {$student->name}."];
@@ -62,8 +62,9 @@ class AttendanceMarker
             $student->consecutive_absences++;
         }
 
-        // Số buổi chỉ gán cho buổi đã trừ buổi, để buổi nghỉ không trừ buổi không chiếm số buổi ("nhảy buổi")
-        $sessionNumber = $deducts ? max(1, StudentSchedule::attendedSessions($student, $itemId)) : null;
+        // Số buổi chính thức gán lại sau khi lưu (syncOfficialNumbers): chỉ buổi theo lịch có trừ buổi mới có số,
+        // nghỉ có phép không trừ buổi / học bù / học lẻ không chiếm số buổi ("nhảy buổi")
+        $sessionNumber = null;
 
         if ($existing) {
             $existing->status = $status;
@@ -87,12 +88,14 @@ class AttendanceMarker
                 'attended_at' => Carbon::parse("{$date} ".self::startTime($student, $slotId, $date)),
                 'status' => $status,
                 'deducts_session' => $deducts,
-                'note' => $note ?: ($status === 'present' ? "Điểm danh buổi #{$sessionNumber}" : 'Vắng học'),
+                'note' => $note ?: ($status === 'present' ? 'Điểm danh buổi #' : 'Vắng học'),
                 'marked_by' => $markedBy,
             ]);
         }
 
         $student->save();
+        StudentSchedule::syncOfficialNumbers($student);
+        $attendance->refresh();
 
         return ['attendance' => $attendance, 'message' => self::message($student, $status, $deducts, $itemId)];
     }

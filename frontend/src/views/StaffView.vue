@@ -5,6 +5,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useAuth } from '../services/useAuth';
 import { ALL_PAGES } from '../services/permissions';
 import { staffApi } from '../services/api';
+import MoneyInput from '../components/MoneyInput.vue';
 import {
   Shield,
   Building2,
@@ -14,13 +15,14 @@ import {
   UserCheck,
   Lock,
   KeyRound,
+  Wallet,
 } from 'lucide-vue-next';
 
 const loading = ref(true);
 
 const members = ref([]);
 const centers = ref([]);
-const roles = ref(['Giáo viên', 'Quản lý / Lễ tân', 'Giáo vụ']);
+const roles = ref(['Giáo viên', 'Giáo vụ', 'Quản lý']);
 const ownerRole = ref('Chủ trung tâm');
 const { user } = useAuth();
 const isOwner = computed(() => !!user.value?.is_owner);
@@ -29,6 +31,13 @@ const roleOptions = computed(() => (isOwner.value ? [...roles.value, ownerRole.v
 // Chủ trung tâm gốc và chính mình không đổi vai trò / xoá được (tránh tự khoá quyền)
 const canEditMember = (m) => isOwner.value && !m.is_protected;
 
+// Lương ca: chỉ chủ trung tâm / quản lý xem và đặt; giáo viên, giáo vụ có đứng lớp được tính lương ca
+const seesPay = ref(false);
+// Giáo viên chỉ có tên trong lịch học, chưa có tài khoản: vẫn đặt lương ca được
+const unlinkedTeachers = ref([]);
+const teaches = (role) => /Giáo viên|Giáo vụ/.test(role || '');
+const formatMoney = (v) => new Intl.NumberFormat('vi-VN').format(Math.round(Number(v) || 0));
+
 // Form invite / tạo tài khoản
 const newInvite = ref({
   name: '',
@@ -36,6 +45,8 @@ const newInvite = ref({
   password: 'password',
   role: 'Giáo viên',
   center: 'Tất cả trung tâm',
+  pay_group: null,
+  pay_one_on_one: null,
 });
 const creatingInvite = ref(false);
 
@@ -62,6 +73,9 @@ const fetchData = async () => {
     members.value = res.data.members || [];
     centers.value = res.data.centers || [];
     if (res.data.owner_role) ownerRole.value = res.data.owner_role;
+    if (res.data.roles) roles.value = res.data.roles;
+    seesPay.value = !!res.data.sees_pay;
+    unlinkedTeachers.value = res.data.unlinked_teachers || [];
   } catch (err) {
     console.error('Error fetching staff data:', err);
   } finally {
@@ -86,12 +100,42 @@ const handleCreateInvite = async () => {
     newInvite.value.name = '';
     newInvite.value.email = '';
     newInvite.value.password = 'password';
+    newInvite.value.pay_group = null;
+    newInvite.value.pay_one_on_one = null;
     showToast(createdMsg);
     fetchData();
   } catch (err) {
     showToast(err.response?.data?.message || 'Có lỗi xảy ra khi tạo tài khoản nhân sự', 'error');
   } finally {
     creatingInvite.value = false;
+  }
+};
+
+// Sửa lương ca của giáo viên / giáo vụ
+const payTarget = ref(null);
+const payForm = ref({ pay_group: null, pay_one_on_one: null });
+const savingPay = ref(false);
+
+const openPay = (member) => {
+  payTarget.value = member;
+  payForm.value = { pay_group: member.pay?.group ?? 0, pay_one_on_one: member.pay?.one_on_one ?? 0 };
+};
+
+const handleSavePay = async () => {
+  try {
+    savingPay.value = true;
+    const data = { pay_group: payForm.value.pay_group ?? 0, pay_one_on_one: payForm.value.pay_one_on_one ?? 0 };
+    // Có id = thành viên có tài khoản; không có = giáo viên chỉ có tên trong lịch học
+    const res = payTarget.value.id
+      ? await staffApi.updatePay(payTarget.value.id, data)
+      : await staffApi.updateTeacherPay({ name: payTarget.value.name, ...data });
+    showToast(res.data.message || 'Đã lưu lương ca!');
+    payTarget.value = null;
+    fetchData();
+  } catch (err) {
+    showToast(err.response?.data?.message || 'Có lỗi xảy ra khi lưu lương ca', 'error');
+  } finally {
+    savingPay.value = false;
   }
 };
 
@@ -259,6 +303,24 @@ const handleDeleteMember = async (member) => {
         </div>
       </div>
 
+      <!-- Lương mỗi ca của giáo viên / giáo vụ, đặt ngay khi tạo (sửa lại ở cột Lương ca bên dưới) -->
+      <div v-if="seesPay && teaches(newInvite.role)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1.5">Lương ca nhóm (VNĐ / ca)</label>
+          <MoneyInput v-model="newInvite.pay_group" placeholder="VD: 200.000"
+            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500" />
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1.5">Lương ca 1:1 (VNĐ / ca)</label>
+          <MoneyInput v-model="newInvite.pay_one_on_one" placeholder="VD: 150.000"
+            class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500" />
+        </div>
+        <p class="sm:col-span-2 lg:col-span-3 self-end text-[11px] text-slate-500">
+          Mỗi ca check-in được cộng tiền theo mức này. Ca nhóm có số HV đi học ≤ một nửa sĩ số lớp nhóm (đặt ở màn
+          Trung tâm, mặc định 4) nhận 50%. Ca 1:1 học viên vắng không phép nhận 50%, vắng có phép không tính lương.
+        </p>
+      </div>
+
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
         <button type="button" :disabled="creatingInvite" @click="handleCreateInvite"
           class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 px-5 py-2.5 text-xs sm:text-sm font-bold text-white shadow-xs transition-all active:scale-[0.98] inline-flex items-center gap-2 justify-center">
@@ -284,6 +346,7 @@ const handleDeleteMember = async (member) => {
               <th class="py-2.5 px-3">Vai trò</th>
               <th class="py-2.5 px-3">Quyền</th>
               <th class="py-2.5 px-3">Trung tâm</th>
+              <th v-if="seesPay" class="py-2.5 px-3">Lương ca</th>
               <th class="py-2.5 px-3">Tham gia</th>
               <th class="py-2.5 px-3 text-right w-12"></th>
             </tr>
@@ -336,6 +399,17 @@ const handleDeleteMember = async (member) => {
                 </div>
               </td>
 
+              <!-- Lương ca (giáo viên / giáo vụ) -->
+              <td v-if="seesPay" class="py-3.5 px-3">
+                <button v-if="m.pay" type="button" @click="openPay(m)" :disabled="!m.name"
+                  :title="m.name ? 'Sửa lương ca' : 'Cần có họ tên để đặt lương'"
+                  class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 px-2.5 py-1 text-xs text-slate-700 shadow-2xs whitespace-nowrap">
+                  <Wallet class="h-3 w-3 text-slate-500" />
+                  <span>Nhóm {{ formatMoney(m.pay.group) }} · 1:1 {{ formatMoney(m.pay.one_on_one) }}</span>
+                </button>
+                <span v-else class="text-slate-300">—</span>
+              </td>
+
               <!-- Tham gia -->
               <td class="py-3.5 px-3 text-slate-500 font-mono text-xs">
                 {{ m.joined_at }}
@@ -358,6 +432,72 @@ const handleDeleteMember = async (member) => {
           </tbody>
         </table>
       </div>
+    </div>
+
+    <!-- 3. GIÁO VIÊN CHƯA CÓ TÀI KHOẢN: tên gõ trong lịch học, vẫn cần đặt lương ca -->
+    <div v-if="seesPay && unlinkedTeachers.length"
+      class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-3">
+      <div>
+        <h2 class="text-sm sm:text-base font-bold text-slate-900">Giáo viên chưa có tài khoản</h2>
+        <p class="text-xs text-slate-500 mt-0.5">Tên giáo viên có trong lịch học của học viên nhưng chưa tạo tài khoản ở trên.
+          Vẫn đặt lương ca được; khi tạo tài khoản đúng họ tên này thì lương giữ nguyên.</p>
+      </div>
+      <div class="divide-y divide-slate-100">
+        <div v-for="t in unlinkedTeachers" :key="t.name" class="flex items-center justify-between gap-3 py-2.5 text-xs sm:text-sm">
+          <span class="font-medium text-slate-900">{{ t.name }}</span>
+          <button type="button" @click="openPay(t)"
+            class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 px-2.5 py-1 text-xs text-slate-700 shadow-2xs whitespace-nowrap">
+            <Wallet class="h-3 w-3 text-slate-500" />
+            <span>Nhóm {{ formatMoney(t.pay.group) }} · 1:1 {{ formatMoney(t.pay.one_on_one) }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL LƯƠNG CA -->
+    <div v-if="payTarget"
+      class="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+      <form @submit.prevent="handleSavePay"
+        class="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
+        <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/80">
+          <div class="flex items-center gap-2 text-slate-900 font-bold text-sm">
+            <Wallet class="h-4.5 w-4.5 text-rose-600" />
+            <span>Lương ca · {{ payTarget.name }}</span>
+          </div>
+          <button type="button" @click="payTarget = null"
+            class="rounded-xl p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100">
+            <X class="h-5 w-5" />
+          </button>
+        </div>
+
+        <div class="p-6 space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <label class="text-xs font-semibold text-slate-700">
+              Ca nhóm (VNĐ / ca)
+              <MoneyInput v-model="payForm.pay_group" class="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500" />
+            </label>
+            <label class="text-xs font-semibold text-slate-700">
+              Ca 1:1 (VNĐ / ca)
+              <MoneyInput v-model="payForm.pay_one_on_one" class="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-800 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500" />
+            </label>
+          </div>
+          <p class="text-[11px] text-slate-500">
+            Áp dụng cho các ca check-in từ bây giờ, ca đã check-in giữ mức cũ. Ca nhóm có số HV đi học ≤ một nửa sĩ số
+            lớp nhóm (màn Trung tâm) nhận 50%; ca 1:1 học viên vắng không phép nhận 50%, vắng có phép không tính lương.
+          </p>
+        </div>
+
+        <div class="px-6 py-3 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-2">
+          <button type="button" @click="payTarget = null"
+            class="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-700">
+            Hủy
+          </button>
+          <button type="submit" :disabled="savingPay"
+            class="rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 px-4 py-2 text-xs font-bold text-white shadow-xs">
+            {{ savingPay ? 'Đang lưu...' : 'Lưu lương ca' }}
+          </button>
+        </div>
+      </form>
     </div>
 
     <!-- MODAL ĐẶT LẠI MẬT KHẨU -->

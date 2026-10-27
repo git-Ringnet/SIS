@@ -178,6 +178,8 @@ export const staffApi = {
   updateCenter: (id, data) => api.put(`/staff/members/${id}/center`, data),
   resetPassword: (id, data) => api.put(`/staff/members/${id}/password`, data),
   updatePermissions: (id, data) => api.put(`/staff/members/${id}/permissions`, data),
+  updatePay: (id, data) => api.put(`/staff/members/${id}/pay`, data),
+  updateTeacherPay: (data) => api.put('/staff/teacher-pay', data),
   deleteMember: (id) => api.delete(`/staff/members/${id}`),
 };
 
@@ -248,9 +250,7 @@ export const teacherCheckinApi = {
   updateShift: (id, data) => api.put(`/teacher-checkin/${id}`, data),
   deleteShift: (id) => api.delete(`/teacher-checkin/${id}`),
   restoreShift: (id) => api.post(`/teacher-checkin/${id}/restore`),
-  getRates: () => api.get('/teacher-checkin/rates'),
   getQrToken: (center) => api.get('/teacher-checkin/qr-token', { params: { center } }),
-  updateRates: (data) => api.post('/teacher-checkin/rates', data),
   exportMonthly: (month, teacher = '') =>
     downloadFile('/teacher-checkin/export', teacher ? { month, teacher } : { month }, `ca-day-${month}${teacher ? `-${teacher}` : ''}.csv`),
   // Nghỉ phép / dạy thay theo khoảng ngày

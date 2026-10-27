@@ -35,7 +35,7 @@ class Attendance extends Model
         $note = trim((string) $note);
 
         return $note === ''
-            || in_array($note, ['Vắng học', 'Nghỉ có phép', 'Vắng không phép', 'Điểm danh hôm nay'], true)
+            || in_array($note, ['Vắng học', 'Nghỉ có phép', 'Vắng không phép', 'Điểm danh hôm nay', 'Điểm danh buổi bù / học lẻ'], true)
             || preg_match('/^Điểm danh buổi #\d*$/u', $note) === 1
             || str_starts_with($note, 'PH xin nghỉ qua Cổng phụ huynh');
     }

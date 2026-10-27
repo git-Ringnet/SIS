@@ -1,7 +1,7 @@
 <script setup>
 import { confirmDialog } from '../services/useConfirm';
 import { notify } from '../services/notify';
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { courseApi } from '../services/api';
 import Badge from '../components/Badge.vue';
 import Modal from '../components/Modal.vue';
@@ -33,8 +33,24 @@ const form = ref({
   name: '',
   default_sessions: 12,
   allowed_absences: '',
+  class_type: '',
   price: 3600000,
   description: '',
+});
+
+// Hình thức học: quyết định ca dạy là ca nhóm hay ca 1:1 (lương giáo viên)
+const CLASS_TYPES = { group: 'Lớp nhóm', individual: 'Cá nhân 1:1' };
+// Đoán theo tên khóa như backend: "NHÓM" → nhóm; "CÁ NHÂN", "1:1", "KÈM RIÊNG" → cá nhân
+const guessClassType = (name) => {
+  const n = String(name || '').toUpperCase();
+  if (n.includes('NHÓM')) return 'group';
+  if (n.includes('CÁ NHÂN') || /\b1\s*[:-]\s*1\b/.test(n) || n.includes('KÈM RIÊNG')) return 'individual';
+  return '';
+};
+// Khóa mới: tự chọn hình thức theo tên vừa gõ cho tới khi người dùng tự chọn
+const classTypeTouched = ref(false);
+watch(() => form.value.name, (name) => {
+  if (!isEditing.value && !classTypeTouched.value) form.value.class_type = guessClassType(name);
 });
 
 const fetchData = async () => {
@@ -81,9 +97,11 @@ const openCreate = () => {
     name: '',
     default_sessions: 12,
     allowed_absences: '',
+    class_type: '',
     price: 3600000,
     description: '',
   };
+  classTypeTouched.value = false;
   showModal.value = true;
 };
 
@@ -94,6 +112,7 @@ const openEdit = (c) => {
     name: c.name,
     default_sessions: c.default_sessions,
     allowed_absences: c.allowed_absences ?? '',
+    class_type: c.class_type || '',
     price: Number(c.price),
     description: c.description || '',
   };
@@ -396,6 +415,9 @@ const removeClass = async (card) => {
                   {{ c.default_sessions }} buổi
                 </span>
                 <p class="text-[11px] text-slate-400 mt-0.5">Nghỉ phép: {{ c.allowed_absences ?? 3 }} buổi</p>
+                <p class="text-[11px] mt-0.5" :class="c.class_type ? 'font-semibold text-indigo-600' : 'text-amber-600'">
+                  {{ CLASS_TYPES[c.class_type] || 'Chưa chọn hình thức' }}
+                </p>
               </td>
 
               <!-- Học phí -->
@@ -537,6 +559,21 @@ const removeClass = async (card) => {
                 class="w-full rounded-xl border border-slate-200 px-3.5 py-2 text-xs sm:text-sm font-bold text-emerald-700 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
               />
             </div>
+          </div>
+
+          <!-- Hình thức học: ca nhóm / ca 1:1 khi tính lương giáo viên -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Hình thức học</label>
+            <select v-model="form.class_type" @change="classTypeTouched = true"
+              class="w-full rounded-xl border border-slate-200 px-3.5 py-2 text-xs sm:text-sm font-bold text-slate-800 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+              <option value="group">Lớp nhóm</option>
+              <option value="individual">Cá nhân 1:1</option>
+              <option value="">Chưa chọn (1 học viên trong ca = 1:1)</option>
+            </select>
+            <p class="text-[11px] text-slate-400 mt-1">
+              Lớp nhóm: ca dạy luôn tính lương ca nhóm (đi học ≤ một nửa sĩ số nhận 50%). Cá nhân: mỗi học viên một ca
+              1:1 riêng, tính lương ca 1:1.
+            </p>
           </div>
 
           <!-- Số buổi được nghỉ có phép -->

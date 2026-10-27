@@ -8,6 +8,8 @@ use App\Support\ActivityLogger;
 use App\Support\CenterStore;
 use App\Support\OwnerGuard;
 use App\Support\PagePermissions;
+use App\Support\TeacherName;
+use App\Support\TeacherRates;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,6 +21,12 @@ class StaffApiController extends Controller
 {
     /** Vai trò có toàn quyền như chủ trung tâm (chỉ chủ trung tâm được gán). */
     private const OWNER_ROLE = 'Chủ trung tâm';
+
+    /** Các vai trò còn lại (cùng với Chủ trung tâm là 4 vai trò). */
+    private const ROLES = ['Giáo viên', 'Giáo vụ', 'Quản lý'];
+
+    /** Tên vai trò cũ → tên mới (dữ liệu tạo trước khi đổi tên vai trò). */
+    private const RENAMED_ROLES = ['Quản lý / Lễ tân' => 'Quản lý'];
 
     /**
      * Trang bị chặn mặc định theo vai trò khi tạo mới / đổi vai trò.
@@ -64,6 +72,13 @@ class StaffApiController extends Controller
         if (Storage::exists($path)) {
             $data = json_decode(Storage::get($path), true);
             if (is_array($data)) {
+                // Danh sách vai trò luôn theo code; vai trò cũ của thành viên đổi sang tên mới
+                $data['roles'] = self::ROLES;
+                $data['members'] = array_map(
+                    fn ($m) => [...$m, 'role' => self::RENAMED_ROLES[$m['role'] ?? ''] ?? ($m['role'] ?? '')],
+                    $data['members'] ?? [],
+                );
+
                 return $data;
             }
         }
@@ -84,11 +99,7 @@ class StaffApiController extends Controller
                 'is_owner' => true,
             ]] : [],
             'centers' => ['Tất cả trung tâm', ...CenterStore::names()],
-            'roles' => [
-                'Giáo viên',
-                'Quản lý / Lễ tân',
-                'Giáo vụ',
-            ],
+            'roles' => self::ROLES,
         ];
     }
 
@@ -101,15 +112,37 @@ class StaffApiController extends Controller
     {
         $data = $this->loadStaffData();
         $data['owner_role'] = self::OWNER_ROLE;
+        // Lương ca của giáo viên / giáo vụ: chỉ chủ trung tâm / quản lý xem được
+        $seesPay = PagePermissions::seesAllPay($request->user());
         $data['members'] = array_map(
-            fn ($m) => [...$m, 'is_protected' => $this->isProtectedMember($m, $request->user())],
+            fn ($m) => [...$m, 'is_protected' => $this->isProtectedMember($m, $request->user()),
+                ...($seesPay && TeacherName::teaches($m['role'] ?? null) ? ['pay' => $this->payOf($m['name'] ?? '')] : [])],
             $data['members'] ?? [],
         );
+        $data['sees_pay'] = $seesPay;
+        // Giáo viên chỉ có tên trong lịch học (chưa tạo tài khoản ở Nhân sự) vẫn cần đặt lương ca
+        $data['unlinked_teachers'] = $seesPay ? array_values(array_map(
+            fn ($name) => ['name' => $name, 'pay' => $this->payOf($name)],
+            array_filter(TeacherName::all(), fn ($name) => ! collect($data['members'])->contains(fn ($m) => TeacherName::same($m['name'] ?? '', $name))),
+        )) : [];
         // Danh sách trung tâm luôn lấy theo màn Trung tâm (bản lưu trong file nhân sự có thể đã cũ)
         $data['centers'] = ['Tất cả trung tâm', ...CenterStore::names()];
 
         return response()->json($data);
     }
+
+    /**
+     * Lương mỗi ca (nhóm / 1:1) đang đặt cho giáo viên / giáo vụ (đơn giá ca dạy, xem TeacherRates).
+     */
+    private function payOf(string $name): array
+    {
+        return TeacherRates::forTeacher($name);
+    }
+
+    private const PAY_RULES = [
+        'pay_group' => 'nullable|numeric|min:0',
+        'pay_one_on_one' => 'nullable|numeric|min:0',
+    ];
 
     public function createInvite(Request $request): JsonResponse
     {
@@ -117,8 +150,9 @@ class StaffApiController extends Controller
             'name' => 'nullable|string|max:255',
             'email' => 'required|email',
             'password' => 'nullable|string|min:6',
-            'role' => 'required|string',
+            'role' => ['required', 'string', Rule::in([...self::ROLES, self::OWNER_ROLE])],
             'center' => 'required|string',
+            ...self::PAY_RULES,
         ]);
 
         if ($validated['role'] === self::OWNER_ROLE && ! OwnerGuard::isOwner($request->user())) {
@@ -155,6 +189,12 @@ class StaffApiController extends Controller
 
         $this->saveStaffData($data);
 
+        // Lương ca đặt ngay lúc tạo giáo viên / giáo vụ (chỉ chủ trung tâm / quản lý)
+        if (TeacherName::teaches($newMember['role']) && PagePermissions::seesAllPay($request->user())
+            && (isset($validated['pay_group']) || isset($validated['pay_one_on_one']))) {
+            TeacherRates::set($staffName, $this->money($validated['pay_group'] ?? null), $this->money($validated['pay_one_on_one'] ?? null));
+        }
+
         ActivityLogger::log('created', 'staff', $staffName, $newMember['id'], ActivityLogger::diff([], [
             'name' => $staffName,
             'email' => $newMember['email'],
@@ -168,6 +208,83 @@ class StaffApiController extends Controller
         ], 201);
     }
 
+    private function money(mixed $value): ?float
+    {
+        return $value === null ? null : (float) $value;
+    }
+
+    /**
+     * Sửa lương mỗi ca của giáo viên / giáo vụ có tài khoản. Áp dụng cho các ca check-in từ bây giờ
+     * (ca đã check-in giữ đơn giá đã chốt).
+     */
+    public function updatePay(Request $request, int $id): JsonResponse
+    {
+        if ($denied = $this->forbidUnlessSeesPay($request)) {
+            return $denied;
+        }
+        $validated = $request->validate(self::PAY_UPDATE_RULES, self::PAY_UPDATE_MESSAGES);
+
+        $member = collect($this->loadStaffData()['members'] ?? [])->firstWhere('id', $id);
+        if (! $member) {
+            return response()->json(['message' => 'Không tìm thấy nhân sự.'], 404);
+        }
+        if (! TeacherName::teaches($member['role'] ?? null) || empty($member['name'])) {
+            return response()->json(['message' => 'Chỉ đặt lương ca cho giáo viên / giáo vụ (cần có họ tên).'], 422);
+        }
+
+        return $this->savePay($member['name'], $validated, $id);
+    }
+
+    /**
+     * Sửa lương ca của giáo viên chỉ có tên trong lịch học (chưa có tài khoản ở Nhân sự).
+     */
+    public function updateTeacherPay(Request $request): JsonResponse
+    {
+        if ($denied = $this->forbidUnlessSeesPay($request)) {
+            return $denied;
+        }
+        $validated = $request->validate(['name' => 'required|string|max:255', ...self::PAY_UPDATE_RULES], self::PAY_UPDATE_MESSAGES);
+
+        $name = collect(TeacherName::all())->first(fn ($n) => TeacherName::same($n, $validated['name']));
+        if (! $name) {
+            return response()->json(['message' => 'Không tìm thấy giáo viên này trong lịch học.'], 404);
+        }
+
+        return $this->savePay($name, $validated, null);
+    }
+
+    private const PAY_UPDATE_RULES = [
+        'pay_group' => 'required|numeric|min:0',
+        'pay_one_on_one' => 'required|numeric|min:0',
+    ];
+
+    private const PAY_UPDATE_MESSAGES = [
+        'pay_group.required' => 'Vui lòng nhập lương ca nhóm',
+        'pay_one_on_one.required' => 'Vui lòng nhập lương ca 1:1',
+    ];
+
+    private function forbidUnlessSeesPay(Request $request): ?JsonResponse
+    {
+        return PagePermissions::seesAllPay($request->user())
+            ? null
+            : response()->json(['message' => 'Chỉ chủ trung tâm hoặc quản lý được đặt lương giáo viên / giáo vụ.'], 403);
+    }
+
+    private function savePay(string $name, array $validated, ?int $memberId): JsonResponse
+    {
+        $before = $this->payOf($name);
+        TeacherRates::set($name, (float) $validated['pay_group'], (float) $validated['pay_one_on_one']);
+        ActivityLogger::log('updated', 'staff', $name, $memberId, ActivityLogger::diff(
+            ['note' => 'Lương ca nhóm '.number_format($before['group'], 0, ',', '.').' · 1:1 '.number_format($before['one_on_one'], 0, ',', '.')],
+            ['note' => 'Lương ca nhóm '.number_format($validated['pay_group'], 0, ',', '.').' · 1:1 '.number_format($validated['pay_one_on_one'], 0, ',', '.')],
+        ));
+
+        return response()->json([
+            'message' => "Đã lưu lương ca cho {$name}. Áp dụng cho các ca check-in từ bây giờ.",
+            'pay' => $this->payOf($name),
+        ]);
+    }
+
     public function updateRole(Request $request, int $id): JsonResponse
     {
         if (! OwnerGuard::isOwner($request->user())) {
@@ -175,7 +292,7 @@ class StaffApiController extends Controller
         }
 
         $validated = $request->validate([
-            'role' => 'required|string',
+            'role' => ['required', 'string', Rule::in([...self::ROLES, self::OWNER_ROLE])],
         ]);
 
         $data = $this->loadStaffData();

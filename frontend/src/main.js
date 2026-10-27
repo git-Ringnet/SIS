@@ -2,6 +2,10 @@ import { createApp } from 'vue';
 import App from './App.vue';
 import router from './router';
 import './assets/main.css';
+import { initTheme } from './services/useTheme';
+
+// Bật giao diện tối đã chọn trước khi render (tránh nháy trắng)
+initTheme();
 
 const app = createApp(App);
 app.use(router);

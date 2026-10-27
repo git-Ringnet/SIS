@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import { isPathBlocked, firstAllowedPath } from '../services/permissions';
+import { applyTheme } from '../services/useTheme';
 import DashboardView from '../views/DashboardView.vue';
 import RetentionView from '../views/RetentionView.vue';
 import StudentsView from '../views/StudentsView.vue';
@@ -107,6 +108,10 @@ router.beforeEach((to, from, next) => {
   }
 
   next();
+});
+
+router.afterEach((to) => {
+  applyTheme(to.path);
 });
 
 export default router;

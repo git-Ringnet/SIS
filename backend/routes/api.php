@@ -161,6 +161,8 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::put('/members/{id}/center', [StaffApiController::class, 'updateCenter']);
         Route::put('/members/{id}/password', [StaffApiController::class, 'resetPassword']);
         Route::put('/members/{id}/permissions', [StaffApiController::class, 'updatePermissions']);
+        Route::put('/members/{id}/pay', [StaffApiController::class, 'updatePay']);
+        Route::put('/teacher-pay', [StaffApiController::class, 'updateTeacherPay']);
         Route::delete('/members/{id}', [StaffApiController::class, 'destroy']);
     });
 
@@ -229,8 +231,6 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::put('/{id}', [TeacherCheckinApiController::class, 'updateShift'])->whereNumber('id');
         Route::delete('/{id}', [TeacherCheckinApiController::class, 'destroyShift'])->whereNumber('id');
         Route::get('/qr-token', [TeacherCheckinApiController::class, 'qrToken']);
-        Route::get('/rates', [TeacherCheckinApiController::class, 'rates']);
-        Route::post('/rates', [TeacherCheckinApiController::class, 'updateRates']);
         Route::get('/export', [TeacherCheckinApiController::class, 'exportMonthly']);
 
         // Nghỉ phép / dạy thay theo khoảng ngày

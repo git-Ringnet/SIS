@@ -22,6 +22,9 @@ import {
   Building,
   Pencil,
   Trash2,
+  Users,
+  ChevronDown,
+  AlertTriangle,
 } from 'lucide-vue-next';
 import { useRouter } from 'vue-router';
 import MoneyInput from '../components/MoneyInput.vue';
@@ -78,6 +81,9 @@ const changeExpensePerPage = (n) => {
   expensePerPage.value = n;
   expensePage.value = 1;
 };
+// Lương giáo viên / giáo vụ trong tháng: tự tính từ Check-in ca dạy (không nhập tay)
+const payroll = ref({ total: 0, shifts: 0, teachers: [], manual_overlap: false });
+const showPayrollDetail = ref(false);
 const profit = ref({
   total_revenue: 0,
   total_expense: 0,
@@ -125,7 +131,7 @@ const showExpenseModal = ref(false);
 const editingExpenseId = ref(null);
 const emptyExpForm = () => ({
   date: toLocalDateString(),
-  category: 'Lương giáo viên',
+  category: 'Thuê mặt bằng',
   spender: currentUserName,
   content: '',
   account: '',
@@ -231,6 +237,7 @@ const fetchData = async () => {
     chartData.value = res.data.chart || [];
     transactions.value = res.data.transactions || [];
     expenses.value = res.data.expenses || [];
+    payroll.value = res.data.payroll || { total: 0, shifts: 0, teachers: [], manual_overlap: false };
     expensePage.value = 1;
     profit.value = res.data.profit || {};
     allocation.value = res.data.allocation || {};
@@ -714,8 +721,8 @@ const submitExpense = async () => {
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h2 class="text-base font-bold text-slate-900">Quản lý chi phí vận hành</h2>
-            <p class="text-xs text-slate-500 mt-0.5">Theo dõi tiền mặt bằng, điện nước, lương giáo viên và chi phí
-              marketing</p>
+            <p class="text-xs text-slate-500 mt-0.5">Lương giáo viên trong tháng (tự tính) và các chi phí phát sinh: mặt
+              bằng, điện nước, marketing…</p>
           </div>
 
           <button type="button" @click="openCreateExpense"
@@ -725,8 +732,48 @@ const submitExpense = async () => {
           </button>
         </div>
 
-        <div v-if="expenses.length === 0" class="py-8 text-center text-xs sm:text-sm text-slate-500">
-          Chưa có khoản chi phí nào trong kỳ này
+        <!-- Lương giáo viên trong tháng: tự tính từ các ca đã check-in, cùng số với trang Check-in ca dạy -->
+        <div class="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4 space-y-3">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div class="flex items-start gap-2.5">
+              <Users class="h-5 w-5 text-indigo-600 shrink-0 mt-0.5" />
+              <div>
+                <div class="text-sm font-bold text-slate-900">Lương giáo viên tháng {{ payroll.month }}</div>
+                <div class="text-[11px] text-slate-500">
+                  Tự tính từ {{ payroll.shifts }} ca đã check-in ở trang
+                  <router-link to="/teacher-checkin" class="font-semibold text-indigo-700 hover:underline">Check-in ca dạy</router-link>,
+                  không cần nhập tay.
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 self-end sm:self-auto">
+              <span class="text-lg font-extrabold text-rose-600">{{ formatCurrency(payroll.total) }}</span>
+              <button v-if="payroll.teachers.length" type="button" @click="showPayrollDetail = !showPayrollDetail"
+                class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                Từng người
+                <ChevronDown class="h-3.5 w-3.5 transition-transform" :class="showPayrollDetail ? 'rotate-180' : ''" />
+              </button>
+            </div>
+          </div>
+
+          <div v-if="showPayrollDetail && payroll.teachers.length" class="divide-y divide-indigo-100 border-t border-indigo-100 text-xs">
+            <div v-for="t in payroll.teachers" :key="t.name" class="flex items-center justify-between py-2">
+              <span class="font-semibold text-slate-800">{{ t.name }}
+                <span class="font-normal text-slate-500">· {{ t.shifts }} ca</span></span>
+              <span class="font-bold text-slate-900">{{ formatCurrency(t.amount) }}</span>
+            </div>
+          </div>
+
+          <p v-if="payroll.manual_overlap"
+            class="flex items-start gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-[11px] text-amber-800">
+            <AlertTriangle class="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            Tháng này còn khoản "Lương giáo viên" nhập tay trước đây, lương đang bị tính hai lần. Xóa khoản nhập tay đó
+            (hoặc đổi sang "Lương khác" nếu là thưởng / phụ cấp).
+          </p>
+        </div>
+
+        <div v-if="expenses.length === 0" class="py-6 text-center text-xs sm:text-sm text-slate-500">
+          Chưa có chi phí phát sinh nào khác trong kỳ này
         </div>
 
         <div v-else class="overflow-x-auto pt-1">
@@ -772,7 +819,8 @@ const submitExpense = async () => {
 
           <div
             class="pt-4 border-t border-slate-100 flex justify-between items-center text-xs font-medium text-slate-700">
-            <span>Tổng cộng {{ expenses.length }} khoản chi</span>
+            <span>{{ expenses.length }} khoản chi phát sinh: {{ formatCurrency(profit.manual_expense) }}
+              + lương giáo viên {{ formatCurrency(profit.payroll_expense) }}</span>
             <span>Tổng chi: <strong class="text-rose-600 text-sm font-bold">{{ formatCurrency(profit.total_expense)
                 }}</strong></span>
           </div>
@@ -981,7 +1029,9 @@ const submitExpense = async () => {
               <select v-model="expForm.category"
                 class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none">
                 <option value="Thuê mặt bằng">Thuê mặt bằng</option>
-                <option value="Lương giáo viên">Lương giáo viên & Nhân sự</option>
+                <!-- Lương ca giáo viên tự tính từ Check-in, ở đây chỉ nhập khoản lương khác (thưởng, phụ cấp...) -->
+                <option value="Lương khác">Lương khác (thưởng, phụ cấp…)</option>
+                <option v-if="expForm.category === 'Lương giáo viên'" value="Lương giáo viên">Lương giáo viên (nhập tay trước đây)</option>
                 <option value="Điện nước & Internet">Điện nước & Internet</option>
                 <option value="Marketing & Quảng cáo">Marketing & Quảng cáo</option>
                 <option value="Mua học cụ & Nhạc cụ">Mua học cụ & Nhạc cụ</option>

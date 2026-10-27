@@ -17,8 +17,11 @@ const leaves = ref([]);
 const substitutions = ref([]);
 const centerOffs = ref([]);
 
-const leaveForm = ref({ teacher: '', from: today, to: today, reason: '' });
-const subForm = ref({ original: '', substitute: '', from: today, to: today, reason: '' });
+// Khung giờ (start_time - end_time) để trống = cả ngày
+const emptyLeave = () => ({ teacher: '', from: today, to: today, start_time: '', end_time: '', reason: '' });
+const emptySub = () => ({ original: '', substitute: '', from: today, to: today, start_time: '', end_time: '', reason: '' });
+const leaveForm = ref(emptyLeave());
+const subForm = ref(emptySub());
 const offForm = ref({ center: '', from: today, to: today, reason: '' });
 const savingLeave = ref(false);
 const savingSub = ref(false);
@@ -37,6 +40,9 @@ const formatDate = (iso) => {
   const [y, m, d] = iso.split('-');
   return `${d}/${m}/${y}`;
 };
+
+// "04/11/2026 → 04/11/2026 · 16:00 - 17:00" (không có khung giờ = cả ngày)
+const periodLabel = (p) => `${formatDate(p.from)} → ${formatDate(p.to)}${p.start_time && p.end_time ? ` · ${p.start_time} - ${p.end_time}` : ' · Cả ngày'}`;
 
 const fetchData = async () => {
   try {
@@ -59,7 +65,7 @@ const saveLeave = async () => {
     savingLeave.value = true;
     const res = await teacherCheckinApi.createLeave(leaveForm.value);
     notify.success(res.data.message);
-    leaveForm.value = { teacher: '', from: today, to: today, reason: '' };
+    leaveForm.value = emptyLeave();
     await fetchData();
   } catch (err) {
     notify.error('Không lưu được nghỉ phép', { description: errorMessage(err, err.message) });
@@ -73,7 +79,7 @@ const saveSubstitution = async () => {
     savingSub.value = true;
     const res = await teacherCheckinApi.createSubstitution(subForm.value);
     notify.success(res.data.message);
-    subForm.value = { original: '', substitute: '', from: today, to: today, reason: '' };
+    subForm.value = emptySub();
     await fetchData();
   } catch (err) {
     notify.error('Không lưu được phân công dạy thay', { description: errorMessage(err, err.message) });
@@ -103,7 +109,7 @@ const removePeriod = async (type, item) => {
   }[type] || `phân công ${item.substitute} dạy thay ${item.original}`;
   if (!(await confirmDialog({
     title: 'Xoá đợt này?',
-    message: `Xoá ${what} (${formatDate(item.from)} → ${formatDate(item.to)}). Các ca chưa check-in trong khoảng ngày này sẽ trở lại bình thường.`,
+    message: `Xoá ${what} (${periodLabel(item)}). Các ca chưa check-in trong khoảng này sẽ trở lại bình thường.`,
     confirmText: 'Xoá',
   }))) return;
 
@@ -238,8 +244,8 @@ const inputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2
             <CalendarX class="h-4 w-4 text-slate-600" /> Vắng có phép theo khoảng ngày
           </h2>
           <p class="text-xs text-slate-500 mt-1">
-            Trong khoảng ngày này, tất cả ca dạy của giáo viên được tính là Vắng có phép và giáo viên không thể
-            check-in.
+            Trong khoảng ngày (và khung giờ nếu có) này, các ca dạy của giáo viên được tính là Vắng có phép, giáo viên
+            không thể check-in. Không có người dạy thay thì buổi học của học viên trong khung giờ đó là buổi off.
           </p>
         </div>
 
@@ -259,6 +265,16 @@ const inputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2
               <DatePickerVN v-model="leaveForm.to" class="mt-1" required />
             </div>
           </div>
+          <div class="grid grid-cols-2 gap-3">
+            <label class="text-[11px] font-semibold text-slate-600">Từ giờ (tuỳ chọn)
+              <input v-model="leaveForm.start_time" type="time" :required="!!leaveForm.end_time" :class="[inputClass, 'mt-1']" />
+            </label>
+            <label class="text-[11px] font-semibold text-slate-600">Đến giờ (tuỳ chọn)
+              <input v-model="leaveForm.end_time" type="time" :required="!!leaveForm.start_time" :class="[inputClass, 'mt-1']" />
+            </label>
+          </div>
+          <p class="text-[11px] text-slate-500 -mt-1">Để trống giờ = cả ngày. Có nhập giờ thì chỉ các ca nằm trong khung giờ này
+            mỗi ngày bị ảnh hưởng, các ca khác trong ngày vẫn dạy bình thường.</p>
           <label class="block text-[11px] font-semibold text-slate-600">
             Lý do (tuỳ chọn)
             <input v-model="leaveForm.reason" placeholder="Nghỉ ốm, việc gia đình..." :class="[inputClass, 'mt-1']" />
@@ -279,7 +295,7 @@ const inputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2
             class="flex items-start justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2.5 text-xs">
             <div>
               <p class="font-bold text-slate-900">{{ l.teacher }}</p>
-              <p class="text-slate-600">{{ formatDate(l.from) }} → {{ formatDate(l.to) }}<template v-if="l.reason"> · {{
+              <p class="text-slate-600">{{ periodLabel(l) }}<template v-if="l.reason"> · {{
                   l.reason }}</template>
               </p>
               <span
@@ -301,7 +317,7 @@ const inputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2
             <Repeat class="h-4 w-4 text-slate-600" /> Phân công dạy thay
           </h2>
           <p class="text-xs text-slate-500 mt-1">
-            Áp dụng cho toàn bộ ca dạy cố định của giáo viên gốc trong khoảng ngày: người dạy thay thấy ca, tự check-in
+            Áp dụng cho các ca dạy cố định của giáo viên gốc trong khoảng ngày (và khung giờ nếu có): người dạy thay thấy ca, tự check-in
             và
             nhận thù lao theo đơn giá của mình. Đổi người cho đúng 1 ca thì dùng nút "Báo vắng / Dạy thay" trên ca đó ở
             trang
@@ -334,6 +350,16 @@ const inputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2
               <DatePickerVN v-model="subForm.to" class="mt-1" required />
             </div>
           </div>
+          <div class="grid grid-cols-2 gap-3">
+            <label class="text-[11px] font-semibold text-slate-600">Từ giờ (tuỳ chọn)
+              <input v-model="subForm.start_time" type="time" :required="!!subForm.end_time" :class="[inputClass, 'mt-1']" />
+            </label>
+            <label class="text-[11px] font-semibold text-slate-600">Đến giờ (tuỳ chọn)
+              <input v-model="subForm.end_time" type="time" :required="!!subForm.start_time" :class="[inputClass, 'mt-1']" />
+            </label>
+          </div>
+          <p class="text-[11px] text-slate-500 -mt-1">Để trống giờ = cả ngày. Có nhập giờ thì chỉ các ca nằm trong khung giờ này
+            mỗi ngày bị ảnh hưởng, các ca khác trong ngày vẫn dạy bình thường.</p>
           <label class="block text-[11px] font-semibold text-slate-600">
             Lý do (tuỳ chọn)
             <input v-model="subForm.reason" placeholder="GV gốc nghỉ phép..." :class="[inputClass, 'mt-1']" />
@@ -355,7 +381,7 @@ const inputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2
             <div>
               <p class="font-bold text-slate-900">{{ sub.substitute }} <span class="font-normal text-slate-500">dạy
                   thay</span> {{ sub.original }}</p>
-              <p class="text-slate-600">{{ formatDate(sub.from) }} → {{ formatDate(sub.to) }}<template
+              <p class="text-slate-600">{{ periodLabel(sub) }}<template
                   v-if="sub.reason"> · {{ sub.reason }}</template></p>
               <span
                 :class="['mt-1 inline-block rounded-md px-1.5 py-0.5 text-[11px] font-semibold', STATUS_LABELS[sub.status]?.class]">{{

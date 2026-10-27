@@ -5,116 +5,142 @@ namespace App\Support;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * Đơn giá ca dạy theo từng giáo viên (lưu shift_rates.json).
+ * Lương ca dạy riêng của từng giáo viên / giáo vụ (lưu shift_rates.json), đặt ở màn Nhân sự khi tạo / sửa:
+ *  - group      : tiền mỗi ca nhóm
+ *  - one_on_one : tiền mỗi ca 1:1
+ * Mỗi lần check-in ca dạy được cộng tiền theo mức của người dạy (chốt lúc check-in).
+ * Chưa đặt lương thì ca tính 0 đồng — không có mức chung cho mọi giáo viên.
  *
- * Mỗi giáo viên chọn một kiểu tính cho ca nhóm:
- *  - per_shift   : tiền cố định mỗi ca nhóm
- *  - per_student : đơn giá × số học viên có mặt trong ca
- *  - free        : "Dạy tự do" (mô hình mỹ thuật): số HV điểm danh có mặt > ngưỡng thì trả giá/lượt × số HV,
- *                  ≤ ngưỡng thì trả giá/ca dạy. Ô nào để trống dùng mức mặc định của cơ sở (màn Trung tâm).
- * Ca 1:1 luôn tính theo đơn giá 1:1. Có thể đặt đơn giá riêng theo khoá học; khoá nào để trống dùng đơn giá chung
- * của giáo viên đó.
+ * Hệ số theo điểm danh học viên (payFactor()):
+ *  - Ca 1:1: học viên vắng không phép → 50%; vắng có phép → không tính lương (không có dạy).
+ *  - Ca nhóm: số học viên đi học ≤ một nửa sĩ số lớp nhóm của cơ sở (mặc định 4 → ≤ 2 HV) → 50%.
+ *
+ * Ca check-in trước khi đổi cách tính có thể còn pay_mode per_student / free: giữ cách tính cũ cho các ca đó
+ * (legacyAmount) để thu nhập các tháng trước không đổi.
  */
 class TeacherRates
 {
     private const PATH = 'shift_rates.json';
 
-    public const MODES = ['per_shift', 'per_student', 'free'];
+    // Sĩ số lớp nhóm mặc định khi cơ sở chưa đặt (lớp nhóm của trung tâm 4 bạn)
+    public const DEFAULT_GROUP_SIZE = 4;
 
     /**
-     * @return array<string, array{name: string, mode: string, group: float, one_on_one: float, courses: array<string, array{group: ?float, one_on_one: ?float}>}>
+     * @return array<string, array{name: string, group: float, one_on_one: float}>
      */
     public static function all(): array
     {
         $data = Storage::exists(self::PATH) ? json_decode(Storage::get(self::PATH), true) : null;
 
-        // Định dạng cũ (một đơn giá chung cho mọi giáo viên) không còn dùng
         return is_array($data['teachers'] ?? null) ? $data['teachers'] : [];
     }
 
-    public static function save(array $teachers): void
+    private static function save(array $teachers): void
     {
         Storage::put(self::PATH, json_encode(['teachers' => $teachers], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
     }
 
+    /**
+     * Lương ca đang đặt của một người (chưa đặt = 0).
+     *
+     * @return array{group: float, one_on_one: float}
+     */
     public static function forTeacher(?string $name): array
     {
-        return self::all()[TeacherName::key($name)] ?? ['name' => (string) $name, 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 0, 'courses' => []];
+        $cfg = self::all()[TeacherName::key($name)] ?? [];
+
+        return ['group' => (float) ($cfg['group'] ?? 0), 'one_on_one' => (float) ($cfg['one_on_one'] ?? 0)];
     }
 
     /**
-     * Đơn giá áp cho một ca, chốt tại thời điểm check-in.
-     *
-     * @return array{pay_mode: string, unit_rate: float}
+     * Đặt lương ca của giáo viên / giáo vụ. Ô để trống (null) giữ mức đang có.
      */
-    public static function quote(?string $teacher, ?int $courseId, bool $isOneOnOne, ?string $center = null): array
+    public static function set(string $name, ?float $group, ?float $oneOnOne): void
     {
-        $cfg = self::forTeacher($teacher);
+        $teachers = self::all();
+        $current = self::forTeacher($name);
+        $teachers[TeacherName::key($name)] = [
+            'name' => $name,
+            'group' => $group ?? $current['group'],
+            'one_on_one' => $oneOnOne ?? $current['one_on_one'],
+        ];
+        self::save($teachers);
+    }
 
-        if (! $isOneOnOne && ($cfg['mode'] ?? null) === 'free') {
-            $defaults = self::centerFreeDefaults($center);
-            $pick = fn ($key) => ($cfg['free'][$key] ?? null) ?? $defaults[$key];
-
-            return [
-                'pay_mode' => 'free',
-                'unit_rate' => (float) ($pick('per_student') ?? 0),
-                'free_threshold' => $pick('threshold') !== null ? (int) $pick('threshold') : null,
-                'free_per_shift' => (float) ($pick('per_shift') ?? 0),
-            ];
-        }
-
-        $field = $isOneOnOne ? 'one_on_one' : 'group';
-        $courseRate = $courseId !== null ? ($cfg['courses'][(string) $courseId][$field] ?? null) : null;
+    /**
+     * Đơn giá áp cho một ca, chốt tại thời điểm check-in (đổi lương sau này không ảnh hưởng ca đã tính).
+     *
+     * @return array{pay_mode: string, unit_rate: float, group_size?: int}
+     */
+    public static function quote(?string $teacher, bool $isOneOnOne, ?string $center = null): array
+    {
+        $pay = self::forTeacher($teacher);
 
         return [
-            'pay_mode' => $isOneOnOne ? 'per_shift' : ($cfg['mode'] ?? 'per_shift'),
-            'unit_rate' => (float) ($courseRate ?? $cfg[$field] ?? 0),
+            'pay_mode' => 'per_shift',
+            'unit_rate' => $isOneOnOne ? $pay['one_on_one'] : $pay['group'],
+            ...($isOneOnOne ? [] : ['group_size' => self::groupSize($center)]),
         ];
     }
 
     /**
-     * Mức "Dạy tự do" mặc định cấu hình ở cơ sở (màn Trung tâm).
+     * Sĩ số lớp nhóm của cơ sở (để xét "đi học ≤ một nửa thì nhận 50%").
+     */
+    public static function groupSize(?string $center): int
+    {
+        foreach (CenterStore::all() as $c) {
+            if ($c['name'] === $center && (int) ($c['group_size'] ?? 0) > 0) {
+                return (int) $c['group_size'];
+            }
+        }
+
+        return self::DEFAULT_GROUP_SIZE;
+    }
+
+    /**
+     * Hệ số lương của ca theo điểm danh học viên của ca.
+     * $statuses: trạng thái điểm danh từng học viên của ca (student_id => status), học viên chưa điểm danh thì không có.
+     * Học viên chưa điểm danh được coi là đi học (ca vẫn đủ lương cho tới khi giáo vụ điểm danh vắng).
      *
-     * @return array{threshold: ?int, per_student: ?float, per_shift: ?float}
+     * @return array{factor: float, note: ?string}
      */
-    public static function centerFreeDefaults(?string $center): array
+    public static function payFactor(array $shift, array $statuses): array
     {
-        foreach (CenterStore::all() as $c) {
-            if ($c['name'] === $center) {
-                return [
-                    'threshold' => $c['free_threshold'] ?? null,
-                    'per_student' => $c['free_per_student'] ?? null,
-                    'per_shift' => $c['free_per_shift'] ?? null,
-                ];
-            }
+        $ids = $shift['student_ids'] ?? [];
+        if ($ids === []) {
+            return ['factor' => 1.0, 'note' => null];
         }
 
-        return ['threshold' => null, 'per_student' => null, 'per_shift' => null];
+        if (($shift['type'] ?? '') === 'Ca 1-1') {
+            return match ($statuses[$ids[0]] ?? null) {
+                'absent_without_leave' => ['factor' => 0.5, 'note' => 'HV vắng không phép · 50%'],
+                'absent_with_leave' => ['factor' => 0.0, 'note' => 'HV vắng có phép · không tính lương'],
+                default => ['factor' => 1.0, 'note' => null],
+            };
+        }
+
+        $size = (int) ($shift['group_size'] ?? 0) ?: self::groupSize($shift['center'] ?? null);
+        $absent = count(array_filter($ids, fn ($id) => str_starts_with((string) ($statuses[$id] ?? ''), 'absent')));
+        $attending = count($ids) - $absent;
+
+        return $attending * 2 <= $size
+            ? ['factor' => 0.5, 'note' => "{$attending}/{$size} HV đi học · 50%"]
+            : ['factor' => 1.0, 'note' => null];
     }
 
     /**
-     * Thù lao "Dạy tự do": số HV có mặt > ngưỡng thì tính theo lượt HV, ≤ ngưỡng thì giá / ca dạy.
+     * Thù lao ca check-in theo cách tính cũ (trước khi đặt lương riêng ở Nhân sự), null nếu ca theo cách mới.
+     *  - per_student: đơn giá × số HV có mặt
+     *  - free ("Dạy tự do"): số HV có mặt > ngưỡng thì giá/lượt × số HV, ≤ ngưỡng thì giá/ca
      */
-    public static function freeAmount(array $shift, int $present): float
+    public static function legacyAmount(array $shift, int $present): ?float
     {
-        $threshold = $shift['free_threshold'] ?? null;
-
-        return $threshold !== null && $present > $threshold
-            ? ($shift['unit_rate'] ?? 0) * $present
-            : (float) ($shift['free_per_shift'] ?? 0);
-    }
-
-    /**
-     * Cơ sở có bắt giáo viên "Dạy tự do" quét QR khi nhận ca hay không (mặc định: có).
-     */
-    public static function freeRequiresQr(?string $center): bool
-    {
-        foreach (CenterStore::all() as $c) {
-            if ($c['name'] === $center) {
-                return $c['free_require_qr'] ?? true;
-            }
-        }
-
-        return true;
+        return match ($shift['pay_mode'] ?? null) {
+            'per_student' => ($shift['unit_rate'] ?? 0) * $present,
+            'free' => ($shift['free_threshold'] ?? null) !== null && $present > $shift['free_threshold']
+                ? ($shift['unit_rate'] ?? 0) * $present
+                : (float) ($shift['free_per_shift'] ?? 0),
+            default => null,
+        };
     }
 }

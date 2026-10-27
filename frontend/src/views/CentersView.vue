@@ -3,7 +3,6 @@ import { notify } from '../services/notify';
 import { confirmDialog } from '../services/useConfirm';
 import { ref, onMounted } from 'vue';
 import { centerApi } from '../services/api';
-import MoneyInput from '../components/MoneyInput.vue';
 import { useCenters } from '../services/useCenters';
 import {
   Plus,
@@ -130,10 +129,7 @@ const openCreateCenter = () => {
     logo_url: '',
     bank_info: '',
     qr_url: '',
-    free_threshold: null,
-    free_per_student: null,
-    free_per_shift: null,
-    free_require_qr: true,
+    group_size: null,
   };
   showCenterModal.value = true;
 };
@@ -150,10 +146,7 @@ const openEditCenter = (c) => {
     logo_url: c.logo_url || '',
     bank_info: c.bank_info || '',
     qr_url: c.qr_url || '',
-    free_threshold: c.free_threshold ?? null,
-    free_per_student: c.free_per_student ?? null,
-    free_per_shift: c.free_per_shift ?? null,
-    free_require_qr: c.free_require_qr ?? true,
+    group_size: c.group_size ?? null,
   };
   showCenterModal.value = true;
 };
@@ -454,37 +447,19 @@ const handleDeleteRoom = async (roomId) => {
             </div>
           </div>
 
-          <!-- Mức "Dạy tự do" mặc định của cơ sở (dùng khi giáo viên chưa đặt riêng ở Đơn giá ca dạy) -->
+          <!-- Sĩ số lớp nhóm: số HV đi học ≤ một nửa thì giáo viên / giáo vụ nhận 50% lương ca nhóm -->
           <div class="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-3 space-y-2">
-            <p class="text-sm font-bold text-slate-800">Đơn giá ca dạy tự do (mô hình mỹ thuật)</p>
-            <div class="grid grid-cols-3 gap-2">
-              <label class="text-[11px] font-semibold text-slate-600">
-                Ngưỡng HV
-                <input v-model.number="centerForm.free_threshold" type="number" min="1" placeholder="ví dụ 5"
-                  class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 focus:border-rose-500 focus:outline-none" />
-              </label>
-              <label class="text-[11px] font-semibold text-slate-600">
-                Giá / lượt HV
-                <MoneyInput v-model="centerForm.free_per_student" placeholder="VNĐ"
-                  class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 focus:border-rose-500 focus:outline-none" />
-              </label>
-              <label class="text-[11px] font-semibold text-slate-600">
-                Giá / ca dạy
-                <MoneyInput v-model="centerForm.free_per_shift" placeholder="VNĐ"
-                  class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 focus:border-rose-500 focus:outline-none" />
-              </label>
-            </div>
-            <p class="text-[11px] text-slate-500">
-              Nếu số học viên điểm danh &gt; ngưỡng → tính theo lượt HV; nếu ≤ ngưỡng → tính theo ca dạy.
-              Chỉ áp dụng cho giáo viên được bật chế độ "Dạy tự do" (giáo viên có đặt riêng ở Đơn giá ca dạy thì dùng
-              mức riêng).
-            </p>
-            <label class="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
-              <input v-model="centerForm.free_require_qr" type="checkbox"
-                class="h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500" />
-              Bắt buộc quét QR trước khi nhận ca dạy tự do
+            <label class="block text-sm font-bold text-slate-800">
+              Sĩ số lớp nhóm
+              <input v-model.number="centerForm.group_size" type="number" min="2" max="100" placeholder="4"
+                class="mt-1 w-32 block rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-normal text-slate-800 focus:border-rose-500 focus:outline-none" />
             </label>
+            <p class="text-[11px] text-slate-500">
+              Ca nhóm có số học viên đi học ≤ một nửa sĩ số (vắng từ một nửa trở lên) thì giáo viên nhận 50% lương ca.
+              VD sĩ số 4: còn ≤ 2 bạn đi học → 50%; sĩ số 6: nghỉ 3 bạn → 50%. Để trống = 4.
+            </p>
           </div>
+
         </div>
 
         <div class="px-6 py-3 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-2">

@@ -97,8 +97,11 @@ class AttendanceApiController extends Controller
 
         // Mỗi ca học trong ngày là một dòng (một học viên có thể có nhiều ca / ngày), cộng buổi học lẻ / học bù
         $periods = TeacherLeaves::all();
-        $studentsFormatted = $students->flatMap(function ($st) use ($dayAttendances, $todayLessons, $dateStr, $periods) {
+        // Toàn bộ điểm danh của các học viên trong ngày, để đánh số buổi chính thức giống Cổng phụ huynh
+        $allAttendances = Attendance::whereIn('student_id', $students->pluck('id'))->get()->groupBy('student_id');
+        $studentsFormatted = $students->flatMap(function ($st) use ($dayAttendances, $todayLessons, $dateStr, $periods, $allAttendances) {
             $records = $dayAttendances->get($st->id, collect());
+            $official = StudentSchedule::officialNumbers($st, $allAttendances->get($st->id, collect()))['numbers'];
             $rows = [];
 
             // Chỉ các ca đã bắt đầu học (không hiện buổi trước "Ngày bắt đầu học" / trước ngày bắt đầu của khóa thêm)
@@ -117,7 +120,7 @@ class AttendanceApiController extends Controller
                     'is_single_lesson' => false, 'is_makeup' => false, 'off' => null];
             }
 
-            return array_map(function ($row) use ($st, $records) {
+            return array_map(function ($row) use ($st, $records, $official) {
                 // Bản ghi theo đúng ca; bản ghi cũ không có ca được tính cho ca đầu tiên trong ngày
                 $att = $records->firstWhere('slot_id', $row['slot_id'])
                     ?? ($row['first'] ? $records->first(fn ($r) => $r->slot_id === null) : null);
@@ -135,9 +138,7 @@ class AttendanceApiController extends Controller
                     : StudentSchedule::courseItemForSlot($st, $row['slot_id']);
                 $total = (int) ($item['total_sessions'] ?? $st->total_sessions);
                 $remaining = (int) ($item['remaining_sessions'] ?? $st->remaining_sessions);
-                // Buổi đã trừ buổi thì đã nằm trong số buổi đã học; chưa điểm danh / nghỉ không trừ buổi thì là buổi kế tiếp
                 $deducts = $att?->deductsSession() ?? false;
-                $currentSession = min($total, ($total - $remaining) + ($deducts ? 0 : 1));
                 $allowedAbsences = (int) ($item['allowed_absences'] ?? $st->allowed_absences ?? 3);
 
                 return [
@@ -165,7 +166,8 @@ class AttendanceApiController extends Controller
                     'off_label' => $row['off'] ? $row['off']['label'].($row['off']['reason'] ? ': '.$row['off']['reason'] : '') : null,
                     'total_sessions' => $total,
                     'remaining_sessions' => $remaining,
-                    'current_session' => max(1, $currentSession),
+                    // Số buổi chính thức của buổi này (cùng số với Cổng phụ huynh); học bù / học lẻ / nghỉ không trừ buổi: null
+                    'current_session' => $att ? ($official[$att->id] ?? null) : null,
                     // Số buổi đã học (đã trừ): buổi không trừ (nghỉ có phép trong lượt, buổi off) hiện "Đã học x/y"
                     'attended_sessions' => max(0, $total - $remaining),
                     'status' => $status,
@@ -320,10 +322,9 @@ class AttendanceApiController extends Controller
         $slotId = $validated['slot_id'] ?? null;
 
         // Bản ghi của đúng ca (bản ghi cũ không có ca được tính cho ca đầu tiên trong ngày)
-        $daySlots = StudentSchedule::slotsOn($student, Carbon::parse($validated['date'])->dayOfWeek);
         $records = Attendance::where('student_id', $student->id)->whereDate('attended_at', $validated['date'])->get();
         $attendance = $records->firstWhere('slot_id', $slotId)
-            ?? (($slotId === null || ($daySlots[0]['id'] ?? null) === $slotId) ? $records->first(fn ($r) => $r->slot_id === null) : null);
+            ?? (($slotId === null || StudentSchedule::firstSlotIdOn($student, $validated['date']) === $slotId) ? $records->first(fn ($r) => $r->slot_id === null) : null);
 
         if (! $attendance) {
             return response()->json(['message' => 'Buổi này chưa được điểm danh. Báo bài sau khi giáo vụ đã điểm danh học viên.'], 422);
@@ -426,15 +427,24 @@ class AttendanceApiController extends Controller
             'is_makeup' => 'nullable|boolean',
         ]);
 
+        $time = $validated['time'] ?? '18:00 - 19:00';
+        $duplicate = collect(SingleLessons::forStudent((int) $validated['student_id']))
+            ->first(fn ($l) => ($l['date'] ?? null) === Carbon::parse($validated['date'])->toDateString()
+                && SingleLessons::startTime($l) === SingleLessons::startTime(['time' => $time]));
+        if ($duplicate) {
+            return response()->json(['message' => 'Học viên đã có '.(! empty($duplicate['is_makeup']) ? 'buổi học bù' : 'buổi học lẻ')
+                .' lúc '.SingleLessons::startTime($duplicate).' ngày này rồi.'], 422);
+        }
+
         SingleLessons::add([
             'id' => uniqid('lesson_'),
             'student_id' => (int) $validated['student_id'],
-            'date' => $validated['date'],
+            'date' => Carbon::parse($validated['date'])->toDateString(),
             'center' => $validated['center'] ?? null,
             'course_id' => $validated['course_id'] ?? null,
             'room' => $validated['room'] ?? null,
             'teacher' => $validated['teacher'] ?? null,
-            'time' => $validated['time'] ?? '18:00 - 19:00',
+            'time' => $time,
             'merged_slot_id' => $validated['merged_slot_id'] ?? null,
             'merged_class_id' => $validated['merged_class_id'] ?? null,
             'is_merged' => ! empty($validated['merged_slot_id']),
@@ -465,13 +475,16 @@ class AttendanceApiController extends Controller
             return response()->json(['message' => 'Không tìm thấy buổi học lẻ / học bù này.'], 404);
         }
 
-        if (Attendance::where('student_id', $lesson['student_id'])->where('slot_id', $id)->exists()) {
+        // Điểm danh của đúng buổi này, hoặc bản ghi cũ không có ca khi đây là ca đầu tiên trong ngày (như trang Điểm danh)
+        $student = Student::find($lesson['student_id']);
+        $records = Attendance::where('student_id', $lesson['student_id'])->whereDate('attended_at', $lesson['date'])->get();
+        if ($records->contains('slot_id', $id)
+            || ($student && StudentSchedule::firstSlotIdOn($student, $lesson['date']) === $id && $records->contains(fn ($r) => $r->slot_id === null))) {
             return response()->json(['message' => 'Buổi này đã được điểm danh. Hoàn tác điểm danh trước khi xóa buổi.'], 422);
         }
 
         SingleLessons::remove($id);
         $label = ! empty($lesson['is_makeup']) ? 'buổi học bù' : 'buổi học lẻ';
-        $student = Student::find($lesson['student_id']);
 
         return response()->json([
             'message' => "Đã xóa {$label} ngày ".Carbon::parse($lesson['date'])->format('d/m/Y').($student ? " của học viên {$student->name}" : '').'.',

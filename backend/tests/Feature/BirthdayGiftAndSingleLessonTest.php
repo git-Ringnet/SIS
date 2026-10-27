@@ -7,6 +7,7 @@ use App\Models\CourseClass;
 use App\Models\Student;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class BirthdayGiftAndSingleLessonTest extends TestCase
@@ -18,6 +19,7 @@ class BirthdayGiftAndSingleLessonTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        Storage::fake('local'); // không ghi buổi học lẻ vào file dữ liệu thật
         $this->user = User::factory()->create();
     }
 

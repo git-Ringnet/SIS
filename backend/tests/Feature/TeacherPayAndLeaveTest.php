@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Support\CenterStore;
 use App\Support\CheckinToken;
 use App\Support\PagePermissions;
+use App\Support\TeacherRates;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
@@ -61,39 +62,61 @@ class TeacherPayAndLeaveTest extends TestCase
         return $this->getJson('/api/teacher-checkin?date='.self::DATE.'&month=2026-10')->json('monthly_summary');
     }
 
-    private function saveRates(array $teachers): void
+    /**
+     * Lương ca riêng từng người (như đặt ở màn Nhân sự).
+     */
+    private function setPay(array $teachers): void
     {
-        $this->postJson('/api/teacher-checkin/rates', ['teachers' => $teachers])->assertOk();
+        foreach ($teachers as $t) {
+            TeacherRates::set($t['name'], (float) ($t['group'] ?? 0), (float) ($t['one_on_one'] ?? 0));
+        }
     }
 
-    public function test_per_shift_rate_with_course_override_and_one_on_one(): void
+    public function test_each_teacher_has_own_group_and_one_on_one_pay_locked_at_checkin(): void
     {
-        $a = $this->student('A', 'Cô Mai', $this->guitar, 'G1');
-        $this->student('B', 'Cô Mai', $this->guitar, 'G1');      // ca nhóm Guitar
+        $this->student('A', 'Cô Mai', $this->guitar, 'G1');
+        $this->student('B', 'Cô Mai', $this->guitar, 'G1');      // ca nhóm Guitar (3 bạn, > nửa sĩ số 4 → đủ lương)
+        $this->student('D', 'Cô Mai', $this->guitar, 'G1');
         $this->student('C', 'Thầy Bình', $this->piano, 'P1');    // ca 1:1
+        $this->student('E', 'Cô Lan', $this->piano, 'P2');       // chưa đặt lương
 
-        $this->getJson('/api/teacher-checkin/rates')->assertOk()
-            ->assertJsonPath('teachers.0.name', 'Cô Mai')
-            ->assertJsonPath('teachers.0.courses.0.name', 'Guitar');
-
-        $this->saveRates([
-            ['name' => 'Cô Mai', 'mode' => 'per_shift', 'group' => 200000, 'one_on_one' => 150000,
-                'courses' => [['course_id' => $this->guitar->id, 'group' => 250000]]],
-            ['name' => 'Thầy Bình', 'mode' => 'per_student', 'group' => 50000, 'one_on_one' => 120000],
+        $this->setPay([
+            ['name' => 'Cô Mai', 'group' => 250000, 'one_on_one' => 150000],
+            ['name' => 'Thầy Bình', 'group' => 50000, 'one_on_one' => 120000],
         ]);
 
         $s = $this->shifts();
-        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $s['Cô Mai']['id']])->assertOk();
-        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $s['Thầy Bình']['id']])->assertOk();
+        foreach (['Cô Mai', 'Thầy Bình', 'Cô Lan'] as $t) {
+            $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $s[$t]['id']])->assertOk();
+        }
 
-        // Đổi đơn giá sau khi check-in không ảnh hưởng ca đã tính
-        $this->saveRates([['name' => 'Cô Mai', 'mode' => 'per_shift', 'group' => 1, 'one_on_one' => 1, 'courses' => []]]);
+        // Đổi lương sau khi check-in không ảnh hưởng ca đã tính
+        $this->setPay([['name' => 'Cô Mai', 'group' => 1, 'one_on_one' => 1]]);
 
         $m = $this->monthly();
         $amounts = collect($m['shifts'])->pluck('amount', 'earner');
-        $this->assertEquals(250000, $amounts['Cô Mai']);   // giá riêng khoá Guitar, theo ca
-        $this->assertEquals(120000, $amounts['Thầy Bình']); // 1:1 luôn theo đơn giá 1:1
+        $this->assertEquals(250000, $amounts['Cô Mai']);    // lương ca nhóm của Cô Mai
+        $this->assertEquals(120000, $amounts['Thầy Bình']); // lương ca 1:1 của Thầy Bình
+        $this->assertEquals(0, $amounts['Cô Lan']);         // không có mức chung cho mọi giáo viên
         $this->assertEquals(370000, $m['total_salary']);
+        $this->getJson('/api/teacher-checkin/rates')->assertNotFound(); // "Đơn giá ca dạy" cũ đã bỏ
+    }
+
+    public function test_shifts_checked_in_with_old_pay_modes_keep_their_amount(): void
+    {
+        $a = $this->student('A', 'Cô Mai', $this->guitar, 'G1');
+        $b = $this->student('B', 'Cô Mai', $this->guitar, 'G1');
+        $this->student('C', 'Cô Mai', $this->guitar, 'G1');
+        $this->getJson('/api/teacher-checkin?date='.self::DATE);
+        // Ca đã check-in theo kiểu "theo lượt HV" trước khi đổi cách tính
+        $shifts = json_decode(Storage::get('teacher_checkins.json'), true);
+        $shifts[0] = [...$shifts[0], 'status' => 'checked_in', 'checkin_time' => '17:30', 'pay_mode' => 'per_student', 'unit_rate' => 60000];
+        Storage::put('teacher_checkins.json', json_encode($shifts));
+        foreach ([$a, $b] as $st) {
+            Attendance::create(['student_id' => $st->id, 'course_id' => $st->course_id, 'attended_at' => self::DATE.' 17:30', 'status' => 'present']);
+        }
+
+        $this->assertEquals(120000, $this->monthly()['total_salary']); // 2 bé có mặt × 60.000 như trước
     }
 
     /**
@@ -113,7 +136,7 @@ class TeacherPayAndLeaveTest extends TestCase
     {
         $this->student('A', 'Cô Mai', $this->guitar, 'G1');
         $this->student('C', 'Thầy Bình', $this->piano, 'P1', '19:00');
-        $this->saveRates([
+        $this->setPay([
             ['name' => 'Cô Mai', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 150000],
             ['name' => 'Thầy Bình', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 120000],
         ]);
@@ -127,12 +150,11 @@ class TeacherPayAndLeaveTest extends TestCase
         $this->assertStringContainsString('Thầy Bình', $csv);
         $this->assertStringNotContainsString('Cô Mai', $csv);
 
-        // Giáo viên: chỉ thù lao của mình, không xem / sửa đơn giá
+        // Giáo viên: chỉ thù lao của mình
         $this->loginAs('Cô Mai', 'Giáo viên');
         $m = $this->monthly();
         $this->assertSame(['Cô Mai'], collect($m['shifts'])->pluck('earner')->all());
         $this->assertEquals(150000, $m['total_salary']);
-        $this->getJson('/api/teacher-checkin/rates')->assertForbidden();
         // Giáo viên truyền tên người khác vẫn chỉ xuất được của mình
         $csv = $this->get('/api/teacher-checkin/export?month=2026-10&teacher='.urlencode('Thầy Bình'))->assertOk()->streamedContent();
         $this->assertStringNotContainsString('Thầy Bình', $csv);
@@ -143,25 +165,22 @@ class TeacherPayAndLeaveTest extends TestCase
         $this->assertSame([], $m['shifts']);
         $this->assertEquals(0, $m['total_salary']);
         $this->assertArrayNotHasKey('unit_rate', $this->shifts()['Cô Mai']);
-        $this->getJson('/api/teacher-checkin/rates')->assertForbidden();
-        $this->postJson('/api/teacher-checkin/rates', ['teachers' => []])->assertForbidden();
         $this->putJson("/api/teacher-checkin/{$s['Cô Mai']['id']}", ['checkin_time' => '17:30', 'unit_rate' => 1])->assertForbidden();
 
         // Quản lý xem được tất cả
-        $this->loginAs('Anh Quản Lý', 'Quản lý / Lễ tân');
+        $this->loginAs('Anh Quản Lý', 'Quản lý');
         $this->assertEquals(270000, $this->monthly()['total_salary']);
-        $this->getJson('/api/teacher-checkin/rates')->assertOk();
     }
 
     public function test_only_owner_can_delete_a_paid_shift(): void
     {
         $owner = auth()->user();
         $this->student('C', 'Thầy Bình', $this->piano, 'P1');
-        $this->saveRates([['name' => 'Thầy Bình', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 120000]]);
+        $this->setPay([['name' => 'Thầy Bình', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 120000]]);
         $id = $this->shifts()['Thầy Bình']['id'];
         $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $id])->assertOk();
 
-        $this->loginAs('Anh Quản Lý', 'Quản lý / Lễ tân');
+        $this->loginAs('Anh Quản Lý', 'Quản lý');
         $this->deleteJson("/api/teacher-checkin/{$id}")->assertForbidden();
 
         Sanctum::actingAs($owner);
@@ -176,7 +195,7 @@ class TeacherPayAndLeaveTest extends TestCase
     public function test_deleted_shift_is_excluded_everywhere_until_restored(): void
     {
         $this->student('C', 'Thầy Bình', $this->piano, 'P1');
-        $this->saveRates([['name' => 'Thầy Bình', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 120000]]);
+        $this->setPay([['name' => 'Thầy Bình', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 120000]]);
         $id = $this->shifts()['Thầy Bình']['id'];
         $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $id, 'checkin_time' => '17:40'])->assertOk();
         $this->deleteJson("/api/teacher-checkin/{$id}")->assertOk();
@@ -206,36 +225,11 @@ class TeacherPayAndLeaveTest extends TestCase
         $this->postJson("/api/teacher-checkin/{$id}/restore")->assertNotFound();
     }
 
-    public function test_rates_list_courses_from_schedule_slots_and_checkin_uses_that_course_rate(): void
-    {
-        // Khoá chính của học viên là Guitar, nhưng ca Thứ 3 (Cô Mai dạy) thuộc khoá Piano
-        Student::create([
-            'code' => 'HV-D', 'name' => 'D', 'gender' => 'Nam', 'parent_name' => 'PH', 'parent_phone' => '09',
-            'course_id' => $this->guitar->id, 'total_sessions' => 24, 'remaining_sessions' => 24, 'status' => 'active',
-            'class_days' => [2], 'teacher' => 'Cô Mai',
-            'schedules' => [['id' => 'd2', 'day' => 2, 'start' => '17:30', 'end' => '18:30', 'teacher' => 'Cô Mai', 'room' => 'P1']],
-            'registered_courses' => [
-                ['id' => 1, 'course_id' => $this->guitar->id, 'total_sessions' => 12, 'remaining_sessions' => 12],
-                ['id' => 2, 'course_id' => $this->piano->id, 'total_sessions' => 12, 'remaining_sessions' => 12, 'schedule_ids' => ['d2']],
-            ],
-        ]);
-
-        $teachers = collect($this->getJson('/api/teacher-checkin/rates')->assertOk()->json('teachers'))->keyBy('name');
-        $this->assertSame(['Piano'], array_column($teachers['Cô Mai']['courses'], 'name'));
-
-        $this->saveRates([['name' => 'Cô Mai', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 100000,
-            'courses' => [['course_id' => $this->piano->id, 'one_on_one' => 180000]]]]);
-
-        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $this->shifts()['Cô Mai']['id']])->assertOk();
-
-        $this->assertEquals(180000, $this->monthly()['total_salary']);
-    }
-
     public function test_manager_can_reset_edit_and_delete_shifts(): void
     {
         $this->student('A', 'Cô Mai', $this->guitar, 'G1');
         $this->student('B', 'Thầy Bình', $this->piano, 'P1');
-        $this->saveRates([['name' => 'Cô Mai', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 100000, 'courses' => []]]);
+        $this->setPay([['name' => 'Cô Mai', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 100000, 'courses' => []]]);
 
         $id = $this->shifts()['Cô Mai']['id'];
         $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $id, 'checkin_time' => '17:30'])->assertOk();
@@ -263,96 +257,6 @@ class TeacherPayAndLeaveTest extends TestCase
         $this->deleteJson("/api/teacher-checkin/{$id}")->assertNotFound();
     }
 
-    public function test_per_student_rate_counts_present_students(): void
-    {
-        $a = $this->student('A', 'Cô Mai', $this->guitar, 'G1');
-        $b = $this->student('B', 'Cô Mai', $this->guitar, 'G1');
-        $this->student('C', 'Cô Mai', $this->guitar, 'G1');
-        $this->saveRates([['name' => 'Cô Mai', 'mode' => 'per_student', 'group' => 60000, 'one_on_one' => 0]]);
-
-        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $this->shifts()['Cô Mai']['id']])->assertOk();
-        foreach ([$a, $b] as $st) {
-            Attendance::create(['student_id' => $st->id, 'course_id' => $st->course_id, 'session_number' => 1,
-                'attended_at' => self::DATE.' 17:30', 'status' => 'present']);
-        }
-
-        $this->assertEquals(120000, $this->monthly()['total_salary']); // 2 bé có mặt × 60.000
-    }
-
-    private function markPresent(array $students): void
-    {
-        foreach ($students as $st) {
-            Attendance::create(['student_id' => $st->id, 'course_id' => $st->course_id, 'session_number' => 1,
-                'attended_at' => self::DATE.' 17:30', 'status' => 'present']);
-        }
-    }
-
-    public function test_free_mode_pays_per_student_above_threshold_and_per_shift_otherwise(): void
-    {
-        // Ca 17:30 có 3 bé, ca 19:00 có 2 bé, cùng Cô Mai
-        $a = $this->student('A', 'Cô Mai', $this->guitar, 'G1');
-        $b = $this->student('B', 'Cô Mai', $this->guitar, 'G1');
-        $c = $this->student('C', 'Cô Mai', $this->guitar, 'G1');
-        $d = $this->student('D', 'Cô Mai', $this->guitar, 'G2', '19:00');
-        $e = $this->student('E', 'Cô Mai', $this->guitar, 'G2', '19:00');
-        $this->saveRates([['name' => 'Cô Mai', 'mode' => 'free', 'one_on_one' => 0,
-            'free' => ['threshold' => 2, 'per_student' => 50000, 'per_shift' => 120000]]]);
-
-        foreach (collect($this->getJson('/api/teacher-checkin?date='.self::DATE)->json('today_shifts'))->pluck('id') as $id) {
-            $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $id])->assertOk();
-        }
-        $this->markPresent([$a, $b, $c, $d, $e]);
-
-        $amounts = collect($this->monthly()['shifts'])->pluck('amount', 'start_time');
-        $this->assertEquals(150000, $amounts['17:30']); // 3 bé > ngưỡng 2 → 3 × 50.000
-        $this->assertEquals(120000, $amounts['19:00']); // 2 bé = ngưỡng (≤) → giá / ca dạy
-    }
-
-    public function test_free_mode_falls_back_to_center_defaults(): void
-    {
-        $center = CenterStore::all()[0];
-        $this->putJson("/api/centers/{$center['id']}", ['name' => $center['name'],
-            'free_threshold' => 1, 'free_per_student' => 40000, 'free_per_shift' => 90000])->assertOk();
-
-        $a = $this->student('A', 'Cô Mai', $this->guitar, 'G1');
-        $b = $this->student('B', 'Cô Mai', $this->guitar, 'G1');
-        Student::query()->update(['center' => $center['name']]);
-        // Giáo viên chỉ đặt giá / lượt, ngưỡng và giá / ca để trống → lấy của cơ sở
-        $this->saveRates([['name' => 'Cô Mai', 'mode' => 'free', 'free' => ['per_student' => 60000]]]);
-
-        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $this->shifts()['Cô Mai']['id']])->assertOk();
-        $this->markPresent([$a, $b]);
-
-        $this->assertEquals(120000, $this->monthly()['total_salary']); // 2 bé > ngưỡng 1 (của cơ sở) → 2 × 60.000
-    }
-
-    public function test_center_can_let_free_mode_teachers_check_in_without_qr(): void
-    {
-        $center = CenterStore::all()[0];
-        $this->student('A', 'Cô Mai', $this->guitar, 'G1');
-        $this->student('B', 'Cô Mai', $this->guitar, 'G1');
-        $this->saveRates([['name' => 'Cô Mai', 'mode' => 'free', 'free' => ['threshold' => 5, 'per_student' => 1, 'per_shift' => 1]]]);
-        $this->getJson('/api/teacher-checkin?date='.self::DATE);
-        $id = collect(json_decode(Storage::get('teacher_checkins.json'), true))->first()['id'];
-
-        $mai = User::factory()->create(['name' => 'Cô Mai']);
-        Storage::put('staff_data.json', json_encode(['members' => [[
-            'id' => 9, 'name' => 'Cô Mai', 'email' => $mai->email, 'role' => 'Giáo viên',
-            'blocked_pages' => PagePermissions::defaultBlockedPages('Giáo viên'),
-        ]]]));
-        Sanctum::actingAs($mai);
-
-        // Mặc định cơ sở bắt buộc QR
-        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $id])->assertForbidden();
-
-        // Bỏ tích "Bắt buộc quét QR trước khi nhận ca dạy tự do"
-        $all = json_decode(Storage::get('centers_data.json') ?: json_encode(CenterStore::all()), true);
-        $all[0]['free_require_qr'] = false;
-        CenterStore::save($all);
-
-        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $id])->assertOk();
-    }
-
     public function test_leave_marks_shifts_excused_and_blocks_checkin_until_removed(): void
     {
         $this->student('A', 'Cô Mai', $this->guitar, 'G1');
@@ -371,7 +275,8 @@ class TeacherPayAndLeaveTest extends TestCase
     {
         $this->student('A', 'Cô Mai', $this->guitar, 'G1');
         $this->student('B', 'Cô Mai', $this->guitar, 'G1');
-        $this->saveRates([
+        $this->student('D', 'Cô Mai', $this->guitar, 'G1');
+        $this->setPay([
             ['name' => 'Cô Mai', 'mode' => 'per_shift', 'group' => 200000, 'one_on_one' => 0],
             ['name' => 'Thầy Bình', 'mode' => 'per_shift', 'group' => 180000, 'one_on_one' => 0],
         ]);
@@ -399,5 +304,163 @@ class TeacherPayAndLeaveTest extends TestCase
         $m = $this->monthly();
         $this->assertSame('Thầy Bình', $m['shifts'][0]['earner']);
         $this->assertEquals(180000, $m['total_salary']); // theo đơn giá của người dạy thay
+    }
+
+    private function mark(Student $st, string $status, string $time = '17:30'): void
+    {
+        Attendance::create(['student_id' => $st->id, 'course_id' => $st->course_id, 'attended_at' => self::DATE.' '.$time, 'status' => $status]);
+    }
+
+    public function test_group_shift_pays_half_when_half_or_more_of_group_size_is_absent(): void
+    {
+        // Lớp nhóm 4 bạn (sĩ số mặc định 4), ca 1:1 riêng của Thầy Bình
+        $group = collect(['A', 'B', 'C', 'D'])->map(fn ($n) => $this->student($n, 'Cô Mai', $this->guitar, 'G1'));
+        $solo = $this->student('E', 'Thầy Bình', $this->piano, 'P1', '19:00');
+        $this->setPay([
+            ['name' => 'Cô Mai', 'mode' => 'per_shift', 'group' => 200000, 'one_on_one' => 0],
+            ['name' => 'Thầy Bình', 'mode' => 'per_shift', 'group' => 0, 'one_on_one' => 150000],
+        ]);
+        $s = $this->shifts();
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $s['Cô Mai']['id']])->assertOk();
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $s['Thầy Bình']['id']])->assertOk();
+        $pay = fn () => collect($this->monthly()['shifts'])->keyBy('earner');
+
+        // Chưa điểm danh / vắng 1 bạn: còn 3 bạn > nửa sĩ số → đủ lương
+        $this->mark($group[0], 'absent_without_leave');
+        $this->assertEquals(200000, $pay()['Cô Mai']['amount']);
+
+        // Vắng 2/4 (có phép hay không đều tính) → 50%
+        $this->mark($group[1], 'absent_with_leave');
+        $this->assertEquals(100000, $pay()['Cô Mai']['amount']);
+        $this->assertSame('2/4 HV đi học · 50%', $pay()['Cô Mai']['pay_note']);
+
+        // 1:1: vắng không phép → 50%, vắng có phép → không tính lương (không có dạy)
+        $this->mark($solo, 'absent_without_leave', '19:00');
+        $this->assertEquals(75000, $pay()['Thầy Bình']['amount']);
+        Attendance::where('student_id', $solo->id)->update(['status' => 'absent_with_leave']);
+        $this->assertEquals(0, $pay()['Thầy Bình']['amount']);
+    }
+
+    public function test_group_size_is_configurable_per_center(): void
+    {
+        // Sĩ số lớp nhóm 6: ca có 6 bạn, nghỉ 3 → 50%; nghỉ 2 → đủ lương
+        $center = CenterStore::all()[0];
+        $this->putJson("/api/centers/{$center['id']}", ['name' => $center['name'], 'group_size' => 6])->assertOk();
+        $group = collect(['A', 'B', 'C', 'D', 'E', 'F'])->map(fn ($n) => $this->student($n, 'Cô Mai', $this->guitar, 'G1'));
+        $this->setPay([['name' => 'Cô Mai', 'mode' => 'per_shift', 'group' => 300000, 'one_on_one' => 0]]);
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $this->shifts()['Cô Mai']['id']])->assertOk();
+
+        $this->mark($group[0], 'absent_without_leave');
+        $this->mark($group[1], 'absent_with_leave');
+        $this->assertEquals(300000, $this->monthly()['total_salary']);
+        $this->mark($group[2], 'absent_without_leave');
+        $this->assertEquals(150000, $this->monthly()['total_salary']);
+    }
+
+    public function test_pay_is_set_when_creating_and_editing_teacher_or_academic_staff(): void
+    {
+        $this->postJson('/api/staff/invites', ['name' => 'Cô Lan', 'email' => 'lan@x.vn', 'role' => 'Giáo vụ', 'center' => 'Tất cả trung tâm',
+            'pay_group' => 220000, 'pay_one_on_one' => 160000])->assertCreated();
+
+        $member = collect($this->getJson('/api/staff')->json('members'))->firstWhere('email', 'lan@x.vn');
+        $this->assertEquals(['group' => 220000, 'one_on_one' => 160000], array_intersect_key($member['pay'], ['group' => 1, 'one_on_one' => 1]));
+
+        // Giáo vụ có đứng lớp: có trong danh sách giáo viên, ca 1:1 tính theo lương đã đặt
+        $this->assertContains('Cô Lan', $this->getJson('/api/teacher-checkin?date='.self::DATE)->json('teachers'));
+        $this->putJson("/api/staff/members/{$member['id']}/pay", ['pay_group' => 250000, 'pay_one_on_one' => 180000])->assertOk();
+        $this->student('A', 'Cô Lan', $this->piano, 'P1');
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $this->shifts()['Cô Lan']['id']])->assertOk();
+        $this->assertEquals(180000, $this->monthly()['total_salary']);
+
+        $this->assertSame(['Giáo viên', 'Giáo vụ', 'Quản lý'], $this->getJson('/api/staff')->json('roles'));
+        $this->postJson('/api/staff/invites', ['email' => 'x@x.vn', 'role' => 'Quản lý / Lễ tân', 'center' => 'Tất cả trung tâm'])
+            ->assertJsonValidationErrors('role');
+
+        // Giáo viên không xem / sửa được lương
+        $this->loginAs('Cô Mai', 'Giáo viên');
+        $this->assertArrayNotHasKey('pay', $this->getJson('/api/staff')->json('members.0'));
+        $this->putJson('/api/staff/members/9/pay', ['pay_group' => 1, 'pay_one_on_one' => 1])->assertForbidden();
+    }
+
+    public function test_expense_tab_includes_monthly_teacher_pay_from_checkins(): void
+    {
+        $this->student('A', 'Cô Mai', $this->guitar, 'G1');
+        $this->student('B', 'Cô Mai', $this->guitar, 'G1');
+        $this->student('D', 'Cô Mai', $this->guitar, 'G1');
+        $this->student('C', 'Thầy Bình', $this->piano, 'P1', '19:00');
+        $this->setPay([
+            ['name' => 'Cô Mai', 'group' => 200000, 'one_on_one' => 0],
+            ['name' => 'Thầy Bình', 'group' => 0, 'one_on_one' => 150000],
+        ]);
+        foreach ($this->shifts() as $shift) {
+            $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $shift['id']])->assertOk();
+        }
+        $center = CenterStore::defaultName();
+        $this->postJson('/api/revenue/expenses', ['date' => self::DATE, 'category' => 'Thuê mặt bằng', 'spender' => 'Chủ',
+            'content' => 'Tiền nhà T10', 'amount' => 5000000, 'center' => $center])->assertSuccessful();
+
+        $data = $this->getJson('/api/revenue?period=monthly&year=2026&month=10')->assertOk()->json();
+        // Cùng số với trang Check-in ca dạy
+        $this->assertEquals($this->monthly()['total_salary'], $data['payroll']['total']);
+        $this->assertEquals(350000, $data['payroll']['total']);
+        $this->assertSame([['Cô Mai', 200000, 1], ['Thầy Bình', 150000, 1]],
+            collect($data['payroll']['teachers'])->map(fn ($t) => [$t['name'], (int) $t['amount'], $t['shifts']])->all());
+        $this->assertSame('10/2026', $data['payroll']['month']);
+        $this->assertEquals([5000000, 350000, 5350000], [$data['profit']['manual_expense'], $data['profit']['payroll_expense'], $data['profit']['total_expense']]);
+        $this->assertFalse($data['payroll']['manual_overlap']);
+
+        // Tháng khác không có ca
+        $this->assertEquals(0, $this->getJson('/api/revenue?period=monthly&year=2026&month=9')->json('payroll.total'));
+
+        // Còn khoản "Lương giáo viên" nhập tay trước đây → cảnh báo tính hai lần
+        $this->postJson('/api/revenue/expenses', ['date' => self::DATE, 'category' => 'Lương giáo viên', 'spender' => 'Chủ',
+            'content' => 'Lương T10', 'amount' => 1, 'center' => $center])->assertSuccessful();
+        $this->assertTrue($this->getJson('/api/revenue?period=monthly&year=2026&month=10')->json('payroll.manual_overlap'));
+    }
+
+    public function test_teacher_only_named_in_schedules_can_get_pay_in_staff_page(): void
+    {
+        // Thầy Tùng chỉ được gõ tên trong lịch học, chưa có tài khoản ở màn Nhân sự
+        $this->student('C', 'Thầy Tùng', $this->piano, 'P1');
+        $unlinked = collect($this->getJson('/api/staff')->assertOk()->json('unlinked_teachers'))->keyBy('name');
+        $this->assertEquals(['group' => 0, 'one_on_one' => 0], $unlinked['Thầy Tùng']['pay']);
+
+        $this->putJson('/api/staff/teacher-pay', ['name' => 'thầy tùng', 'pay_group' => 180000, 'pay_one_on_one' => 140000])->assertOk();
+        $this->putJson('/api/staff/teacher-pay', ['name' => 'Không Có', 'pay_group' => 1, 'pay_one_on_one' => 1])->assertNotFound();
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $this->shifts()['Thầy Tùng']['id']])->assertOk();
+        $this->assertEquals(140000, $this->monthly()['total_salary']);
+
+        // Giáo viên khác không đặt được
+        $this->loginAs('Cô Mai', 'Giáo viên');
+        $this->assertSame([], $this->getJson('/api/staff')->json('unlinked_teachers'));
+        $this->putJson('/api/staff/teacher-pay', ['name' => 'Thầy Tùng', 'pay_group' => 1, 'pay_one_on_one' => 1])->assertForbidden();
+    }
+
+    public function test_shift_type_follows_course_class_type(): void
+    {
+        // Hình thức tự nhận theo tên khóa khi tạo
+        $group = $this->postJson('/api/courses', ['name' => '[HSSV-NHÓM] 1THÁNG/2BUỔI/ PIANO CƠ BẢN', 'default_sessions' => 8, 'price' => 1])->json('course');
+        $solo = $this->postJson('/api/courses', ['name' => '[HSSV-CÁ NHÂN] 1THÁNG/ 1BUỔI/ PIANO NÂNG CAO', 'default_sessions' => 4, 'price' => 1])->json('course');
+        $this->assertSame(['group', 'individual'], [$group['class_type'], $solo['class_type']]);
+        $this->assertNull(Course::guessClassType('Guitar'));
+
+        // Lớp nhóm chỉ còn 1 bạn vẫn là ca nhóm; 2 bạn học cá nhân cùng giáo viên, giờ, phòng → 2 ca 1:1 riêng
+        $this->student('A', 'Cô Mai', Course::find($group['id']), 'G1');
+        $this->student('B', 'Thầy Bình', Course::find($solo['id']), 'P1', '19:00');
+        $this->student('C', 'Thầy Bình', Course::find($solo['id']), 'P1', '19:00');
+        $this->setPay([
+            ['name' => 'Cô Mai', 'group' => 200000, 'one_on_one' => 150000],
+            ['name' => 'Thầy Bình', 'group' => 90000, 'one_on_one' => 120000],
+        ]);
+
+        $shifts = collect($this->getJson('/api/teacher-checkin?date='.self::DATE)->json('today_shifts'));
+        $this->assertSame(['Ca nhóm'], $shifts->where('teacher_name', 'Cô Mai')->pluck('type')->all());
+        $this->assertSame(['Ca 1-1', 'Ca 1-1'], $shifts->where('teacher_name', 'Thầy Bình')->pluck('type')->values()->all());
+
+        foreach ($shifts as $shift) {
+            $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $shift['id']])->assertOk();
+        }
+        // Ca nhóm 1 bạn (≤ nửa sĩ số 4) → 50% lương ca nhóm; mỗi ca 1:1 đủ lương 1:1
+        $this->assertEquals(100000 + 120000 * 2, $this->monthly()['total_salary']);
     }
 }

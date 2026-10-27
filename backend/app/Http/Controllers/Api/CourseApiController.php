@@ -10,6 +10,7 @@ use App\Support\CenterStore;
 use App\Support\TeacherName;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class CourseApiController extends Controller
 {
@@ -34,9 +35,12 @@ class CourseApiController extends Controller
             'allowed_absences' => 'nullable|integer|min:0|max:100',
             'price' => 'required|numeric|min:0',
             'description' => 'nullable|string',
+            // Lớp nhóm / cá nhân 1:1: quyết định ca dạy là ca nhóm hay ca 1:1 (lương giáo viên)
+            'class_type' => ['nullable', Rule::in(Course::CLASS_TYPES)],
         ]);
 
-        $course = Course::create([...$validated, 'code' => Course::nextCode(), 'is_active' => true]);
+        $course = Course::create([...$validated, 'class_type' => $validated['class_type'] ?? Course::guessClassType($validated['name']),
+            'code' => Course::nextCode(), 'is_active' => true]);
 
         return response()->json([
             'message' => 'Thêm khóa học mới thành công!',
@@ -53,6 +57,8 @@ class CourseApiController extends Controller
             'allowed_absences' => 'nullable|integer|min:0|max:100',
             'price' => 'required|numeric|min:0',
             'description' => 'nullable|string',
+            // Lớp nhóm / cá nhân 1:1: quyết định ca dạy là ca nhóm hay ca 1:1 (lương giáo viên)
+            'class_type' => ['nullable', Rule::in(Course::CLASS_TYPES)],
         ]);
 
         $course->update($validated);

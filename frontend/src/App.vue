@@ -4,6 +4,7 @@ import BrandLogo from './components/BrandLogo.vue';
 import { ref, computed, watch, watchEffect, onMounted, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuth } from './services/useAuth';
+import { useTheme } from './services/useTheme';
 import { isPathBlocked, firstAllowedPath } from './services/permissions';
 import { Toaster } from 'vue-sonner';
 import 'vue-sonner/style.css';
@@ -31,7 +32,11 @@ import {
   X,
   Plus,
   Flame,
+  Moon,
+  Sun,
 } from 'lucide-vue-next';
+
+const { theme, toggleTheme, syncThemeForUser } = useTheme();
 
 // Thương hiệu: tải một lần (API công khai, dùng được cả ở màn đăng nhập) và gắn vào tiêu đề tab
 const { brandName, nameParts, loadBrand } = useBrand();
@@ -42,6 +47,11 @@ const router = useRouter();
 const { user, isAuthenticated, logout, checkAuth } = useAuth();
 const showMobileMenu = ref(false);
 const isSidebarCollapsed = ref(localStorage.getItem('sis_sidebar_collapsed') === 'true');
+
+// Đồng bộ theme khi tài khoản thay đổi
+watch(user, () => {
+  syncThemeForUser();
+});
 
 // Auto close mobile drawer on route change
 watch(() => route.path, () => {
@@ -192,7 +202,7 @@ const handleLogout = () => {
                 : 'gap-2.5 px-3 py-2 text-sm font-medium',
               isCurrentUrl(item.href)
                 ? 'bg-rose-600 text-white shadow-sm shadow-rose-600/25 font-semibold'
-                : 'text-slate-600 hover:bg-rose-50/70 hover:text-rose-900'
+                : 'text-slate-600 dark:text-white hover:bg-rose-50/70 dark:hover:bg-slate-800/80 hover:text-rose-900 dark:hover:text-rose-400'
             ]"
           >
             <component
@@ -200,7 +210,9 @@ const handleLogout = () => {
               class="shrink-0 transition-colors"
               :class="[
                 isSidebarCollapsed ? 'h-5 w-5' : 'h-4 w-4',
-                isCurrentUrl(item.href) ? 'text-white' : 'text-slate-500 group-hover:text-rose-600'
+                isCurrentUrl(item.href)
+                  ? 'text-white'
+                  : 'text-slate-400 dark:text-slate-400 group-hover:text-rose-600 dark:group-hover:text-rose-400'
               ]"
             />
             <span v-if="!isSidebarCollapsed" class="truncate">{{ item.name }}</span>
@@ -209,8 +221,8 @@ const handleLogout = () => {
 
         <!-- 2. Vận hành -->
         <div v-if="operationNavigation.length > 0">
-          <div v-if="isSidebarCollapsed" class="my-2 border-t border-slate-100"></div>
-          <p v-else class="px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          <div v-if="isSidebarCollapsed" class="my-2 border-t border-slate-100 dark:border-slate-800"></div>
+          <p v-else class="px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-400">
             Vận hành
           </p>
           <nav class="space-y-1" :class="isSidebarCollapsed ? 'mt-1' : 'mt-1.5'">
@@ -226,7 +238,7 @@ const handleLogout = () => {
                   : 'gap-2.5 px-3 py-2 text-sm font-medium',
                 isCurrentUrl(item.href)
                   ? 'bg-rose-600 text-white shadow-sm shadow-rose-600/25 font-semibold'
-                  : 'text-slate-600 hover:bg-rose-50/70 hover:text-rose-900'
+                  : 'text-slate-600 dark:text-white hover:bg-rose-50/70 dark:hover:bg-slate-800/80 hover:text-rose-900 dark:hover:text-rose-400'
               ]"
             >
               <component
@@ -234,7 +246,9 @@ const handleLogout = () => {
                 class="shrink-0 transition-colors"
                 :class="[
                   isSidebarCollapsed ? 'h-5 w-5' : 'h-4 w-4',
-                  isCurrentUrl(item.href) ? 'text-white' : 'text-slate-500 group-hover:text-rose-600'
+                  isCurrentUrl(item.href)
+                    ? 'text-white'
+                    : 'text-slate-400 dark:text-slate-400 group-hover:text-rose-600 dark:group-hover:text-rose-400'
                 ]"
               />
               <span v-if="!isSidebarCollapsed" class="truncate">{{ item.name }}</span>
@@ -244,8 +258,8 @@ const handleLogout = () => {
 
         <!-- 3. Cấu hình -->
         <div v-if="configNavigation.length > 0">
-          <div v-if="isSidebarCollapsed" class="my-2 border-t border-slate-100"></div>
-          <p v-else class="px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          <div v-if="isSidebarCollapsed" class="my-2 border-t border-slate-100 dark:border-slate-800"></div>
+          <p v-else class="px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-400">
             Cấu hình
           </p>
           <nav class="space-y-1" :class="isSidebarCollapsed ? 'mt-1' : 'mt-1.5'">
@@ -261,7 +275,7 @@ const handleLogout = () => {
                   : 'gap-2.5 px-3 py-2 text-sm font-medium',
                 isCurrentUrl(item.href)
                   ? 'bg-rose-600 text-white shadow-sm shadow-rose-600/25 font-semibold'
-                  : 'text-slate-600 hover:bg-rose-50/70 hover:text-rose-900'
+                  : 'text-slate-600 dark:text-white hover:bg-rose-50/70 dark:hover:bg-slate-800/80 hover:text-rose-900 dark:hover:text-rose-400'
               ]"
             >
               <component
@@ -269,7 +283,9 @@ const handleLogout = () => {
                 class="shrink-0 transition-colors"
                 :class="[
                   isSidebarCollapsed ? 'h-5 w-5' : 'h-4 w-4',
-                  isCurrentUrl(item.href) ? 'text-white' : 'text-slate-500 group-hover:text-rose-600'
+                  isCurrentUrl(item.href)
+                    ? 'text-white'
+                    : 'text-slate-400 dark:text-slate-400 group-hover:text-rose-600 dark:group-hover:text-rose-400'
                 ]"
               />
               <span v-if="!isSidebarCollapsed" class="truncate">{{ item.name }}</span>
@@ -280,13 +296,13 @@ const handleLogout = () => {
 
       <!-- Logout Footer -->
       <div
-        class="border-t border-slate-100 bg-white transition-all duration-300"
+        class="border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900/60 transition-all duration-300"
         :class="isSidebarCollapsed ? 'p-2' : 'p-3'"
       >
         <button
           @click="handleLogout"
           :title="isSidebarCollapsed ? `Đăng xuất (${user?.name || 'Admin'})` : ''"
-          class="flex items-center rounded-xl text-slate-600 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+          class="flex items-center rounded-xl text-slate-600 dark:text-slate-300 hover:bg-rose-50 dark:hover:bg-slate-800/80 hover:text-rose-600 dark:hover:text-rose-400 transition-colors"
           :class="[
             isSidebarCollapsed
               ? 'w-10 h-10 mx-auto justify-center'
@@ -294,7 +310,6 @@ const handleLogout = () => {
           ]"
         >
           <LogOut class="text-rose-500 shrink-0" :class="isSidebarCollapsed ? 'h-5 w-5' : 'h-4 w-4'" />
-          <span v-if="!isSidebarCollapsed" class="truncate">Đăng xuất ({{ user?.name || 'Admin' }})</span>
         </button>
       </div>
     </aside>
@@ -368,16 +383,16 @@ const handleLogout = () => {
                   :to="item.href"
                   @click="showMobileMenu = false"
                   class="flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors"
-                  :class="isCurrentUrl(item.href) ? 'bg-rose-600 text-white font-semibold shadow-xs' : 'text-slate-700 hover:bg-rose-50/70 hover:text-rose-900'"
+                  :class="isCurrentUrl(item.href) ? 'bg-rose-600 text-white font-semibold shadow-xs' : 'text-slate-700 dark:text-slate-200 hover:bg-rose-50/70 dark:hover:bg-slate-800/80 hover:text-rose-900 dark:hover:text-white'"
                 >
-                  <component :is="item.icon" class="h-4 w-4 shrink-0" />
+                  <component :is="item.icon" class="h-4 w-4 shrink-0 text-slate-400 dark:text-slate-400" :class="{ 'text-white': isCurrentUrl(item.href) }" />
                   <span class="truncate">{{ item.name }}</span>
                 </router-link>
               </nav>
 
               <!-- 2. Vận hành -->
               <div v-if="operationNavigation.length > 0">
-                <p class="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <p class="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                   Vận hành
                 </p>
                 <nav class="mt-1 space-y-1">
@@ -387,9 +402,9 @@ const handleLogout = () => {
                     :to="item.href"
                     @click="showMobileMenu = false"
                     class="flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors"
-                    :class="isCurrentUrl(item.href) ? 'bg-rose-600 text-white font-semibold shadow-xs' : 'text-slate-700 hover:bg-rose-50/70 hover:text-rose-900'"
+                    :class="isCurrentUrl(item.href) ? 'bg-rose-600 text-white font-semibold shadow-xs' : 'text-slate-700 dark:text-slate-200 hover:bg-rose-50/70 dark:hover:bg-slate-800/80 hover:text-rose-900 dark:hover:text-white'"
                   >
-                    <component :is="item.icon" class="h-4 w-4 shrink-0" />
+                    <component :is="item.icon" class="h-4 w-4 shrink-0 text-slate-400 dark:text-slate-400" :class="{ 'text-white': isCurrentUrl(item.href) }" />
                     <span class="truncate">{{ item.name }}</span>
                   </router-link>
                 </nav>
@@ -397,7 +412,7 @@ const handleLogout = () => {
 
               <!-- 3. Cấu hình -->
               <div v-if="configNavigation.length > 0">
-                <p class="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <p class="px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                   Cấu hình
                 </p>
                 <nav class="mt-1 space-y-1">
@@ -407,9 +422,9 @@ const handleLogout = () => {
                     :to="item.href"
                     @click="showMobileMenu = false"
                     class="flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors"
-                    :class="isCurrentUrl(item.href) ? 'bg-rose-600 text-white font-semibold shadow-xs' : 'text-slate-700 hover:bg-rose-50/70 hover:text-rose-900'"
+                    :class="isCurrentUrl(item.href) ? 'bg-rose-600 text-white font-semibold shadow-xs' : 'text-slate-700 dark:text-slate-200 hover:bg-rose-50/70 dark:hover:bg-slate-800/80 hover:text-rose-900 dark:hover:text-white'"
                   >
-                    <component :is="item.icon" class="h-4 w-4 shrink-0" />
+                    <component :is="item.icon" class="h-4 w-4 shrink-0 text-slate-400 dark:text-slate-400" :class="{ 'text-white': isCurrentUrl(item.href) }" />
                     <span class="truncate">{{ item.name }}</span>
                   </router-link>
                 </nav>
@@ -417,10 +432,10 @@ const handleLogout = () => {
             </div>
 
             <!-- Logout Footer -->
-            <div class="pt-3 border-t border-slate-100 shrink-0">
+            <div class="pt-3 border-t border-slate-100 dark:border-slate-800 shrink-0">
               <button
                 @click="handleLogout"
-                class="flex items-center gap-2.5 w-full rounded-xl px-3 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50 transition-colors"
+                class="flex items-center gap-2.5 w-full rounded-xl px-3 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800/80 transition-colors"
               >
                 <LogOut class="h-4 w-4 shrink-0 text-rose-500" />
                 <span class="truncate">Đăng xuất ({{ user?.name || 'Admin' }})</span>
@@ -457,6 +472,16 @@ const handleLogout = () => {
 
         <!-- Top Right Actions -->
         <div class="flex items-center gap-2.5">
+          <!-- Đổi giao diện sáng / tối -->
+          <button
+            type="button"
+            @click="toggleTheme"
+            class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900 transition-colors"
+            :title="theme === 'dark' ? 'Chuyển sang giao diện sáng' : 'Chuyển sang giao diện tối'"
+          >
+            <Sun v-if="theme === 'dark'" class="h-5 w-5" />
+            <Moon v-else class="h-5 w-5" />
+          </button>
           <router-link
             v-if="!isPathBlocked(user, '/students')"
             to="/students?create=true"
@@ -485,6 +510,6 @@ const handleLogout = () => {
     </div>
   </div>
 
-  <Toaster position="top-right" rich-colors close-button :duration="4000" />
+  <Toaster position="top-right" rich-colors close-button :duration="4000" :theme="theme" />
   <ConfirmDialog />
 </template>

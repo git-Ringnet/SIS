@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue';
 import { authApi } from './api';
 import router from '../router';
+import { syncThemeForUser } from './useTheme';
 
 const token = ref(localStorage.getItem('auth_token') || '');
 const user = ref(JSON.parse(localStorage.getItem('auth_user') || 'null'));
@@ -14,6 +15,7 @@ export function useAuth() {
     user.value = newUser;
     localStorage.setItem('auth_token', newToken);
     localStorage.setItem('auth_user', JSON.stringify(newUser));
+    syncThemeForUser();
   };
 
   const clearAuth = () => {
@@ -21,6 +23,7 @@ export function useAuth() {
     user.value = null;
     localStorage.removeItem('auth_token');
     localStorage.removeItem('auth_user');
+    syncThemeForUser();
   };
 
   const login = async (credentials) => {

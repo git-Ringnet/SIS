@@ -30,10 +30,7 @@ class CenterStore
                 'logo_url' => '',
                 'bank_info' => '',
                 'qr_url' => '',
-                'free_threshold' => null,
-                'free_per_student' => null,
-                'free_per_shift' => null,
-                'free_require_qr' => true,
+                'group_size' => null,
             ], $c);
         }, $centers);
     }

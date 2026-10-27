@@ -246,7 +246,7 @@ const formatDate = (val) => {
           type="month"
           v-model="currentMonth"
           @change="applyFilters"
-          class="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-700 shadow-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+          class="rounded-xl border border-slate-200 bg-white dark:bg-slate-800 dark:border-slate-700 dark:text-white px-3.5 py-2.5 text-sm font-semibold text-slate-700 shadow-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
         />
 
         <button
@@ -260,7 +260,7 @@ const formatDate = (val) => {
     </div>
 
     <!-- Revenue Summary Card -->
-    <div class="rounded-2xl border border-slate-200 bg-gradient-to-r from-indigo-900 via-indigo-950 to-slate-900 p-6 text-white shadow-md flex items-center justify-between">
+    <div class="rounded-2xl border border-slate-200 dark:border-indigo-500/30 bg-gradient-to-r from-indigo-900 via-indigo-950 to-slate-900 p-6 text-white shadow-md flex items-center justify-between">
       <div>
         <span class="text-xs uppercase font-semibold text-indigo-200 tracking-wider">Tổng thực thu trong tháng {{ currentMonth }}</span>
         <h2 class="text-3xl font-black mt-1 text-white">{{ formatVND(monthlyTotal) }}</h2>
@@ -272,33 +272,33 @@ const formatDate = (val) => {
     </div>
 
     <!-- Phiếu chờ thu (phụ huynh chưa đóng): không tính vào thực thu cho tới khi xác nhận -->
-    <div v-if="pendingInvoices.length > 0" class="rounded-2xl border border-amber-200 bg-amber-50/40 p-4 space-y-3">
+    <div v-if="pendingInvoices.length > 0" class="rounded-2xl border border-amber-200 bg-amber-50/40 p-4 space-y-3 dark:border-amber-500/30 dark:bg-amber-950/20">
       <div>
-        <h2 class="text-sm font-bold text-amber-900">Phiếu chờ thu ({{ pendingInvoices.length }})</h2>
-        <p class="text-[11px] text-amber-800/80">Học phí phụ huynh chưa đóng. Cổng phụ huynh hiện "Chưa thanh toán" và chưa tính vào thực thu. Bấm "Xác nhận đã thu" khi nhận tiền (không cộng thêm buổi).</p>
+        <h2 class="text-sm font-bold text-amber-900 dark:text-amber-300">Phiếu chờ thu ({{ pendingInvoices.length }})</h2>
+        <p class="text-[11px] text-amber-800/80 dark:text-amber-200/90">Học phí phụ huynh chưa đóng. Cổng phụ huynh hiện "Chưa thanh toán" và chưa tính vào thực thu. Bấm "Xác nhận đã thu" khi nhận tiền (không cộng thêm buổi).</p>
       </div>
-      <div class="divide-y divide-amber-100 rounded-xl border border-amber-200 bg-white">
+      <div class="divide-y divide-amber-100 rounded-xl border border-amber-200 bg-white dark:bg-slate-900/90 dark:border-amber-900/50 dark:divide-slate-800">
         <div v-for="inv in pendingInvoices" :key="inv.id" class="flex flex-col lg:flex-row lg:items-center justify-between gap-2 px-3 py-2.5 text-xs">
           <div>
-            <span class="font-bold text-slate-900">{{ inv.student?.name || '—' }}</span>
-            <span class="ml-1.5 font-mono text-slate-400">{{ inv.invoice_code }}</span>
-            <span class="block text-slate-500">
+            <span class="font-bold text-slate-900 dark:text-white">{{ inv.student?.name || '—' }}</span>
+            <span class="ml-1.5 font-mono text-slate-400 dark:text-white/60">{{ inv.invoice_code }}</span>
+            <span class="block text-slate-500 dark:text-white/70">
               {{ inv.course?.name || inv.student?.course?.name || 'Khóa học' }} · lập ngày {{ formatDate(inv.created_at) }}
               <template v-if="inv.sessions_added"> · {{ inv.sessions_added }} buổi đã cấp</template>
             </span>
           </div>
           <div class="flex flex-wrap items-center gap-2">
-            <span class="font-extrabold text-amber-700 text-sm">{{ formatVND(inv.amount) }}</span>
+            <span class="font-extrabold text-amber-700 text-sm dark:text-amber-400">{{ formatVND(inv.amount) }}</span>
             <template v-if="confirmForm.id === inv.id">
-              <select v-model="confirmForm.payment_method" class="rounded-lg border border-slate-200 px-2 py-1.5">
+              <select v-model="confirmForm.payment_method" class="rounded-lg border border-slate-200 px-2 py-1.5 dark:bg-slate-800 dark:border-slate-700 dark:text-white">
                 <option v-for="(label, key) in paymentMethodLabels" :key="key" :value="key">{{ label }}</option>
               </select>
-              <input v-model="confirmForm.paid_at" type="date" class="rounded-lg border border-slate-200 px-2 py-1" />
+              <input v-model="confirmForm.paid_at" type="date" class="rounded-lg border border-slate-200 px-2 py-1 dark:bg-slate-800 dark:border-slate-700 dark:text-white" />
               <button type="button" @click="confirmPaid" class="rounded-lg bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 font-bold text-white">Lưu</button>
-              <button type="button" @click="confirmForm.id = null" class="rounded-lg bg-slate-100 hover:bg-slate-200 px-3 py-1.5 font-semibold text-slate-600">Hủy</button>
+              <button type="button" @click="confirmForm.id = null" class="rounded-lg bg-slate-100 hover:bg-slate-200 px-3 py-1.5 font-semibold text-slate-600 dark:bg-slate-800 dark:text-white/80 dark:hover:bg-slate-700">Hủy</button>
             </template>
             <button v-else type="button" @click="startConfirm(inv)"
-              class="rounded-lg border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 font-bold text-emerald-700">
+              class="rounded-lg border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 font-bold text-emerald-700 dark:bg-emerald-950/50 dark:border-emerald-700/60 dark:text-emerald-300 dark:hover:bg-emerald-900/60">
               Xác nhận đã thu
             </button>
           </div>
@@ -307,11 +307,11 @@ const formatDate = (val) => {
     </div>
 
     <!-- Invoices Table -->
-    <div class="rounded-2xl border border-slate-200 bg-white shadow-xs overflow-hidden">
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-xs overflow-hidden dark:border-slate-800 dark:bg-slate-900/90">
       <!-- Màn hình nhỏ: bảng giữ độ rộng tối thiểu và cuộn ngang thay vì bóp cột -->
       <div class="overflow-x-auto">
       <table class="w-full min-w-[1100px] text-left text-sm">
-        <thead class="bg-slate-50 text-slate-500 border-b border-slate-100 text-xs font-bold uppercase tracking-wider">
+        <thead class="bg-slate-50 text-slate-500 border-b border-slate-100 text-xs font-bold uppercase tracking-wider dark:bg-slate-800/80 dark:text-white/80 dark:border-slate-800">
           <tr>
             <th class="py-4 px-4 font-semibold">Mã phiếu thu</th>
             <th class="py-4 px-4 font-semibold">Học viên / Phụ huynh</th>
@@ -324,32 +324,32 @@ const formatDate = (val) => {
             <th class="py-4 px-4 font-semibold text-right">Thao tác</th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-slate-100 text-slate-700">
-          <tr v-for="inv in invoices" :key="inv.id" class="hover:bg-slate-50" :class="inv.status === 'cancelled' ? 'opacity-60' : ''">
-            <td class="py-4 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">
+        <tbody class="divide-y divide-slate-100 text-slate-700 dark:divide-slate-800 dark:text-white/80">
+          <tr v-for="inv in invoices" :key="inv.id" class="hover:bg-slate-50 dark:hover:bg-slate-800/50" :class="inv.status === 'cancelled' ? 'opacity-60' : ''">
+            <td class="py-4 px-4 font-mono font-bold text-slate-900 whitespace-nowrap dark:text-white">
               {{ inv.invoice_code }}
-              <span v-if="inv.status === 'cancelled'" class="block font-sans text-[11px] font-bold text-rose-600" :title="inv.cancelled_reason || ''">Đã hủy</span>
-              <span v-else-if="inv.status === 'pending'" class="block font-sans text-[11px] font-bold text-amber-600">Chờ thu</span>
+              <span v-if="inv.status === 'cancelled'" class="block font-sans text-[11px] font-bold text-rose-600 dark:text-rose-400" :title="inv.cancelled_reason || ''">Đã hủy</span>
+              <span v-else-if="inv.status === 'pending'" class="block font-sans text-[11px] font-bold text-amber-600 dark:text-amber-400">Chờ thu</span>
             </td>
             <td class="py-4 px-4">
-              <span class="font-bold text-slate-900">{{ inv.student?.name }}</span>
-              <span class="block text-slate-400 text-xs">PH: {{ inv.student?.parent_name }}</span>
+              <span class="font-bold text-slate-900 dark:text-white">{{ inv.student?.name }}</span>
+              <span class="block text-slate-400 text-xs dark:text-white/60">PH: {{ inv.student?.parent_name }}</span>
             </td>
-            <td class="py-4 px-4">{{ inv.course?.name || inv.student?.course?.name }}</td>
-            <td class="py-4 px-4 font-extrabold text-base whitespace-nowrap" :class="inv.status === 'cancelled' ? 'text-slate-400 line-through' : 'text-emerald-600'">{{ formatVND(inv.amount) }}</td>
-            <td class="py-4 px-4 text-center font-bold" :class="inv.status === 'cancelled' ? 'text-slate-400 line-through' : 'text-indigo-600'">+{{ inv.sessions_added }} buổi</td>
+            <td class="py-4 px-4 dark:text-white/90">{{ inv.course?.name || inv.student?.course?.name }}</td>
+            <td class="py-4 px-4 font-extrabold text-base whitespace-nowrap" :class="inv.status === 'cancelled' ? 'text-slate-400 line-through dark:text-white/40' : 'text-emerald-600 dark:text-emerald-400'">{{ formatVND(inv.amount) }}</td>
+            <td class="py-4 px-4 text-center font-bold" :class="inv.status === 'cancelled' ? 'text-slate-400 line-through dark:text-white/40' : 'text-indigo-600 dark:text-indigo-400'">+{{ inv.sessions_added }} buổi</td>
             <td class="py-4 px-4">
               <Badge variant="gray" size="sm">{{ paymentMethodLabels[inv.payment_method] || inv.payment_method }}</Badge>
             </td>
-            <td class="py-4 px-4 font-mono text-slate-500 whitespace-nowrap">{{ formatDate(inv.paid_at) }}</td>
-            <td class="py-4 px-4 text-slate-600">{{ inv.note || '—' }}</td>
+            <td class="py-4 px-4 font-mono text-slate-500 whitespace-nowrap dark:text-white/70">{{ formatDate(inv.paid_at) }}</td>
+            <td class="py-4 px-4 text-slate-600 dark:text-white/80">{{ inv.note || '—' }}</td>
             <td class="py-4 px-4">
               <div class="flex items-center justify-end gap-1">
                 <button
                   type="button"
                   @click="downloadPdf(inv)"
                   :disabled="downloadingId === inv.id"
-                  class="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 disabled:opacity-50"
+                  class="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-slate-800 dark:text-white/60 dark:hover:text-indigo-400 disabled:opacity-50"
                   title="Tải phiếu thu PDF"
                 >
                   <Loader2 v-if="downloadingId === inv.id" class="h-4 w-4 animate-spin" />
@@ -357,11 +357,11 @@ const formatDate = (val) => {
                 </button>
                 <template v-if="inv.status === 'cancelled'">
                   <button type="button" @click="restoreInvoice(inv)"
-                    class="p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50" title="Khôi phục phiếu (hủy nhầm)">
+                    class="p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-slate-800 dark:text-white/60 dark:hover:text-emerald-400" title="Khôi phục phiếu (hủy nhầm)">
                     <Undo2 class="h-4 w-4" />
                   </button>
                   <button type="button" @click="deleteInvoice(inv)"
-                    class="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50" title="Xoá hẳn phiếu đã hủy">
+                    class="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-slate-800 dark:text-white/60 dark:hover:text-rose-400" title="Xoá hẳn phiếu đã hủy">
                     <Trash2 class="h-4 w-4" />
                   </button>
                 </template>
@@ -369,13 +369,13 @@ const formatDate = (val) => {
                   <button
                     type="button"
                     @click="openEdit(inv)"
-                    class="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50"
+                    class="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-slate-800 dark:text-white/60 dark:hover:text-amber-400"
                     title="Sửa phiếu thu"
                   >
                     <Edit3 class="h-4 w-4" />
                   </button>
                   <button v-if="inv.status === 'paid'" type="button" @click="markUnpaid(inv)"
-                    class="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50" title="Ghi nhầm đã thu: chuyển về chờ thu">
+                    class="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-slate-800 dark:text-white/60 dark:hover:text-amber-400" title="Ghi nhầm đã thu: chuyển về chờ thu">
                     <Hourglass class="h-4 w-4" />
                   </button>
                   <button type="button" @click="cancelInvoice(inv)"

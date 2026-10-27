@@ -7,11 +7,18 @@ use App\Models\Course;
 use App\Models\Student;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class ParentPortalTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        Storage::fake('local'); // không đọc / ghi file dữ liệu thật (buổi học lẻ, cài đặt...)
+    }
 
     public function test_can_view_public_portal_info_without_auth(): void
     {
@@ -147,5 +154,8 @@ class ParentPortalTest extends TestCase
         $this->assertEquals('present', $sessions[0]['status']);
         $this->assertEquals('absent_with_leave', $sessions[2]['status']);
         $this->assertEquals('upcoming', $sessions[3]['status']);
+        // Chỉ buổi chính thức được đánh số; buổi nghỉ có phép không có số và không tự thêm buổi (vẫn 12 dòng)
+        $this->assertSame([1, 2, null, 3], array_column(array_slice($sessions, 0, 4), 'session_number'));
+        $this->assertSame(11, end($sessions)['session_number']);
     }
 }

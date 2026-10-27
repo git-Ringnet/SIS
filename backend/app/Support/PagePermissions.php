@@ -47,7 +47,7 @@ class PagePermissions
 
         return match ($role) {
             'Chủ trung tâm' => [],
-            'Quản lý / Lễ tân' => ['Cài đặt', 'Dữ liệu'],
+            'Quản lý', 'Quản lý / Lễ tân' => ['Cài đặt', 'Dữ liệu'],
             'Giáo viên' => array_values(array_diff($all, ['Điểm danh', 'Check-in ca dạy'])),
             default => ['Doanh thu', 'Hóa đơn & Thu phí', 'Khách hàng tiềm năng', 'Cài đặt', 'Dữ liệu'],
         };

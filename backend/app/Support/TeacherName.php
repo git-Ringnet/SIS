@@ -22,7 +22,16 @@ class TeacherName
     }
 
     /**
-     * Danh sách giáo viên: tài khoản vai trò Giáo viên ở màn Nhân sự + tên giáo viên đang có trong lịch học.
+     * Vai trò có đứng lớp và được đặt lương ca dạy: Giáo viên, Giáo vụ.
+     */
+    public static function teaches(?string $role): bool
+    {
+        return str_contains((string) $role, 'Giáo viên') || str_contains((string) $role, 'Giáo vụ');
+    }
+
+    /**
+     * Danh sách giáo viên: tài khoản vai trò Giáo viên / Giáo vụ (có đứng lớp, tính lương ca) ở màn Nhân sự
+     * + tên giáo viên đang có trong lịch học.
      *
      * @return list<string>
      */
@@ -31,7 +40,7 @@ class TeacherName
         $names = [];
         $staff = json_decode((string) Storage::get('staff_data.json'), true) ?: [];
         foreach ($staff['members'] ?? [] as $m) {
-            if (str_contains($m['role'] ?? '', 'Giáo viên') && ! empty($m['name'])) {
+            if (self::teaches($m['role'] ?? null) && ! empty($m['name'])) {
                 $names[self::key($m['name'])] = $m['name'];
             }
         }
