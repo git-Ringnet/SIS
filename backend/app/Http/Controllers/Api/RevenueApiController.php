@@ -246,21 +246,6 @@ class RevenueApiController extends Controller
         $grossProfit = $revenueMonthTotal - $totalExpense;
         $profitMargin = $revenueMonthTotal > 0 ? round(($grossProfit / $revenueMonthTotal) * 100, 1) : 0;
 
-        // 8. Doanh thu phân bổ (Accrued vs Unearned)
-        $students = Student::with('course')->where('status', 'active')->get();
-        $accruedRevenue = 0;
-        $deferredRevenue = 0;
-        foreach ($students as $st) {
-            $totalSess = $st->total_sessions ?: 12;
-            $remSess = $st->remaining_sessions ?: 0;
-            $usedSess = max(0, $totalSess - $remSess);
-            $coursePrice = $st->course ? (float) $st->course->price : 3000000;
-            $pricePerSession = $totalSess > 0 ? ($coursePrice / $totalSess) : 0;
-
-            $accruedRevenue += ($usedSess * $pricePerSession);
-            $deferredRevenue += ($remSess * $pricePerSession);
-        }
-
         $centers = CenterStore::names();
         $students = Student::with('course')->where('status', 'active')->orderBy('name')->get(['id', 'name', 'code', 'center', 'course_id']);
         $courses = Course::where('is_active', true)->orderBy('name')->get(['id', 'name', 'price', 'default_sessions']);
@@ -293,10 +278,6 @@ class RevenueApiController extends Controller
                 'payroll_expense' => $payroll['total'],
                 'gross_profit' => $grossProfit,
                 'profit_margin' => $profitMargin,
-            ],
-            'allocation' => [
-                'accrued_revenue' => round($accruedRevenue),
-                'deferred_revenue' => round($deferredRevenue),
             ],
             'centers' => $centers,
             'students' => $students,

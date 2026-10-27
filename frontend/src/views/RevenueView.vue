@@ -30,7 +30,7 @@ import { useRouter } from 'vue-router';
 import MoneyInput from '../components/MoneyInput.vue';
 
 // Tab hiện tại
-const activeTab = ref('revenue'); // 'revenue' | 'expenses' | 'profit' | 'allocation'
+const activeTab = ref('revenue'); // 'revenue' | 'expenses' | 'profit'
 
 // Bộ lọc
 const filterPeriod = ref('monthly'); // 'monthly', 'quarterly', 'yearly', 'all'
@@ -89,10 +89,6 @@ const profit = ref({
   total_expense: 0,
   gross_profit: 0,
   profit_margin: 0,
-});
-const allocation = ref({
-  accrued_revenue: 0,
-  deferred_revenue: 0,
 });
 const centers = ref([]);
 const students = ref([]);
@@ -240,7 +236,6 @@ const fetchData = async () => {
     payroll.value = res.data.payroll || { total: 0, shifts: 0, teachers: [], manual_overlap: false };
     expensePage.value = 1;
     profit.value = res.data.profit || {};
-    allocation.value = res.data.allocation || {};
     centers.value = res.data.centers || [];
     students.value = res.data.students || [];
     courses.value = res.data.courses || [];
@@ -403,15 +398,6 @@ const submitExpense = async () => {
           : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
       ]">
         Lợi nhuận
-      </button>
-
-      <button type="button" @click="activeTab = 'allocation'" :class="[
-        'rounded-lg px-3.5 py-1.5 text-xs sm:text-sm font-semibold transition-all cursor-pointer',
-        activeTab === 'allocation'
-          ? 'bg-rose-600 text-white shadow-2xs'
-          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-      ]">
-        Doanh thu phân bổ
       </button>
     </div>
 
@@ -855,31 +841,6 @@ const submitExpense = async () => {
         <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-1">
           <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">TỶ SUẤT LỢI NHUẬN</div>
           <div class="text-2xl font-extrabold text-slate-900">{{ profit.profit_margin }}%</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- TAB 4: DOANH THU PHÂN BỔ -->
-    <div v-else-if="activeTab === 'allocation'" class="space-y-5">
-      <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-4">
-        <div>
-          <h2 class="text-base font-bold text-slate-900">Doanh thu phân bổ theo buổi học thực tế</h2>
-          <p class="text-xs text-slate-500 mt-0.5">Phân định rõ ràng giữa Doanh thu đã dạy (Earned Revenue) và Doanh thu
-            nhận trước chưa thực hiện (Deferred Revenue)</p>
-        </div>
-
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-          <div class="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 space-y-1.5">
-            <div class="text-xs font-semibold text-emerald-800">DOANH THU ĐÃ THỰC HIỆN (HỌC VIÊN ĐÃ ĐIỂM DANH)</div>
-            <div class="text-2xl font-extrabold text-emerald-700">{{ formatCurrency(allocation.accrued_revenue) }}</div>
-            <p class="text-xs text-emerald-600">Giá trị các buổi học đã được giáo viên giảng dạy thành công.</p>
-          </div>
-
-          <div class="rounded-xl border border-amber-200 bg-amber-50/50 p-4 space-y-1.5">
-            <div class="text-xs font-semibold text-amber-800">DOANH THU BẢO LƯU / CHƯA HỌC (DOANH THU NHẬN TRƯỚC)</div>
-            <div class="text-2xl font-extrabold text-amber-700">{{ formatCurrency(allocation.deferred_revenue) }}</div>
-            <p class="text-xs text-amber-600">Số buổi còn lại của học viên cần được dạy trong tương lai.</p>
-          </div>
         </div>
       </div>
     </div>
