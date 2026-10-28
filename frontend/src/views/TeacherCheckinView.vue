@@ -224,6 +224,24 @@ const resetShift = async (shift) => {
   }
 };
 
+// Bỏ người dạy thay đã phân công riêng cho ca chưa check-in (ca về giáo viên gốc)
+const clearSubstitute = async (shift) => {
+  const ok = await confirmDialog({
+    title: 'Bỏ dạy thay?',
+    message: `Ca ${shift.start_time} sẽ trở về ${shift.teacher_name}, ${shift.substitute_teacher} không dạy thay ca này nữa.`,
+    confirmText: 'Bỏ dạy thay',
+    variant: 'warning',
+  });
+  if (!ok) return;
+  try {
+    const res = await teacherCheckinApi.resetShift(shift.id);
+    notify.success(res.data.message || 'Đã bỏ dạy thay');
+    await fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Không bỏ được dạy thay');
+  }
+};
+
 const openEditModal = (shift) => {
   selectedShift.value = shift;
   editForm.value = {
@@ -553,7 +571,7 @@ const exportMonthly = async () => {
                 <span class="rounded-md bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
                   {{ s.type }}
                 </span>
-                <span class="text-slate-400 font-mono text-xs">({{ s.room }})</span>
+                <span v-if="s.room" class="text-slate-400 font-mono text-xs">({{ s.room }})</span>
               </div>
               <p class="text-xs text-slate-600 mt-0.5 font-medium">
                 {{ s.class_name }}<template v-if="s.period_note"> &bull; <span class="text-slate-500">{{ s.period_note
@@ -610,6 +628,12 @@ const exportMonthly = async () => {
                 class="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 cursor-pointer"
                 title="Sửa giờ check-in / đơn giá">
                 <Pencil class="h-4 w-4" />
+              </button>
+              <button v-if="s.status === 'not_checked_in' && s.substitute_teacher && !s.substitute_from_period" type="button"
+                @click="clearSubstitute(s)"
+                class="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-3 py-1.5 text-xs font-medium cursor-pointer"
+                title="Ca trở về giáo viên gốc">
+                Bỏ dạy thay
               </button>
               <button v-if="s.status !== 'not_checked_in' && !s.on_leave" type="button" @click="resetShift(s)"
                 class="rounded-lg p-1.5 text-amber-600 hover:bg-amber-50 cursor-pointer"

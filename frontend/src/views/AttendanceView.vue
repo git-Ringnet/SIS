@@ -106,7 +106,13 @@ const attendanceTemplates = ref([
   },
 ]);
 
+// Ngày của danh sách đang hiển thị: điểm danh luôn gửi ngày này (không phải ngày vừa chọn mà danh sách chưa tải xong),
+// tránh ghi buổi của ngày mới vào ca của ngày cũ khi đổi ngày rồi bấm quá nhanh
+const loadedDate = ref('');
+let fetchSeq = 0;
+
 const fetchData = async () => {
+  const seq = ++fetchSeq;
   try {
     loading.value = true;
     const res = await dailyAttendanceApi.getAttendance({
@@ -120,6 +126,9 @@ const fetchData = async () => {
       page: page.value,
       per_page: perPage.value,
     });
+    // Đổi ngày liên tục: bỏ kết quả của lần tải cũ về muộn
+    if (seq !== fetchSeq) return;
+    loadedDate.value = res.data.date;
     pagination.value = res.data.pagination || null;
     dayOfWeek.value = res.data.day_of_week || 'CN';
     dayOfWeekEn.value = res.data.day_of_week_en || 'Sunday';
@@ -134,8 +143,17 @@ const fetchData = async () => {
   } catch (err) {
     console.error('Lỗi tải dữ liệu điểm danh:', err);
   } finally {
-    loading.value = false;
+    if (seq === fetchSeq) loading.value = false;
   }
+};
+
+// Danh sách đang hiển thị chưa phải của ngày đang chọn (vừa đổi ngày, đang tải)
+const listOutdated = () => {
+  if (loading.value || loadedDate.value !== selectedDate.value) {
+    notify.warning('Đang tải danh sách của ngày vừa chọn, vui lòng bấm lại sau giây lát.');
+    return true;
+  }
+  return false;
 };
 
 const jumpToDate = (rawDate) => {
@@ -263,10 +281,11 @@ onMounted(() => {
 
 // Điểm danh (Có mặt / Vắng / Hoàn tác)
 const markStudent = async (student, status, note = '') => {
+  if (listOutdated()) return;
   try {
     // Điểm danh theo từng ca (một học viên có thể nhiều ca trong ngày)
     const res = await dailyAttendanceApi.mark(student.id, {
-      date: selectedDate.value,
+      date: loadedDate.value,
       status,
       note,
       slot_id: student.slot_id ?? null,
@@ -361,8 +380,9 @@ const submitNote = async () => {
   if (!canMark.value) {
     // Giáo viên: chỉ lưu báo bài cho buổi đã được điểm danh
     try {
+      if (listOutdated()) return;
       const res = await dailyAttendanceApi.saveNote(selectedStudent.value.id, {
-        date: selectedDate.value,
+        date: loadedDate.value,
         slot_id: selectedStudent.value.slot_id ?? null,
         note: noteForm.value.content,
       });
@@ -575,7 +595,7 @@ const openMessageModal = (student) => {
                   Hôm nay
                 </span>
               </div>
-              <p class="text-slate-700 italic">
+              <p v-if="req.reason" class="text-slate-700 italic">
                 Lý do: "{{ req.reason }}"
               </p>
               <p class="text-[11px] text-slate-400">
@@ -653,13 +673,10 @@ const openMessageModal = (student) => {
                 <span>Giờ: <strong class="text-slate-800 dark:text-white">{{ st.shift_time }}</strong></span>
                 <span>GV: <span class="dark:text-white/90">{{ st.teacher }}</span></span>
                 <span>
-                  <!-- Buổi chính thức đã tính (đi học / vắng bị trừ buổi): "Buổi N" như Cổng phụ huynh. Học bù / học lẻ không
-                       có số buổi chính thức. Chưa điểm danh, nghỉ không trừ, buổi off: chỉ hiện số đã học -->
+                  <!-- Buổi đã trừ buổi (đi học / vắng bị trừ, kể cả học bù / học lẻ): "Buổi N" như Cổng phụ huynh.
+                       Chưa điểm danh, nghỉ có phép không trừ buổi, buổi off: chỉ hiện số đã học -->
                   <template v-if="st.deducts_session && st.current_session">
                     Tiến độ: <strong class="text-indigo-700 dark:text-indigo-400">Buổi {{ st.current_session }}/{{ st.total_sessions }}</strong>
-                  </template>
-                  <template v-else-if="st.deducts_session">
-                    Tiến độ: <strong class="text-indigo-700 dark:text-indigo-400">{{ st.is_makeup ? 'Buổi bù' : 'Buổi học lẻ' }}</strong> · đã trừ 1 buổi
                   </template>
                   <template v-else>
                     Tiến độ: <strong class="text-indigo-700 dark:text-indigo-400">Đã học {{ st.attended_sessions }}/{{ st.total_sessions }}</strong>
@@ -679,11 +696,15 @@ const openMessageModal = (student) => {
                 </span>
               </div>
 
-              <!-- Ghi chú nhận xét bài học -->
-              <div v-if="st.checkin_note" class="text-xs pt-0.5"
-                :class="st.is_parent_request ? 'text-amber-900 bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-200 inline-block dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-700/60' : 'text-slate-500 italic dark:text-white/60'">
-                <span class="font-bold">{{ st.is_parent_request ? '📩 Lý do phụ huynh xin nghỉ:' : '📝 Nhận xét:'
-                  }}</span>
+              <!-- Lý do phụ huynh gõ khi xin nghỉ (giữ nguyên dù giáo vụ đổi trạng thái); không có đơn thì không hiện -->
+              <div v-if="st.parent_leave_reason"
+                class="text-xs pt-0.5 text-amber-900 bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-200 inline-block dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-700/60">
+                <span class="font-bold">📩 Lý do phụ huynh xin nghỉ:</span>
+                <ExpandableText :text="st.parent_leave_reason" class="mt-0.5" />
+              </div>
+              <!-- Nhận xét / báo bài giáo viên gõ (ghi chú tự điền khi bấm trạng thái không hiện) -->
+              <div v-if="st.checkin_note" class="text-xs pt-0.5 text-slate-500 italic dark:text-white/60">
+                <span class="font-bold">📝 Nhận xét:</span>
                 <!-- Giữ xuống dòng của nhận xét / báo bài; dài thì thu gọn, có Xem thêm -->
                 <ExpandableText :text="st.checkin_note" class="mt-0.5" />
               </div>

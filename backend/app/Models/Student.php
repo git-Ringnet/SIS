@@ -339,9 +339,11 @@ class Student extends Model
             ->filter(fn ($a) => ($a->course_item_id !== null && (int) $a->course_item_id === $itemId) || ($isFirstCourse && $a->course_item_id === null))
             ->sortBy('attended_at')
             ->first();
-        // Hiện đúng ngày bắt đầu đã nhập (như popup "Thời gian khóa học"); đã điểm danh sớm hơn ngày đó thì lấy ngày điểm danh thật
-        $entered = $this->plannedFrom($item) ?? $from;
-        $date = collect([$entered, $first?->attended_at->toDateString()])->filter()->min();
+        // Đã nhập ngày bắt đầu ở "Thời gian khóa học" thì luôn hiện đúng ngày đó (vd gia hạn khóa bắt đầu lại từ 19/10
+        // dù đã điểm danh từ 28/09). Chưa nhập thì lấy ngày bắt đầu học, hoặc buổi điểm danh đầu tiên nếu sớm hơn.
+        $date = ! empty($item['start_date'])
+            ? Carbon::parse($item['start_date'])->toDateString()
+            : collect([$from, $first?->attended_at->toDateString()])->filter()->min();
 
         return ['date' => $date ? Carbon::parse($date)->format('d/m/Y') : null, 'estimated' => false];
     }

@@ -361,16 +361,7 @@ class StudentSchedule
         return (int) ($item['attended_sessions'] ?? ((int) $student->total_sessions - (int) $student->remaining_sessions));
     }
 
-    // ------------------------------------------------------------------ Số buổi chính thức
-
-    /**
-     * Buổi chính thức: buổi theo lịch có trừ buổi (đã học, vắng không phép, nghỉ có phép hết lượt).
-     * Học bù / học lẻ (ca là buổi học lẻ) không tính vào số buổi chính thức, dù vẫn trừ vào số buổi còn lại.
-     */
-    public static function isOfficial(Student $student, Attendance $attendance, array $lessonIds): bool
-    {
-        return $attendance->deductsSession() && ! in_array(self::slotIdOf($student, $attendance), $lessonIds, true);
-    }
+    // ------------------------------------------------------------------ Đánh số buổi học
 
     /**
      * Ca của bản ghi điểm danh; bản ghi không có ca được tính cho ca đầu tiên trong ngày như trang Điểm danh
@@ -378,7 +369,73 @@ class StudentSchedule
      */
     public static function slotIdOf(Student $student, Attendance $attendance): ?string
     {
-        return $attendance->slot_id ?? self::firstSlotIdOn($student, $attendance->attended_at->toDateString());
+        return self::matchingSlotId($student, $attendance) ?? self::firstSlotIdOn($student, $attendance->attended_at->toDateString());
+    }
+
+    /**
+     * Ca theo lịch hiện tại của một bản ghi điểm danh. Lịch học sửa sau khi đã điểm danh có thể đổi thứ của một ca
+     * mà vẫn giữ mã ca (vd ca Thứ 5 sửa thành Thứ 3): khi đó buổi đã điểm danh thuộc ca của đúng thứ ngày điểm danh,
+     * ưu tiên ca trùng giờ. Buổi học lẻ / học bù giữ nguyên.
+     */
+    public static function matchingSlotId(Student $student, Attendance $attendance): ?string
+    {
+        $id = $attendance->slot_id;
+        if ($id === null || str_starts_with($id, 'lesson_')) {
+            return $id;
+        }
+
+        $dayOfWeek = $attendance->attended_at->dayOfWeek;
+        $slot = self::find($student, $id);
+        if ($slot && (int) $slot['day'] === $dayOfWeek) {
+            return $id;
+        }
+
+        $sameDay = self::slotsOn($student, $dayOfWeek);
+        if ($sameDay === []) {
+            return $slot ? null : $id; // ca đã sửa sang thứ khác và ngày đó không còn ca nào
+        }
+
+        return (collect($sameDay)->firstWhere('start', $attendance->attended_at->format('H:i')) ?? $sameDay[0])['id'];
+    }
+
+    /**
+     * Gắn lại các bản ghi điểm danh đang trỏ vào ca không còn đúng thứ (sau khi sửa lịch học). Không đổi buổi đã trừ.
+     * Ngày đó mà ca đúng thứ đã có điểm danh riêng thì bản ghi lệch là bản ghi thừa (bấm điểm danh khi danh sách của
+     * ngày khác chưa tải lại): xoá và trả lại buổi đã trừ, giữ báo bài nếu bản ghi đúng chưa có.
+     *
+     * @return array{relinked: int, removed: list<int>} số bản ghi đã gắn lại, id các bản ghi thừa đã xoá
+     */
+    public static function relinkAttendanceSlots(Student $student): array
+    {
+        $relinked = 0;
+        $removed = [];
+        $all = Attendance::where('student_id', $student->id)->get();
+        foreach ($all->whereNotNull('slot_id') as $attendance) {
+            $slotId = self::matchingSlotId($student, $attendance);
+            if ($slotId === $attendance->slot_id) {
+                continue;
+            }
+
+            $date = $attendance->attended_at->toDateString();
+            $twin = $all->first(fn ($a) => $a->id !== $attendance->id && ! in_array($a->id, $removed, true)
+                && $a->attended_at->toDateString() === $date && $a->slot_id !== null && $a->slot_id === $slotId);
+            if ($twin) {
+                if ($attendance->hasLessonReport() && ! $twin->hasLessonReport()) {
+                    $twin->note = $attendance->note;
+                    $twin->saveQuietly();
+                }
+                AttendanceMarker::remove($student, $attendance);
+                $removed[] = $attendance->id;
+
+                continue;
+            }
+
+            $attendance->slot_id = $slotId;
+            $attendance->saveQuietly();
+            $relinked++;
+        }
+
+        return ['relinked' => $relinked, 'removed' => $removed];
     }
 
     /**
@@ -390,15 +447,15 @@ class StudentSchedule
     }
 
     /**
-     * Đánh số "Buổi n" chính thức, riêng từng khóa, theo thứ tự thời gian (cùng cách với Cổng phụ huynh và trang Điểm danh).
+     * Đánh số "Buổi n", riêng từng khóa, theo thứ tự thời gian (cùng cách với Cổng phụ huynh và trang Điểm danh):
+     * mọi buổi có trừ buổi đều có số (đã học, vắng không phép, nghỉ có phép hết lượt, kể cả học bù / học lẻ).
+     * Chỉ buổi nghỉ có phép không trừ buổi không có số (ngày trung tâm / giáo viên nghỉ không có điểm danh).
      * Buổi đã học trước khi dùng hệ thống (đã trừ vào số buổi nhưng không có điểm danh) tính ở đầu.
      *
      * @return array{numbers: array<int, int>, last: array<string, int>} số của từng bản ghi (id => n) và số cuối của từng khóa
      */
     public static function officialNumbers(Student $student, Collection $attendances): array
     {
-        $lessonIds = array_column(SingleLessons::forStudent($student->id), 'id');
-
         $last = [];
         foreach ($student->registered_courses_list ?: [null] as $item) {
             $key = self::itemKey($student, $item['id'] ?? null);
@@ -408,7 +465,7 @@ class StudentSchedule
 
         $numbers = [];
         foreach ($attendances->sortBy([fn ($a, $b) => $a->attended_at <=> $b->attended_at, fn ($a, $b) => $a->id <=> $b->id]) as $a) {
-            if (self::isOfficial($student, $a, $lessonIds)) {
+            if ($a->deductsSession()) {
                 $key = self::itemKey($student, $a->course_item_id);
                 $numbers[$a->id] = $last[$key] = ($last[$key] ?? 0) + 1;
             }

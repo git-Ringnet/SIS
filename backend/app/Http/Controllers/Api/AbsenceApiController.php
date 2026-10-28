@@ -131,7 +131,7 @@ class AbsenceApiController extends Controller
                 'course_name' => $att->course?->name ?? $att->student?->course?->name,
                 'leave_date' => $att->attended_at?->format('d/m/Y'),
                 'leave_date_raw' => $att->attended_at?->toDateString(),
-                'reason' => str_replace('PH xin nghỉ qua Cổng phụ huynh: ', '', $att->note ?? ''),
+                'reason' => $att->parentLeaveReason(),
                 'created_at' => $att->created_at?->format('d/m/Y H:i'),
             ]);
 

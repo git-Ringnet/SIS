@@ -377,6 +377,10 @@ class StudentApiController extends Controller
 
         $slotsBefore = StudentSchedule::slots($student);
         $student->update([...$validated, ...$this->scheduleAttributes($validated)]);
+        // Sửa thứ của một ca đã có điểm danh: buổi đã điểm danh vẫn thuộc ca của đúng thứ ngày đó
+        if (StudentSchedule::slots($student) != $slotsBefore) {
+            StudentSchedule::relinkAttendanceSlots($student);
+        }
 
         // Đồng bộ lại registered_courses khi lịch học thay đổi:
         // cập nhật số buổi/tuần và mô tả lịch cho các khóa không chọn ca riêng (schedule_ids rỗng).
@@ -501,7 +505,8 @@ class StudentApiController extends Controller
         }
 
         // Cùng quy tắc trừ buổi với trang Điểm danh
-        $result = AttendanceMarker::mark($student, Carbon::today()->toDateString(), 'present', $request->input('note'), $slot['id'] ?? null);
+        $result = AttendanceMarker::mark($student, Carbon::today()->toDateString(), 'present', $request->input('note'), $slot['id'] ?? null,
+            ($request->user()?->name ?: 'Giáo viên / Admin').' (Điểm danh nhanh)');
         $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
 
         return response()->json([
@@ -558,6 +563,7 @@ class StudentApiController extends Controller
             $isWithLeave ? 'absent_with_leave' : 'absent_without_leave',
             $request->input('note') ?: ($isWithLeave ? 'Nghỉ có phép' : 'Vắng không phép'),
             $slot['id'] ?? null,
+            ($request->user()?->name ?: 'Giáo viên / Admin').' (Điểm danh nhanh)',
         );
         $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
 
@@ -715,6 +721,9 @@ class StudentApiController extends Controller
         }
 
         $student->update($validated);
+        if (isset($schedule) && $schedule) {
+            StudentSchedule::relinkAttendanceSlots($student);
+        }
 
         return response()->json([
             'message' => $message,

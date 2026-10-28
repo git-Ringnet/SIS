@@ -91,6 +91,7 @@ class CourseClass extends Model
         $students = Student::where('assigned_class', $this->name)->get();
         foreach ($students as $student) {
             $student->update($schedule);
+            StudentSchedule::relinkAttendanceSlots($student);
         }
 
         return $students->count();

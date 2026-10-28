@@ -353,7 +353,7 @@ const openMessageModal = (st) => {
               </span>
             </div>
 
-            <div class="p-2.5 bg-amber-50/60 rounded-xl border border-amber-100 text-xs text-slate-700">
+            <div v-if="req.reason" class="p-2.5 bg-amber-50/60 rounded-xl border border-amber-100 text-xs text-slate-700">
               <strong class="text-amber-900">Lý do:</strong> "{{ req.reason }}"
             </div>
 

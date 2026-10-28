@@ -463,4 +463,22 @@ class TeacherPayAndLeaveTest extends TestCase
         // Ca nhóm 1 bạn (≤ nửa sĩ số 4) → 50% lương ca nhóm; mỗi ca 1:1 đủ lương 1:1
         $this->assertEquals(100000 + 120000 * 2, $this->monthly()['total_salary']);
     }
+
+    public function test_today_shifts_are_sorted_by_time_and_per_shift_substitute_can_be_removed(): void
+    {
+        $this->student('A', 'Cô Mai', $this->guitar, 'G1', '20:00');
+        $this->student('B', 'Thầy Bình', $this->piano, 'P1', '18:00');
+        $this->student('C', 'Cô Lan', $this->piano, 'P2', '19:00');
+        $shifts = collect($this->getJson('/api/teacher-checkin?date='.self::DATE)->json('today_shifts'));
+        $this->assertSame(['18:00', '19:00', '20:00'], $shifts->pluck('start_time')->all());
+
+        // Phân công dạy thay riêng cho ca 20:00 rồi bỏ → ca về giáo viên gốc, chưa check-in
+        $id = $shifts->firstWhere('teacher_name', 'Cô Mai')['id'];
+        $this->postJson('/api/teacher-checkin/absence', ['shift_id' => $id, 'status' => 'substitute', 'substitute_teacher' => 'Cô Nhi'])->assertOk();
+        $this->assertSame('Cô Nhi', $this->shifts()['Cô Mai']['substitute_teacher']);
+        $this->postJson("/api/teacher-checkin/{$id}/reset")->assertOk()->assertJsonPath('message', 'Đã bỏ dạy thay, ca trở về giáo viên gốc.');
+        $shift = $this->shifts()['Cô Mai'];
+        $this->assertSame([null, 'not_checked_in'], [$shift['substitute_teacher'], $shift['status']]);
+        $this->postJson("/api/teacher-checkin/{$id}/reset")->assertStatus(422);
+    }
 }

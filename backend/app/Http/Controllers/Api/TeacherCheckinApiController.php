@@ -160,7 +160,9 @@ class TeacherCheckinApiController extends Controller
 
         if (empty($shift['substitute_teacher'])
             && $sub = TeacherLeaves::substitutionFor($shift['teacher_name'], $shift['date'], $periods, $shift['start_time'] ?? null, $shift['end_time'] ?? null)) {
-            return [...$shift, 'substitute_teacher' => $sub['substitute'], 'period_note' => $sub['reason'] ?: 'Phân công dạy thay'];
+            // Dạy thay theo đợt (trang Nghỉ phép / Dạy thay): gỡ bằng cách xoá đợt đó, không gỡ trên từng ca
+            return [...$shift, 'substitute_teacher' => $sub['substitute'], 'substitute_from_period' => true,
+                'period_note' => $sub['reason'] ?: 'Phân công dạy thay'];
         }
 
         if (empty($shift['substitute_teacher'])
@@ -270,6 +272,8 @@ class TeacherCheckinApiController extends Controller
                 && ($teacherName === 'all' || $this->belongsTo($s, $teacherName) || TeacherName::same($s['teacher_name'], $teacherName))
                 && ($shiftTime === 'all' || ShiftTime::of($s['start_time'] ?? null) === $shiftTime);
         }));
+        // Ca trong ngày xếp theo giờ vào ca, sớm trước (cùng giờ thì theo tên giáo viên)
+        usort($todayShifts, fn ($a, $b) => [$a['start_time'] ?? '99:99', $a['teacher_name'] ?? ''] <=> [$b['start_time'] ?? '99:99', $b['teacher_name'] ?? '']);
 
         $todayStats = [
             'total' => count($todayShifts),
@@ -508,6 +512,7 @@ class TeacherCheckinApiController extends Controller
 
     /**
      * Khôi phục ca về "Chưa check-in": bỏ giờ check-in, đơn giá đã chốt, báo vắng. Phân công dạy thay giữ nguyên.
+     * Ca chưa check-in mà có người dạy thay (phân công riêng cho ca này) thì bỏ dạy thay, ca về giáo viên gốc.
      */
     public function resetShift(Request $request, int $id): JsonResponse
     {
@@ -517,13 +522,17 @@ class TeacherCheckinApiController extends Controller
 
         return $this->updateStoredShift($id, function (array $s) {
             if (($s['status'] ?? 'not_checked_in') === 'not_checked_in') {
-                return response()->json(['message' => 'Ca dạy này chưa được ghi nhận.'], 422);
+                return empty($s['substitute_teacher'])
+                    ? response()->json(['message' => 'Ca dạy này chưa được ghi nhận.'], 422)
+                    : [...$s, 'substitute_teacher' => null, 'note' => null];
             }
 
             $reset = array_diff_key($s, array_flip(self::CHECKIN_FIELDS));
 
             return [...$reset, 'status' => 'not_checked_in', 'checkin_time' => null, 'minutes_late' => 0, 'note' => null];
-        }, fn ($old) => ['Khôi phục', ['status' => self::statusLabel($old['status'])], ['status' => 'Chưa check-in']]);
+        }, fn ($old) => ($old['status'] ?? 'not_checked_in') === 'not_checked_in'
+            ? ['Bỏ dạy thay', ['substitute_teacher' => $old['substitute_teacher']], ['substitute_teacher' => null]]
+            : ['Khôi phục', ['status' => self::statusLabel($old['status'])], ['status' => 'Chưa check-in']]);
     }
 
     /**
@@ -650,6 +659,7 @@ class TeacherCheckinApiController extends Controller
 
             return response()->json(['message' => match ($action) {
                 'Khôi phục' => 'Đã khôi phục ca dạy về chưa check-in.',
+                'Bỏ dạy thay' => 'Đã bỏ dạy thay, ca trở về giáo viên gốc.',
                 'Xoá' => 'Đã xoá ca dạy.',
                 default => 'Đã cập nhật ca dạy.',
             }]);

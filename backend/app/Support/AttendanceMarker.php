@@ -23,10 +23,18 @@ class AttendanceMarker
     /**
      * @return array{attendance: ?Attendance, message: string}
      *
-     * @throws ValidationException khi học viên đã hết buổi mà điểm danh có mặt
+     * @throws ValidationException khi học viên đã hết buổi mà điểm danh có mặt, hoặc ca không có trong lịch của ngày đó
      */
     public static function mark(Student $student, string $date, string $status, ?string $note, ?string $slotId, string $markedBy = 'Giáo viên / Admin'): array
     {
+        // Ca phải thuộc lịch của chính ngày điểm danh (vd đổi ngày trên trang Điểm danh rồi bấm khi danh sách cũ chưa tải lại
+        // sẽ gửi ca Thứ 5 cho ngày Thứ 3). Hoàn tác thì vẫn cho, để gỡ được bản ghi lệch đã có.
+        if ($slotId !== null && $status !== 'not_checked' && ! in_array($slotId, self::slotIdsOn($student, $date), true)) {
+            throw ValidationException::withMessages([
+                'slot_id' => 'Ca này không có trong lịch học ngày '.Carbon::parse($date)->format('d/m/Y').'. Hãy tải lại trang rồi điểm danh lại.',
+            ]);
+        }
+
         $isFirstSlot = $slotId === null || StudentSchedule::firstSlotIdOn($student, $date) === $slotId;
 
         // Điểm danh đã có của đúng ca này (bản ghi cũ không có ca được tính cho ca đầu tiên)
@@ -70,8 +78,9 @@ class AttendanceMarker
             $existing->status = $status;
             $existing->deducts_session = $deducts;
             $existing->session_number = $sessionNumber;
-            // Đổi trạng thái (ghi chú tự điền) không ghi đè báo bài giáo viên đã nhập
-            if ($note && ! (Attendance::isAutoNote($note) && $existing->hasLessonReport())) {
+            // Đổi trạng thái (ghi chú tự điền) không ghi đè báo bài giáo viên đã nhập hay lý do phụ huynh xin nghỉ
+            $keepsNote = $existing->hasLessonReport() || str_starts_with((string) $existing->note, 'PH xin nghỉ');
+            if ($note && ! (Attendance::isAutoNote($note) && $keepsNote)) {
                 $existing->note = $note;
             }
             $existing->slot_id ??= $slotId;
@@ -98,6 +107,30 @@ class AttendanceMarker
         $attendance->refresh();
 
         return ['attendance' => $attendance, 'message' => self::message($student, $status, $deducts, $itemId)];
+    }
+
+    /**
+     * Mã các ca có học ngày $date: ca theo lịch và buổi học lẻ / học bù đặt cho ngày đó.
+     */
+    private static function slotIdsOn(Student $student, string $date): array
+    {
+        $date = Carbon::parse($date)->toDateString();
+
+        return [
+            ...array_column(StudentSchedule::slotsOnDate($student, $date), 'id'),
+            ...array_column(array_filter(SingleLessons::forStudent($student->id), fn ($l) => ($l['date'] ?? null) === $date), 'id'),
+        ];
+    }
+
+    /**
+     * Xoá hẳn một bản ghi điểm danh và trả lại phần đã trừ (buổi học hoặc lượt nghỉ có phép), đánh số lại các buổi.
+     */
+    public static function remove(Student $student, Attendance $attendance): void
+    {
+        self::revert($student, $attendance);
+        $attendance->delete();
+        $student->save();
+        StudentSchedule::syncOfficialNumbers($student);
     }
 
     /**

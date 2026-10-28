@@ -135,9 +135,9 @@ class LeaveRulesTest extends TestCase
         $this->assertSame([1, 0], [$row['allowed_absences'], $row['leave_left']]);
     }
 
-    public function test_attendance_page_and_portal_show_same_official_number_after_makeup(): void
+    public function test_attendance_page_and_portal_show_same_session_number_including_makeup(): void
     {
-        // T2 19/10 học (Buổi 1), T5 22/10 nghỉ có phép, T7 24/10 học bù, T2 26/10 học → Buổi 2 (buổi bù không tính)
+        // T2 19/10 học (Buổi 1), T5 22/10 nghỉ có phép (không số), T7 24/10 học bù (Buổi 2), T2 26/10 học (Buổi 3)
         $student = $this->createStudent();
         $this->mark($student, self::MONDAY, 'present')->assertOk();
         $this->mark($student, self::THURSDAY, 'absent_with_leave')->assertOk();
@@ -148,19 +148,19 @@ class LeaveRulesTest extends TestCase
 
         // Trang Điểm danh
         $makeupRow = $this->getJson('/api/attendance?date=2026-10-24')->json('students.0');
-        $this->assertSame([true, true, null], [$makeupRow['is_makeup'], $makeupRow['deducts_session'], $makeupRow['current_session']]);
-        $this->assertSame(2, $this->getJson('/api/attendance?date=2026-10-26')->json('students.0.current_session'));
+        $this->assertSame([true, true, 2], [$makeupRow['is_makeup'], $makeupRow['deducts_session'], $makeupRow['current_session']]);
+        $this->assertSame(3, $this->getJson('/api/attendance?date=2026-10-26')->json('students.0.current_session'));
 
         // Cổng PH cùng số; không hiện ghi chú tự điền "Điểm danh buổi #n" như nhận xét
         $sessions = collect($this->portal($student)['sessions'])->keyBy('date');
-        $this->assertSame([1, null, null, 2, 3], [$sessions['19/10/2026']['session_number'], $sessions['22/10/2026']['session_number'],
+        $this->assertSame([1, null, 2, 3, 4], [$sessions['19/10/2026']['session_number'], $sessions['22/10/2026']['session_number'],
             $sessions['24/10/2026']['session_number'], $sessions['26/10/2026']['session_number'], $sessions['29/10/2026']['session_number']]);
         $this->assertNull($sessions['26/10/2026']['note']);
 
         // Số lưu trong điểm danh (xuất Excel) cũng là số chính thức, kể cả khi điểm danh bù một ngày cũ
-        $this->assertSame([1, 2], Attendance::where('student_id', $student->id)->whereNotNull('session_number')
+        $this->assertSame([1, 2, 3], Attendance::where('student_id', $student->id)->whereNotNull('session_number')
             ->orderBy('attended_at')->pluck('session_number')->all());
-        $this->assertSame('Điểm danh buổi #2', Attendance::whereDate('attended_at', '2026-10-26')->value('note'));
+        $this->assertSame('Điểm danh buổi #3', Attendance::whereDate('attended_at', '2026-10-26')->value('note'));
     }
 
     public function test_quick_attend_button_links_to_makeup_lesson_and_duplicate_booking_is_refused(): void
@@ -178,11 +178,11 @@ class LeaveRulesTest extends TestCase
         $this->postJson("/api/students/{$student->id}/attendance")->assertOk();
         $this->assertSame($lessonId, Attendance::where('student_id', $student->id)->value('slot_id'));
 
-        // Cổng PH: một dòng buổi bù đã học, không đánh số, không còn dòng buổi bù "sắp tới" bị trùng
+        // Cổng PH: một dòng buổi bù đã học (Buổi 1), không còn dòng buổi bù "sắp tới" bị trùng
         $data = $this->portal($student);
         $makeups = collect($data['sessions'])->where('is_makeup', true)->values();
         $this->assertCount(1, $makeups);
-        $this->assertSame(['present', null], [$makeups[0]['status'], $makeups[0]['session_number']]);
+        $this->assertSame(['present', 1], [$makeups[0]['status'], $makeups[0]['session_number']]);
         $this->assertSame(1, $data['stats']['makeup_sessions']);
     }
 
@@ -195,10 +195,106 @@ class LeaveRulesTest extends TestCase
             'status' => 'present', 'deducts_session' => true]);
 
         $row = $this->getJson('/api/attendance?date=2026-10-24')->json('students.0');
-        $this->assertSame([true, 'present', null], [$row['is_makeup'], $row['status'], $row['current_session']]);
+        $this->assertSame([true, 'present', 1], [$row['is_makeup'], $row['status'], $row['current_session']]);
         $makeups = collect($this->portal($student)['sessions'])->where('is_makeup', true)->values();
         $this->assertCount(1, $makeups);
-        $this->assertSame(['present', null], [$makeups[0]['status'], $makeups[0]['session_number']]);
+        $this->assertSame(['present', 1], [$makeups[0]['status'], $makeups[0]['session_number']]);
+    }
+
+    public function test_editing_schedule_day_keeps_past_attendance_on_its_own_weekday(): void
+    {
+        // Lịch T2 17:00 (ca a) + T5 17:00 (ca b); đã điểm danh T5 22/10 vào ca b, PH xin nghỉ T5 29/10
+        $student = $this->createStudent();
+        [$monday, $thursday] = [collect($student->schedules)->firstWhere('day', 1)['id'], collect($student->schedules)->firstWhere('day', 4)['id']];
+        $this->postJson("/api/attendance/{$student->id}/mark", ['date' => self::THURSDAY, 'status' => 'present', 'slot_id' => $thursday])->assertOk();
+        $this->postJson("/api/portal/students/{$student->id}/leave-request", ['phone_last4' => '1234', 'date' => '2026-10-29',
+            'slot_id' => $thursday, 'reason' => 'Ốm'])->assertOk();
+
+        // Sửa lịch: dòng của ca b đổi thành T2 18:00, dòng của ca a đổi thành T5 19:00 (mã ca giữ nguyên theo dòng)
+        $this->putJson("/api/students/{$student->id}", [
+            ...$student->fresh()->only(['name', 'gender', 'parent_name', 'parent_phone', 'course_id', 'total_sessions', 'remaining_sessions', 'status']),
+            'retention_status' => 'normal',
+            'schedules' => [
+                ['id' => $thursday, 'day' => 1, 'start' => '18:00', 'end' => '19:00', 'teacher' => 'Cô Mai'],
+                ['id' => $monday, 'day' => 4, 'start' => '19:00', 'end' => '20:00', 'teacher' => 'Cô Mai'],
+            ],
+        ])->assertOk();
+
+        // Buổi T5 đã điểm danh / xin nghỉ gắn lại vào ca T5 hiện tại
+        $this->assertSame([$monday, $monday], Attendance::where('student_id', $student->id)->orderBy('attended_at')->pluck('slot_id')->all());
+
+        // Cổng PH: buổi T5 hiện giờ của ca T5, không hiện thêm buổi trùng ngày 29/10
+        $sessions = collect($this->portal($student)['sessions']);
+        $this->assertSame(['Thứ 5', '19:00 - 20:00', 'present'], [$sessions->firstWhere('date', '22/10/2026')['weekday'],
+            $sessions->firstWhere('date', '22/10/2026')['time'], $sessions->firstWhere('date', '22/10/2026')['status']]);
+        $this->assertSame(['absent_with_leave'], $sessions->where('date', '29/10/2026')->pluck('status')->values()->all());
+
+        // Trang Điểm danh ngày 29/10 thấy đúng buổi PH xin nghỉ
+        $this->assertSame('absent_with_leave', $this->getJson('/api/attendance?date=2026-10-29')->json('students.0.status'));
+    }
+
+    public function test_attendance_rows_are_sorted_by_start_time(): void
+    {
+        // Ca T2 17:00 theo lịch + buổi học lẻ gõ tay "9:00 - 10:00" + buổi học lẻ 20:30 cùng ngày
+        $student = $this->createStudent();
+        $this->postJson('/api/attendance/single-lesson', ['student_id' => $student->id, 'date' => self::MONDAY, 'time' => '20:30 - 21:30'])->assertCreated();
+        $this->postJson('/api/attendance/single-lesson', ['student_id' => $student->id, 'date' => self::MONDAY, 'time' => '9:00 - 10:00'])->assertCreated();
+
+        $times = collect($this->getJson('/api/attendance?date='.self::MONDAY)->json('students'))->pluck('shift_time')->all();
+        $this->assertSame(['9:00 - 10:00', '17:00 - 18:00', '20:30 - 21:30'], $times);
+    }
+
+    public function test_staff_changing_status_keeps_parent_leave_reason(): void
+    {
+        $student = $this->createStudent();
+        $thursday = collect($student->schedules)->firstWhere('day', 4)['id'];
+        $this->postJson("/api/portal/students/{$student->id}/leave-request", ['phone_last4' => '1234', 'date' => self::THURSDAY,
+            'slot_id' => $thursday, 'reason' => 'Bé đi khám răng'])->assertOk();
+
+        // Giáo vụ bấm "Vắng có phép" rồi "Vắng K.phép" trên trang Điểm danh (gửi kèm ghi chú tự điền)
+        foreach (['absent_without_leave' => 'Vắng không phép', 'absent_with_leave' => 'Nghỉ có phép'] as $status => $autoNote) {
+            $this->postJson("/api/attendance/{$student->id}/mark", ['date' => self::THURSDAY, 'status' => $status, 'note' => $autoNote, 'slot_id' => $thursday])
+                ->assertOk();
+            $row = $this->getJson('/api/attendance?date='.self::THURSDAY)->json('students.0');
+            $this->assertSame(['Bé đi khám răng', true, ''], [$row['parent_leave_reason'], $row['is_parent_request'], $row['checkin_note']]);
+        }
+        $this->assertSame('Bé đi khám răng', $this->getJson('/api/attendance?date='.self::THURSDAY)->json('parent_leave_requests.0.reason'));
+    }
+
+    public function test_slot_of_another_weekday_is_refused_and_old_duplicate_is_removed_with_refund(): void
+    {
+        $student = $this->createStudent(); // T2 17:00 (ca a) + T5 17:00 (ca b), 8 buổi
+        [$monday, $thursday] = [collect($student->schedules)->firstWhere('day', 1)['id'], collect($student->schedules)->firstWhere('day', 4)['id']];
+
+        // Đang xem T5 22/10 rồi đổi sang T2 19/10, bấm "Đi học" trên dòng cũ (ca T5) → bị chặn
+        $this->postJson("/api/attendance/{$student->id}/mark", ['date' => self::MONDAY, 'status' => 'present', 'slot_id' => $thursday])
+            ->assertJsonValidationErrors('slot_id');
+        $this->assertSame(0, Attendance::count());
+
+        // Dữ liệu cũ đã bị ghi kiểu đó: T2 19/10 có bản ghi ca T5 (thừa) + bản ghi đúng ca T2 → trừ 2 buổi
+        $this->postJson("/api/attendance/{$student->id}/mark", ['date' => self::MONDAY, 'status' => 'present', 'slot_id' => $monday])->assertOk();
+        $student->refresh();
+        $bad = Attendance::create(['student_id' => $student->id, 'course_item_id' => 1, 'slot_id' => $thursday,
+            'attended_at' => self::MONDAY.' 17:00:00', 'status' => 'present', 'deducts_session' => true]);
+        StudentSchedule::consume($student, 1, 1);
+        $student->save();
+        $this->assertSame(6, $student->fresh()->remaining_sessions);
+
+        $result = StudentSchedule::relinkAttendanceSlots($student->fresh());
+        $this->assertSame([$bad->id], $result['removed']);
+        $this->assertSame([$monday], Attendance::where('student_id', $student->id)->pluck('slot_id')->all());
+        $this->assertSame(7, $student->fresh()->remaining_sessions); // trả lại buổi bị trừ dư
+        $this->assertSame(1, collect($this->portal($student)['sessions'])->where('date', '19/10/2026')->count());
+    }
+
+    public function test_attendance_page_shows_only_real_notes_not_auto_filled_ones(): void
+    {
+        // Bấm "Vắng có phép" (ghi chú tự điền "Nghỉ có phép") khi không có đơn xin nghỉ → không hiện lý do / nhận xét
+        $student = $this->createStudent();
+        $this->mark($student, self::MONDAY, 'absent_with_leave')->assertOk();
+        $this->postJson("/api/attendance/{$student->id}/mark", ['date' => self::MONDAY, 'status' => 'absent_with_leave', 'note' => 'Nghỉ có phép'])->assertOk();
+        $row = $this->getJson('/api/attendance?date='.self::MONDAY)->json('students.0');
+        $this->assertSame(['', null, false], [$row['checkin_note'], $row['parent_leave_reason'], $row['is_parent_request']]);
     }
 
     public function test_lesson_report_flag_and_status_change_keeps_report(): void
@@ -332,8 +428,8 @@ class LeaveRulesTest extends TestCase
             'attended_at' => '2026-10-12 17:00:00', 'status' => 'present', 'deducts_session' => true, 'session_number' => 1]);
 
         $courses = collect($this->portal($student)['courses'])->keyBy('course_name');
-        // Piano: điểm danh buổi đầu (12/10) sớm hơn ngày lưu trong khóa (14/10) → lấy ngày điểm danh thật
-        $this->assertSame(['12/10/2026', false], [$courses['Piano']['start'], $courses['Piano']['start_estimated']]);
+        // Piano: đã nhập ngày bắt đầu 14/10 → luôn hiện đúng ngày đã nhập dù có điểm danh sớm hơn (12/10)
+        $this->assertSame(['14/10/2026', false], [$courses['Piano']['start'], $courses['Piano']['start_estimated']]);
         // Guitar: chưa học → ngày bắt đầu đã nhập của khóa; 8 buổi T5 → kết thúc 17/12
         $this->assertSame(['29/10/2026', false], [$courses['Guitar']['start'], $courses['Guitar']['start_estimated']]);
         $this->assertSame('17/12/2026', $courses['Guitar']['end']);
@@ -433,11 +529,11 @@ class LeaveRulesTest extends TestCase
         $this->assertSame('12/11/2026', $upcoming->last()['date']);
         $this->assertSame([1, 2, 3, 4, 5, 6, 7], $upcoming->pluck('session_number')->all());
 
-        // Đặt buổi bù thủ công → hiển thị buổi bù
+        // Đặt buổi bù thủ công → hiển thị buổi bù, đánh số theo thứ tự ngày (Buổi 2, sau buổi 19/10)
         $this->postJson('/api/attendance/single-lesson', ['student_id' => $student->id, 'date' => '2026-10-24', 'is_makeup' => true])->assertCreated();
         $data = $this->portal($student);
         $makeup = collect($data['sessions'])->firstWhere('is_makeup', true);
-        $this->assertSame([1, null], [$data['stats']['makeup_sessions'], $makeup['session_number']]);
+        $this->assertSame([1, 2], [$data['stats']['makeup_sessions'], $makeup['session_number']]);
         $makeupId = $makeup['slot_id'];
         $this->deleteJson("/api/attendance/single-lesson/{$makeupId}")->assertOk();
 
@@ -461,11 +557,12 @@ class LeaveRulesTest extends TestCase
         $makeup = collect($data['sessions'])->firstWhere('is_makeup', true);
         $this->assertSame(['24/10/2026', 'Buổi bù', 'upcoming'], [$makeup['date'], $makeup['status_label'], $makeup['status']]);
         $this->assertSame(1, $data['stats']['makeup_sessions']);
-        // Buổi bù không tính vào số buổi chính thức: 8 buổi theo lịch vẫn đánh số 1..8, buổi bù không có số
-        $this->assertNull($makeup['session_number']);
-        $regular = collect($data['sessions'])->where('status', 'upcoming')->where('is_makeup', false)->values();
-        $this->assertSame(range(1, 8), $regular->pluck('session_number')->all());
-        $this->assertSame('12/11/2026', $regular->last()['date']);
+        // Buổi bù dùng 1 trong 8 buổi còn lại và được đánh số theo thứ tự ngày (19/10, 22/10, bù 24/10 = Buổi 3)
+        $this->assertSame(3, $makeup['session_number']);
+        $upcoming = collect($data['sessions'])->where('status', 'upcoming')->values();
+        $this->assertSame(range(1, 8), $upcoming->pluck('session_number')->all());
+        // Còn 7 buổi theo lịch: 19, 22, 26, 29/10, 02, 05, 09/11
+        $this->assertSame('09/11/2026', $upcoming->where('is_makeup', false)->last()['date']);
     }
 
     public function test_makeup_lesson_booked_by_mistake_can_be_deleted(): void

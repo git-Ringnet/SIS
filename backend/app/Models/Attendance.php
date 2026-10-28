@@ -48,6 +48,18 @@ class Attendance extends Model
         return ! self::isAutoNote($this->note);
     }
 
+    /**
+     * Lý do phụ huynh gõ khi xin nghỉ qua Cổng phụ huynh (ghi chú "PH xin nghỉ qua Cổng phụ huynh: <lý do>"),
+     * null nếu buổi này không phải đơn xin nghỉ hoặc ghi chú đã bị thay.
+     */
+    public function parentLeaveReason(): ?string
+    {
+        $prefix = 'PH xin nghỉ qua Cổng phụ huynh';
+        $note = trim((string) $this->note);
+
+        return str_starts_with($note, $prefix) ? (trim(ltrim(substr($note, strlen($prefix)), ':')) ?: null) : null;
+    }
+
     public function student(): BelongsTo
     {
         return $this->belongsTo(Student::class);

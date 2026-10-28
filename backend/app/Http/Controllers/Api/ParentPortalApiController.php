@@ -254,6 +254,8 @@ class ParentPortalApiController extends Controller
                 'is_single_lesson' => true,
                 'slot_id' => $lesson['id'],
                 'can_request_leave' => true,
+                // Buổi bù / học lẻ cũng trừ 1 buổi nên được đánh số như buổi thường
+                'official' => true,
                 'course_item' => StudentSchedule::courseItemForSlot($student, $lesson['id']),
             ]);
         }
@@ -272,7 +274,9 @@ class ParentPortalApiController extends Controller
             if ($item && ($item['status'] ?? 'active') === 'completed') {
                 continue;
             }
-            $remaining = (int) ($item['remaining_sessions'] ?? $student->remaining_sessions);
+            // Buổi bù / học lẻ đã đặt dùng trước số buổi còn lại của khóa
+            $booked = $upcomingLessons->filter(fn ($l) => (StudentSchedule::courseItemForSlot($student, $l['id'])['id'] ?? null) === ($item['id'] ?? null))->count();
+            $remaining = max(0, (int) ($item['remaining_sessions'] ?? $student->remaining_sessions) - $booked);
             $slotIds = array_column(StudentSchedule::courseSlots($student, $item), 'id');
             if ($slotIds === [] || in_array($student->status, ['inactive', 'dropped'], true)) {
                 // Chưa có lịch tuần / đã nghỉ học: các buổi còn lại chưa có ngày; buổi nghỉ có phép cũng không tự thêm buổi
@@ -339,9 +343,9 @@ class ParentPortalApiController extends Controller
             }
         }
 
-        // Đánh số "Buổi n" chỉ cho buổi chính thức, riêng từng khóa (cùng số với trang Điểm danh): buổi theo lịch đã học /
-        // bị trừ buổi (vắng không phép, nghỉ có phép hết lượt) và buổi sắp tới theo lịch. Không đánh số: nghỉ có phép
-        // còn lượt, trung tâm off / giáo viên nghỉ, buổi học bù, buổi học lẻ.
+        // Đánh số "Buổi n" riêng từng khóa (cùng số với trang Điểm danh): mọi buổi trừ buổi (đã học, vắng không phép,
+        // nghỉ có phép hết lượt, học bù, học lẻ) và các buổi sắp tới. Không đánh số: nghỉ có phép còn lượt,
+        // trung tâm off / giáo viên nghỉ.
         ['numbers' => $numbers, 'last' => $last] = StudentSchedule::officialNumbers($student, $attendances);
         foreach ($rows as &$row) {
             if ($row['attendance_id'] !== null) {

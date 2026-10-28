@@ -175,14 +175,16 @@ class AttendanceApiController extends Controller
                     'allowed_absences' => $allowedAbsences,
                     'leave_left' => StudentSchedule::leaveLeft($st, $item['id'] ?? null),
                     'student_system_status' => $st->status,
-                    'checkin_note' => $att?->note ?: '',
+                    // Chỉ lời thật: nhận xét giáo viên gõ (không hiện ghi chú tự điền như "Nghỉ có phép", "Điểm danh buổi #3")
+                    'checkin_note' => $att?->hasLessonReport() ? $att->note : '',
+                    'parent_leave_reason' => $att?->parentLeaveReason(),
                     // Giáo viên đã báo bài buổi này → nút báo bài hiện màu xanh
                     'has_report' => $att?->hasLessonReport() ?? false,
                     'marked_by' => $att?->marked_by,
                     'is_parent_request' => $att && ($att->marked_by === AttendanceMarker::PARENT_PORTAL || str_contains($att->note ?? '', 'Cổng phụ huynh')),
                 ];
             }, $rows);
-        })->sortBy(fn ($r) => ($r['shift_time'] ?? '99').'|'.$r['name'])->values();
+        })->sortBy(fn ($r) => self::startKey($r['shift_time']).'|'.$r['name'])->values();
 
         // Danh sách lựa chọn cho bộ lọc lấy từ dữ liệu thật (trước khi lọc) gộp với danh sách mặc định
         $classOptions = $studentsFormatted->pluck('assigned_class')->filter()->unique()->sort()->values()->all();
@@ -242,7 +244,7 @@ class AttendanceApiController extends Controller
                 'course_name' => $att->course?->name ?? $att->student?->course?->name,
                 'leave_date' => $att->attended_at?->format('d/m/Y'),
                 'leave_date_raw' => $att->attended_at?->toDateString(),
-                'reason' => str_replace('PH xin nghỉ qua Cổng phụ huynh: ', '', $att->note ?? ''),
+                'reason' => $att->parentLeaveReason(),
                 'created_at' => $att->created_at?->format('d/m/Y H:i'),
             ]);
 
@@ -272,6 +274,15 @@ class AttendanceApiController extends Controller
         ]);
     }
 
+    /**
+     * Khoá sắp xếp theo giờ bắt đầu "HH:MM" (giờ buổi học lẻ gõ tay như "9:00 - 10:00" vẫn đứng trước "18:00");
+     * dòng không có giờ xếp cuối.
+     */
+    private static function startKey(?string $time): string
+    {
+        return $time && preg_match('/(\d{1,2}):(\d{2})/', $time, $m) ? sprintf('%02d:%s', $m[1], $m[2]) : '99:99';
+    }
+
     private function forbidTeacher(Request $request): ?JsonResponse
     {
         return PagePermissions::canMarkAttendance($request->user())
@@ -299,6 +310,8 @@ class AttendanceApiController extends Controller
             $validated['status'],
             $validated['note'] ?? '',
             $validated['slot_id'] ?? null,
+            // Lưu đúng tên người điểm danh để truy lại buổi bị điểm danh nhầm
+            $request->user()?->name ?: 'Giáo viên / Admin',
         );
 
         return response()->json([
