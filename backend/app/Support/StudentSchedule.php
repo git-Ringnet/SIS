@@ -505,17 +505,17 @@ class StudentSchedule
                 continue;
             }
             $from = max(Carbon::parse($from)->toDateString(), $firstDate);
-            $end = $student->courseItemDates($item)['end'];
-            $end = $end ? Carbon::createFromFormat('d/m/Y', $end)->startOfDay() : null;
-            $to = $end && $end->lt($yesterday) ? $end : $yesterday;
+            // Xét tới hôm qua (khóa còn buổi thì vẫn học tiếp sau ngày kết thúc dự kiến), không quá số buổi còn lại của khóa
+            $left = (int) ($item['remaining_sessions'] ?? $student->remaining_sessions);
 
-            for ($day = Carbon::parse($from)->startOfDay()->max($yesterday->copy()->subYear()); $day->lte($to); $day = $day->copy()->addDay()) {
+            for ($day = Carbon::parse($from)->startOfDay()->max($yesterday->copy()->subYear()); $day->lte($yesterday) && $left > 0; $day = $day->copy()->addDay()) {
                 foreach (self::slotsOnDate($student, $day->toDateString()) as $slot) {
                     $key = $day->toDateString().'|'.$slot['id'];
-                    if (! in_array($slot['id'], $slotIds, true) || isset($recorded[$key])
+                    if ($left <= 0 || ! in_array($slot['id'], $slotIds, true) || isset($recorded[$key])
                         || self::offReason($student, $day->toDateString(), $slot, $periods)) {
                         continue;
                     }
+                    $left--;
                     $recorded[$key] = true;
                     $result[] = ['date' => $day->copy()->setTimeFromTimeString($slot['start']), 'slot' => $slot, 'item' => $item, 'key' => $key];
                 }
@@ -704,6 +704,65 @@ class StudentSchedule
         }
 
         return [null, true];
+    }
+
+    /**
+     * Các ca sắp tới còn buổi để học, theo số buổi còn lại của từng khóa (từ hôm nay): ["Y-m-d|slotId" => true].
+     * Trang Điểm danh dùng để không hiện học viên vào những tuần sau khi khóa đã hết buổi.
+     */
+    public static function upcomingKeys(Student $student): array
+    {
+        $keys = [];
+        foreach (self::plannedSessions($student) as $session) {
+            $keys[$session['date']->toDateString().'|'.$session['slot']['id']] = true;
+        }
+
+        return $keys;
+    }
+
+    /**
+     * Buổi sắp tới theo lịch tuần của từng khóa (Cổng phụ huynh và trang Điểm danh dùng chung, để luôn khớp nhau):
+     * đủ số buổi còn lại của khóa, trừ buổi bù / học lẻ đã đặt và buổi đã qua chưa điểm danh (các buổi đó cũng sẽ trừ buổi).
+     * Nghỉ có phép không trừ buổi / trung tâm nghỉ thì buổi cuối tự lùi. Khóa chưa có lịch tuần thì không có buổi nào.
+     *
+     * @return list<array{date: Carbon, slot: array, item: ?array}>
+     */
+    public static function plannedSessions(Student $student, ?Collection $attendances = null): array
+    {
+        $attendances ??= $student->relationLoaded('attendances') ? $student->attendances : $student->attendances()->get();
+        $today = Carbon::today()->toDateString();
+        $recorded = [];
+        foreach ($attendances as $attendance) {
+            $recorded[$attendance->attended_at->toDateString().'|'.self::slotIdOf($student, $attendance)] = true;
+        }
+        $lessons = array_filter(SingleLessons::forStudent($student->id),
+            fn ($l) => ($l['date'] ?? '') >= $today && ! isset($recorded[$l['date'].'|'.$l['id']]));
+        $unmarked = self::unmarkedSessions($student, $attendances);
+
+        $result = [];
+        $seen = [];
+        foreach ($student->registered_courses_list ?: [null] as $item) {
+            if ($item && ($item['status'] ?? 'active') === 'completed') {
+                continue;
+            }
+            $itemId = $item['id'] ?? null;
+            $booked = count(array_filter($lessons, fn ($l) => (self::courseItemForSlot($student, $l['id'])['id'] ?? null) === $itemId))
+                + count(array_filter($unmarked, fn ($u) => ($u['item']['id'] ?? null) === $itemId));
+            $remaining = max(0, (int) ($item['remaining_sessions'] ?? $student->remaining_sessions) - $booked);
+            $slotIds = array_column(self::courseSlots($student, $item), 'id');
+            if ($slotIds === []) {
+                continue;
+            }
+            foreach (self::upcomingSessions($student, $remaining, $slotIds, ($item['start_date'] ?? null) ?: null) as $session) {
+                $key = $session['date']->toDateString().'|'.$session['slot']['id'];
+                if (! isset($seen[$key])) {
+                    $seen[$key] = true;
+                    $result[] = [...$session, 'item' => $item];
+                }
+            }
+        }
+
+        return $result;
     }
 
     /**

@@ -260,15 +260,7 @@ class ParentPortalApiController extends Controller
             ]);
         }
 
-        // Buổi sắp tới theo lịch tuần của từng khóa, chỉ tới ngày kết thúc dự kiến của khóa (cố định theo số buổi chính thức).
-        // Buổi nghỉ có phép không tự thêm buổi vào cuối: giáo vụ đặt buổi bù riêng. Không quá số buổi còn lại của khóa.
         $items = $student->registered_courses_list ?: [null];
-        $firstItemId = $items[0]['id'] ?? null;
-        // Buổi nghỉ có phép không trừ buổi của khóa (bản ghi cũ chưa gắn khóa tính cho khóa đầu tiên)
-        $excusedOf = fn (?array $item) => $attendances->filter(fn ($a) => $a->status === 'absent_with_leave' && ! $a->deductsSession()
-            && (($a->course_item_id ?? $firstItemId) === ($item['id'] ?? null)))->count();
-        $planned = [];
-        $lastDate = null;
         $unscheduled = []; // [khóa, số buổi chưa có ngày]
 
         // Buổi theo lịch đã qua mà trung tâm chưa điểm danh: vẫn là một buổi của khóa (có số, dùng 1 buổi còn lại)
@@ -292,32 +284,17 @@ class ParentPortalApiController extends Controller
             if ($item && ($item['status'] ?? 'active') === 'completed') {
                 continue;
             }
-            // Buổi bù / học lẻ đã đặt dùng trước số buổi còn lại của khóa
-            // Buổi chưa điểm danh cũng sẽ trừ buổi khi giáo vụ điểm danh: không tính thêm buổi sắp tới cho các buổi đó
-            $booked = $upcomingLessons->filter(fn ($l) => (StudentSchedule::courseItemForSlot($student, $l['id'])['id'] ?? null) === ($item['id'] ?? null))->count()
-                + collect($unmarked)->filter(fn ($u) => ($u['item']['id'] ?? null) === ($item['id'] ?? null))->count();
-            $remaining = max(0, (int) ($item['remaining_sessions'] ?? $student->remaining_sessions) - $booked);
-            $slotIds = array_column(StudentSchedule::courseSlots($student, $item), 'id');
-            if ($slotIds === [] || in_array($student->status, ['inactive', 'dropped'], true)) {
-                // Chưa có lịch tuần / đã nghỉ học: các buổi còn lại chưa có ngày; buổi nghỉ có phép cũng không tự thêm buổi
-                $unscheduled[] = [$item, max(0, $remaining - $excusedOf($item))];
-
-                continue;
-            }
-            $end = $student->courseItemDates($item)['end'];
-            $end = $end ? Carbon::createFromFormat('d/m/Y', $end)->endOfDay() : null;
-            $from = ! empty($item['start_date']) ? $item['start_date'] : null;
-            foreach (StudentSchedule::upcomingSessions($student, $remaining, $slotIds, $from) as $session) {
-                $key = $session['date']->toDateString().'|'.$session['slot']['id'];
-                if (($end && $session['date']->gt($end)) || isset($planned[$key])) {
-                    continue;
-                }
-                $planned[$key] = $session;
-            }
-            if ($end && (! $lastDate || $end->gt($lastDate))) {
-                $lastDate = $end->copy()->startOfDay();
+            if (StudentSchedule::courseSlots($student, $item) === [] || in_array($student->status, ['inactive', 'dropped'], true)) {
+                // Chưa có lịch tuần / đã nghỉ học: các buổi còn lại chưa có ngày (trừ buổi bù / học lẻ đã đặt, buổi chưa điểm danh)
+                $booked = $upcomingLessons->filter(fn ($l) => (StudentSchedule::courseItemForSlot($student, $l['id'])['id'] ?? null) === ($item['id'] ?? null))->count()
+                    + collect($unmarked)->filter(fn ($u) => ($u['item']['id'] ?? null) === ($item['id'] ?? null))->count();
+                $unscheduled[] = [$item, max(0, (int) ($item['remaining_sessions'] ?? $student->remaining_sessions) - $booked)];
             }
         }
+
+        // Buổi sắp tới theo lịch tuần: đủ số buổi còn lại của từng khóa, cùng danh sách với trang Điểm danh
+        // (nghỉ có phép không trừ buổi / trung tâm nghỉ thì buổi cuối tự lùi, để phụ huynh theo dõi đúng số buổi còn lại)
+        $planned = in_array($student->status, ['inactive', 'dropped'], true) ? [] : StudentSchedule::plannedSessions($student, $attendances);
         foreach ($planned as ['date' => $date, 'slot' => $slot]) {
             $rows[] = $this->row([
                 'key' => 'plan-'.$date->toDateString().'-'.$slot['id'],
@@ -335,7 +312,7 @@ class ParentPortalApiController extends Controller
 
         // Ngày trung tâm nghỉ / giáo viên nghỉ: từ ngày nhập học (hoặc buổi đầu tiên) đến ngày kết thúc dự kiến
         $from = collect([$student->join_date, $attendances->first()?->attended_at])->filter()->min() ?? $today;
-        $to = $lastDate ?? ($planned !== [] ? end($planned)['date'] : $today);
+        $to = $planned !== [] ? collect($planned)->max('date') : $today;
         foreach (StudentSchedule::offSessions($student, Carbon::parse($from)->max($today->copy()->subYear()), $to) as ['date' => $date, 'slot' => $slot, 'off' => $off]) {
             if (isset($recorded[$date->toDateString().'|'.$slot['id']])) {
                 continue;

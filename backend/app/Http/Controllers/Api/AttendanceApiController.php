@@ -120,6 +120,18 @@ class AttendanceApiController extends Controller
                     'is_single_lesson' => false, 'is_makeup' => false, 'off' => null];
             }
 
+            // Ngày sau hôm nay: chỉ hiện ca còn buổi để học (khóa hết buổi thì những tuần sau không hiện nữa).
+            // Ca đã có điểm danh trước (phụ huynh xin nghỉ), buổi học lẻ / học bù và học viên tạm dừng vẫn hiện như cũ.
+            if ($dateStr > Carbon::today()->toDateString() && $st->status === 'active') {
+                $upcoming = StudentSchedule::upcomingKeys($st);
+                $lastUpcoming = $upcoming === [] ? null : max(array_map(fn ($k) => substr($k, 0, 10), array_keys($upcoming)));
+                $rows = array_values(array_filter($rows, fn ($row) => $row['is_single_lesson'] || $row['slot_id'] === null
+                    || isset($upcoming[$dateStr.'|'.$row['slot_id']])
+                    || ($row['off'] !== null && $lastUpcoming !== null && $dateStr <= $lastUpcoming)
+                    || $records->firstWhere('slot_id', $row['slot_id'])
+                    || ($row['first'] && $records->contains(fn ($r) => $r->slot_id === null))));
+            }
+
             return array_map(function ($row) use ($st, $records, $official) {
                 // Bản ghi theo đúng ca; bản ghi cũ không có ca được tính cho ca đầu tiên trong ngày
                 $att = $records->firstWhere('slot_id', $row['slot_id'])

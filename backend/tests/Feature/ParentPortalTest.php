@@ -150,12 +150,12 @@ class ParentPortalTest extends TestCase
         ]);
 
         $sessions = $response->json('sessions');
-        $this->assertCount(12, $sessions);
+        $this->assertCount(13, $sessions);
         $this->assertEquals('present', $sessions[0]['status']);
         $this->assertEquals('absent_with_leave', $sessions[2]['status']);
         $this->assertEquals('upcoming', $sessions[3]['status']);
-        // Chỉ buổi chính thức được đánh số; buổi nghỉ có phép không có số và không tự thêm buổi (vẫn 12 dòng)
+        // Chỉ buổi chính thức được đánh số; buổi nghỉ có phép không có số, không trừ buổi → vẫn đủ 12 buổi (13 dòng)
         $this->assertSame([1, 2, null, 3], array_column(array_slice($sessions, 0, 4), 'session_number'));
-        $this->assertSame(11, end($sessions)['session_number']);
+        $this->assertSame(12, end($sessions)['session_number']);
     }
 }
