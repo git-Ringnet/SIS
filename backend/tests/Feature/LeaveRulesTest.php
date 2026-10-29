@@ -512,6 +512,22 @@ class LeaveRulesTest extends TestCase
         $this->assertSame('22/10/2026', $sessions->firstWhere('status', 'off')['date']);
     }
 
+    public function test_portal_does_not_flag_sessions_before_system_was_used_as_unmarked(): void
+    {
+        // Học từ 01/09 nhưng mới dùng hệ thống: 10 buổi trước đó nhập tay ở "Đã học", điểm danh đầu tiên 19/10
+        $student = $this->createStudent();
+        $courses = $student->registered_courses_list;
+        $courses[0] = [...$courses[0], 'start_date' => '2026-09-01', 'total_sessions' => 20, 'attended_sessions' => 10, 'remaining_sessions' => 10];
+        $student->update(['join_date' => '2026-09-01', 'registered_courses' => $courses, 'total_sessions' => 20, 'remaining_sessions' => 10]);
+        $this->mark($student, self::MONDAY, 'present')->assertOk();
+        Carbon::setTestNow('2026-10-27 08:00:00');
+
+        // Chỉ 22/10 và 26/10 (sau buổi điểm danh đầu tiên) là chưa điểm danh; các buổi T2/T5 tháng 9 không hiện
+        $sessions = collect($this->portal($student)['sessions']);
+        $this->assertSame(['22/10/2026', '26/10/2026'], $sessions->where('status', 'unmarked')->pluck('date')->values()->all());
+        $this->assertSame(11, $sessions->firstWhere('status', 'present')['session_number']);
+    }
+
     public function test_planned_end_date_counts_session_learned_before_first_scheduled_day(): void
     {
         // Bắt đầu học T5 29/10 rồi xếp lịch T3, 4 buổi: buổi 29/10 là buổi 1 → T3 03, 10, 17/11 (không phải 24/11)

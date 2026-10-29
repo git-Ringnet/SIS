@@ -484,8 +484,12 @@ class StudentSchedule
         }
 
         $recorded = [];
+        $firstMarked = []; // ngày điểm danh đầu tiên của từng khóa
         foreach ($attendances as $attendance) {
-            $recorded[$attendance->attended_at->toDateString().'|'.self::slotIdOf($student, $attendance)] = true;
+            $date = $attendance->attended_at->toDateString();
+            $recorded[$date.'|'.self::slotIdOf($student, $attendance)] = true;
+            $itemKey = self::itemKey($student, $attendance->course_item_id);
+            $firstMarked[$itemKey] = min($firstMarked[$itemKey] ?? $date, $date);
         }
 
         $yesterday = Carbon::yesterday();
@@ -493,10 +497,14 @@ class StudentSchedule
         $result = [];
         foreach ($student->registered_courses_list ?: [null] as $item) {
             $slotIds = array_column(self::courseSlots($student, $item), 'id');
+            // Chỉ xét từ buổi điểm danh đầu tiên của khóa trên hệ thống: trước đó là giai đoạn chưa dùng phần mềm
+            // (số buổi đã học nằm trong "Đã học" nhập tay), không phải buổi bị quên điểm danh
             $from = ($item['start_date'] ?? null) ?: $student->join_date;
-            if (($item['status'] ?? 'active') === 'completed' || $slotIds === [] || ! $from) {
+            $firstDate = $firstMarked[self::itemKey($student, $item['id'] ?? null)] ?? null;
+            if (($item['status'] ?? 'active') === 'completed' || $slotIds === [] || ! $from || ! $firstDate) {
                 continue;
             }
+            $from = max(Carbon::parse($from)->toDateString(), $firstDate);
             $end = $student->courseItemDates($item)['end'];
             $end = $end ? Carbon::createFromFormat('d/m/Y', $end)->startOfDay() : null;
             $to = $end && $end->lt($yesterday) ? $end : $yesterday;
