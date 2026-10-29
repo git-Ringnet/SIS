@@ -472,12 +472,59 @@ class StudentSchedule
     }
 
     /**
-     * Đánh số "Buổi n", riêng từng khóa, theo thứ tự thời gian (cùng cách với Cổng phụ huynh và trang Điểm danh):
-     * mọi buổi có trừ buổi đều có số (đã học, vắng không phép, nghỉ có phép hết lượt, kể cả học bù / học lẻ).
-     * Chỉ buổi nghỉ có phép không trừ buổi không có số (ngày trung tâm / giáo viên nghỉ không có điểm danh).
-     * Buổi đã học trước khi dùng hệ thống (đã trừ vào số buổi nhưng không có điểm danh) tính ở đầu.
+     * Buổi theo lịch đã qua (tới hôm qua, trong thời gian khóa) mà trung tâm chưa điểm danh, không phải ngày nghỉ.
+     * Vẫn là một buổi của khóa (đánh số, dùng 1 buổi còn lại) cho tới khi giáo vụ điểm danh.
      *
-     * @return array{numbers: array<int, int>, last: array<string, int>} số của từng bản ghi (id => n) và số cuối của từng khóa
+     * @return list<array{date: Carbon, slot: array, item: ?array, key: string}> key = "Y-m-d|mã ca"
+     */
+    public static function unmarkedSessions(Student $student, Collection $attendances): array
+    {
+        if ($student->status !== 'active') {
+            return [];
+        }
+
+        $recorded = [];
+        foreach ($attendances as $attendance) {
+            $recorded[$attendance->attended_at->toDateString().'|'.self::slotIdOf($student, $attendance)] = true;
+        }
+
+        $yesterday = Carbon::yesterday();
+        $periods = TeacherLeaves::all();
+        $result = [];
+        foreach ($student->registered_courses_list ?: [null] as $item) {
+            $slotIds = array_column(self::courseSlots($student, $item), 'id');
+            $from = ($item['start_date'] ?? null) ?: $student->join_date;
+            if (($item['status'] ?? 'active') === 'completed' || $slotIds === [] || ! $from) {
+                continue;
+            }
+            $end = $student->courseItemDates($item)['end'];
+            $end = $end ? Carbon::createFromFormat('d/m/Y', $end)->startOfDay() : null;
+            $to = $end && $end->lt($yesterday) ? $end : $yesterday;
+
+            for ($day = Carbon::parse($from)->startOfDay()->max($yesterday->copy()->subYear()); $day->lte($to); $day = $day->copy()->addDay()) {
+                foreach (self::slotsOnDate($student, $day->toDateString()) as $slot) {
+                    $key = $day->toDateString().'|'.$slot['id'];
+                    if (! in_array($slot['id'], $slotIds, true) || isset($recorded[$key])
+                        || self::offReason($student, $day->toDateString(), $slot, $periods)) {
+                        continue;
+                    }
+                    $recorded[$key] = true;
+                    $result[] = ['date' => $day->copy()->setTimeFromTimeString($slot['start']), 'slot' => $slot, 'item' => $item, 'key' => $key];
+                }
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Đánh số "Buổi n", riêng từng khóa, theo thứ tự thời gian (cùng cách với Cổng phụ huynh và trang Điểm danh):
+     * mọi buổi có trừ buổi đều có số (đã học, vắng không phép, nghỉ có phép hết lượt, kể cả học bù / học lẻ), và buổi
+     * theo lịch đã qua mà chưa điểm danh. Chỉ buổi nghỉ có phép không trừ buổi không có số (ngày trung tâm / giáo viên
+     * nghỉ không có điểm danh). Buổi đã học trước khi dùng hệ thống (đã trừ vào số buổi nhưng không có điểm danh) tính ở đầu.
+     *
+     * @return array{numbers: array<int, int>, unmarked: array<string, int>, last: array<string, int>}
+     *         số của từng bản ghi (id => n), của từng buổi chưa điểm danh (key => n) và số cuối của từng khóa
      */
     public static function officialNumbers(Student $student, Collection $attendances): array
     {
@@ -488,15 +535,31 @@ class StudentSchedule
             $last[$key] = max(0, self::attendedSessions($student, $item['id'] ?? null) - $deducting);
         }
 
-        $numbers = [];
-        foreach ($attendances->sortBy([fn ($a, $b) => $a->attended_at <=> $b->attended_at, fn ($a, $b) => $a->id <=> $b->id]) as $a) {
+        // Bản ghi trừ buổi và buổi chưa điểm danh, xếp theo thời gian rồi đánh số liên tiếp trong từng khóa
+        $entries = [];
+        foreach ($attendances as $a) {
             if ($a->deductsSession()) {
-                $key = self::itemKey($student, $a->course_item_id);
-                $numbers[$a->id] = $last[$key] = ($last[$key] ?? 0) + 1;
+                $entries[] = ['at' => $a->attended_at->format('Y-m-d H:i'), 'order' => $a->id, 'item' => self::itemKey($student, $a->course_item_id), 'id' => $a->id];
+            }
+        }
+        foreach (self::unmarkedSessions($student, $attendances) as $session) {
+            $entries[] = ['at' => $session['date']->format('Y-m-d H:i'), 'order' => 0, 'item' => self::itemKey($student, $session['item']['id'] ?? null),
+                'unmarked' => $session['key']];
+        }
+        usort($entries, fn ($x, $y) => [$x['at'], $x['order']] <=> [$y['at'], $y['order']]);
+
+        $numbers = [];
+        $unmarked = [];
+        foreach ($entries as $entry) {
+            $n = $last[$entry['item']] = ($last[$entry['item']] ?? 0) + 1;
+            if (isset($entry['id'])) {
+                $numbers[$entry['id']] = $n;
+            } else {
+                $unmarked[$entry['unmarked']] = $n;
             }
         }
 
-        return ['numbers' => $numbers, 'last' => $last];
+        return ['numbers' => $numbers, 'unmarked' => $unmarked, 'last' => $last];
     }
 
     /**

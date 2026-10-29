@@ -10,7 +10,6 @@ use App\Support\BrandSettings;
 use App\Support\CenterStore;
 use App\Support\SingleLessons;
 use App\Support\StudentSchedule;
-use App\Support\TeacherLeaves;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -271,12 +270,32 @@ class ParentPortalApiController extends Controller
         $planned = [];
         $lastDate = null;
         $unscheduled = []; // [khóa, số buổi chưa có ngày]
+
+        // Buổi theo lịch đã qua mà trung tâm chưa điểm danh: vẫn là một buổi của khóa (có số, dùng 1 buổi còn lại)
+        $unmarked = StudentSchedule::unmarkedSessions($student, $attendances);
+        foreach ($unmarked as ['date' => $date, 'slot' => $slot, 'item' => $unmarkedItem, 'key' => $key]) {
+            $recorded[$key] = true;
+            $rows[] = $this->row([
+                'key' => 'unmarked-'.$date->toDateString().'-'.$slot['id'],
+                'status' => 'unmarked',
+                'status_label' => 'Chưa điểm danh',
+                'date' => $date,
+                'time' => StudentSchedule::timeLabel($slot),
+                'teacher' => $slot['teacher'] ?? null,
+                'note' => 'Trung tâm chưa cập nhật điểm danh buổi này.',
+                'slot_id' => $slot['id'],
+                'unmarked_key' => $key,
+                'course_item' => $unmarkedItem,
+            ]);
+        }
         foreach ($items as $item) {
             if ($item && ($item['status'] ?? 'active') === 'completed') {
                 continue;
             }
             // Buổi bù / học lẻ đã đặt dùng trước số buổi còn lại của khóa
-            $booked = $upcomingLessons->filter(fn ($l) => (StudentSchedule::courseItemForSlot($student, $l['id'])['id'] ?? null) === ($item['id'] ?? null))->count();
+            // Buổi chưa điểm danh cũng sẽ trừ buổi khi giáo vụ điểm danh: không tính thêm buổi sắp tới cho các buổi đó
+            $booked = $upcomingLessons->filter(fn ($l) => (StudentSchedule::courseItemForSlot($student, $l['id'])['id'] ?? null) === ($item['id'] ?? null))->count()
+                + collect($unmarked)->filter(fn ($u) => ($u['item']['id'] ?? null) === ($item['id'] ?? null))->count();
             $remaining = max(0, (int) ($item['remaining_sessions'] ?? $student->remaining_sessions) - $booked);
             $slotIds = array_column(StudentSchedule::courseSlots($student, $item), 'id');
             if ($slotIds === [] || in_array($student->status, ['inactive', 'dropped'], true)) {
@@ -288,7 +307,6 @@ class ParentPortalApiController extends Controller
             $end = $student->courseItemDates($item)['end'];
             $end = $end ? Carbon::createFromFormat('d/m/Y', $end)->endOfDay() : null;
             $from = ! empty($item['start_date']) ? $item['start_date'] : null;
-            $this->addUnmarkedRows($rows, $recorded, $student, $item, $slotIds, $from ?? $student->join_date, $end);
             foreach (StudentSchedule::upcomingSessions($student, $remaining, $slotIds, $from) as $session) {
                 $key = $session['date']->toDateString().'|'.$session['slot']['id'];
                 if (($end && $session['date']->gt($end)) || isset($planned[$key])) {
@@ -346,56 +364,22 @@ class ParentPortalApiController extends Controller
         }
 
         // Đánh số "Buổi n" riêng từng khóa (cùng số với trang Điểm danh): mọi buổi trừ buổi (đã học, vắng không phép,
-        // nghỉ có phép hết lượt, học bù, học lẻ) và các buổi sắp tới. Không đánh số: nghỉ có phép còn lượt,
-        // trung tâm off / giáo viên nghỉ.
-        ['numbers' => $numbers, 'last' => $last] = StudentSchedule::officialNumbers($student, $attendances);
+        // nghỉ có phép hết lượt, học bù, học lẻ), buổi đã qua chưa điểm danh và các buổi sắp tới. Không đánh số:
+        // nghỉ có phép còn lượt, trung tâm off / giáo viên nghỉ.
+        ['numbers' => $numbers, 'unmarked' => $unmarkedNumbers, 'last' => $last] = StudentSchedule::officialNumbers($student, $attendances);
         foreach ($rows as &$row) {
             if ($row['attendance_id'] !== null) {
                 $row['session_number'] = $numbers[$row['attendance_id']] ?? null;
+            } elseif ($row['unmarked_key'] !== null) {
+                $row['session_number'] = $unmarkedNumbers[$row['unmarked_key']] ?? null;
             } elseif ($row['official']) {
                 $key = StudentSchedule::itemKey($student, $row['course_item_id']);
                 $row['session_number'] = $last[$key] = ($last[$key] ?? 0) + 1;
             }
-            unset($row['sort'], $row['official'], $row['attendance_id']);
+            unset($row['sort'], $row['official'], $row['attendance_id'], $row['unmarked_key']);
         }
 
         return $rows;
-    }
-
-    /**
-     * Buổi theo lịch đã qua mà trung tâm chưa điểm danh (không phải ngày nghỉ): vẫn hiện "Chưa điểm danh" để không bị mất
-     * khỏi danh sách. Không đánh số (chưa biết có trừ buổi hay không), số buổi chính thức vẫn theo bản ghi điểm danh.
-     */
-    private function addUnmarkedRows(array &$rows, array &$recorded, Student $student, ?array $item, array $slotIds, $from, ?Carbon $end): void
-    {
-        if (! $from || $student->status !== 'active') {
-            return;
-        }
-
-        $yesterday = Carbon::yesterday();
-        $to = $end && $end->lt($yesterday) ? $end->copy()->startOfDay() : $yesterday;
-        $periods = TeacherLeaves::all();
-        for ($day = Carbon::parse($from)->startOfDay()->max($yesterday->copy()->subYear()); $day->lte($to); $day = $day->copy()->addDay()) {
-            foreach (StudentSchedule::slotsOnDate($student, $day->toDateString()) as $slot) {
-                $key = $day->toDateString().'|'.$slot['id'];
-                if (! in_array($slot['id'], $slotIds, true) || isset($recorded[$key])
-                    || StudentSchedule::offReason($student, $day->toDateString(), $slot, $periods)) {
-                    continue;
-                }
-                $recorded[$key] = true;
-                $rows[] = $this->row([
-                    'key' => 'unmarked-'.$day->toDateString().'-'.$slot['id'],
-                    'status' => 'unmarked',
-                    'status_label' => 'Chưa điểm danh',
-                    'date' => $day->copy()->setTimeFromTimeString($slot['start']),
-                    'time' => StudentSchedule::timeLabel($slot),
-                    'teacher' => $slot['teacher'] ?? null,
-                    'note' => 'Trung tâm chưa cập nhật điểm danh buổi này.',
-                    'slot_id' => $slot['id'],
-                    'course_item' => $item,
-                ]);
-            }
-        }
     }
 
     private function row(array $data): array
@@ -429,6 +413,7 @@ class ParentPortalApiController extends Controller
             'sort' => $date ? $date->format('Y-m-d H:i') : '9999',
             'official' => $data['official'] ?? false,
             'attendance_id' => $data['attendance_id'] ?? null,
+            'unmarked_key' => $data['unmarked_key'] ?? null,
         ];
     }
 

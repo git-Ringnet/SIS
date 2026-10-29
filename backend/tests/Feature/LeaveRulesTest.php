@@ -493,10 +493,16 @@ class LeaveRulesTest extends TestCase
         $sessions = collect($this->portal($student)['sessions']);
         $unmarked = $sessions->where('status', 'unmarked')->values();
         $this->assertSame(['22/10/2026', '26/10/2026'], $unmarked->pluck('date')->all());
-        $this->assertSame([null, null], $unmarked->pluck('session_number')->all());
+        // Buổi chưa điểm danh vẫn là một buổi của khóa: có số, buổi sắp tới đánh số tiếp theo
+        $this->assertSame([2, 3], $unmarked->pluck('session_number')->all());
         $this->assertFalse($unmarked[0]['can_request_leave']);
-        // Không đánh số nên buổi sắp tới vẫn nối tiếp số buổi đã điểm danh
-        $this->assertSame(['29/10/2026', 2], [$sessions->firstWhere('status', 'upcoming')['date'], $sessions->firstWhere('status', 'upcoming')['session_number']]);
+        $this->assertSame(['29/10/2026', 4], [$sessions->firstWhere('status', 'upcoming')['date'], $sessions->firstWhere('status', 'upcoming')['session_number']]);
+        // Tổng vẫn đủ 8 buổi của khóa (buổi chưa điểm danh dùng 1 buổi còn lại, không cộng thêm buổi sắp tới)
+        $this->assertSame(range(1, 8), $sessions->pluck('session_number')->filter()->values()->all());
+        // Trang Điểm danh cùng số: 26/10 điểm danh xong vẫn là Buổi 3
+        $this->mark($student, '2026-10-26', 'present')->assertOk();
+        $this->assertSame(3, $this->getJson('/api/attendance?date=2026-10-26')->json('students.0.current_session'));
+        $this->postJson("/api/attendance/{$student->id}/mark", ['date' => '2026-10-26', 'status' => 'not_checked'])->assertOk();
 
         // Ngày trung tâm nghỉ thì hiện "Trung tâm nghỉ", không phải "Chưa điểm danh"; điểm danh rồi thì hết
         $this->postJson('/api/teacher-checkin/center-offs', ['from' => self::THURSDAY, 'to' => self::THURSDAY])->assertCreated();
