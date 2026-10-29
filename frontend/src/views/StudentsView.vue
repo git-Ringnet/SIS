@@ -563,8 +563,15 @@ const courseDatesLabel = (student, courseItem) => {
   return `Bắt đầu${d.start_estimated ? ' dự kiến' : ''} ${d.start || '—'} • ${end}`;
 };
 
+// Ngày dự kiến backend đã tính (có xét buổi đã học trước buổi đầu tiên theo lịch), d/m/Y → Y-m-d
+const backendEstimatedEnd = (student, courseItem) => {
+  const d = student.course_dates?.[courseItem.id];
+  return d?.end && d.end_estimated ? d.end.split('/').reverse().join('-') : '';
+};
+
 const courseEndDate = (student, courseItem) =>
   toIsoDate(courseItem.end_date) ||
+  backendEstimatedEnd(student, courseItem) ||
   computeCourseEndDate(
     toIsoDate(courseItem.start_date || student.join_date),
     Number(courseItem.total_sessions),

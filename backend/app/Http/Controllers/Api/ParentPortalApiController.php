@@ -10,6 +10,7 @@ use App\Support\BrandSettings;
 use App\Support\CenterStore;
 use App\Support\SingleLessons;
 use App\Support\StudentSchedule;
+use App\Support\TeacherLeaves;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -287,6 +288,7 @@ class ParentPortalApiController extends Controller
             $end = $student->courseItemDates($item)['end'];
             $end = $end ? Carbon::createFromFormat('d/m/Y', $end)->endOfDay() : null;
             $from = ! empty($item['start_date']) ? $item['start_date'] : null;
+            $this->addUnmarkedRows($rows, $recorded, $student, $item, $slotIds, $from ?? $student->join_date, $end);
             foreach (StudentSchedule::upcomingSessions($student, $remaining, $slotIds, $from) as $session) {
                 $key = $session['date']->toDateString().'|'.$session['slot']['id'];
                 if (($end && $session['date']->gt($end)) || isset($planned[$key])) {
@@ -358,6 +360,42 @@ class ParentPortalApiController extends Controller
         }
 
         return $rows;
+    }
+
+    /**
+     * Buổi theo lịch đã qua mà trung tâm chưa điểm danh (không phải ngày nghỉ): vẫn hiện "Chưa điểm danh" để không bị mất
+     * khỏi danh sách. Không đánh số (chưa biết có trừ buổi hay không), số buổi chính thức vẫn theo bản ghi điểm danh.
+     */
+    private function addUnmarkedRows(array &$rows, array &$recorded, Student $student, ?array $item, array $slotIds, $from, ?Carbon $end): void
+    {
+        if (! $from || $student->status !== 'active') {
+            return;
+        }
+
+        $yesterday = Carbon::yesterday();
+        $to = $end && $end->lt($yesterday) ? $end->copy()->startOfDay() : $yesterday;
+        $periods = TeacherLeaves::all();
+        for ($day = Carbon::parse($from)->startOfDay()->max($yesterday->copy()->subYear()); $day->lte($to); $day = $day->copy()->addDay()) {
+            foreach (StudentSchedule::slotsOnDate($student, $day->toDateString()) as $slot) {
+                $key = $day->toDateString().'|'.$slot['id'];
+                if (! in_array($slot['id'], $slotIds, true) || isset($recorded[$key])
+                    || StudentSchedule::offReason($student, $day->toDateString(), $slot, $periods)) {
+                    continue;
+                }
+                $recorded[$key] = true;
+                $rows[] = $this->row([
+                    'key' => 'unmarked-'.$day->toDateString().'-'.$slot['id'],
+                    'status' => 'unmarked',
+                    'status_label' => 'Chưa điểm danh',
+                    'date' => $day->copy()->setTimeFromTimeString($slot['start']),
+                    'time' => StudentSchedule::timeLabel($slot),
+                    'teacher' => $slot['teacher'] ?? null,
+                    'note' => 'Trung tâm chưa cập nhật điểm danh buổi này.',
+                    'slot_id' => $slot['id'],
+                    'course_item' => $item,
+                ]);
+            }
+        }
     }
 
     private function row(array $data): array

@@ -483,6 +483,49 @@ class LeaveRulesTest extends TestCase
         $this->assertSame('13/11/2026', $student->fresh()->courseItemDates($courses[0])['end']);
     }
 
+    public function test_portal_shows_past_scheduled_session_not_marked_yet(): void
+    {
+        // Học T2 + T5 từ 19/10, mới điểm danh 19/10; hôm nay 29/10 → 22/10 và 26/10 chưa điểm danh vẫn phải hiện
+        $student = $this->createStudent();
+        $this->mark($student, self::MONDAY, 'present')->assertOk();
+        Carbon::setTestNow('2026-10-29 08:00:00');
+
+        $sessions = collect($this->portal($student)['sessions']);
+        $unmarked = $sessions->where('status', 'unmarked')->values();
+        $this->assertSame(['22/10/2026', '26/10/2026'], $unmarked->pluck('date')->all());
+        $this->assertSame([null, null], $unmarked->pluck('session_number')->all());
+        $this->assertFalse($unmarked[0]['can_request_leave']);
+        // Không đánh số nên buổi sắp tới vẫn nối tiếp số buổi đã điểm danh
+        $this->assertSame(['29/10/2026', 2], [$sessions->firstWhere('status', 'upcoming')['date'], $sessions->firstWhere('status', 'upcoming')['session_number']]);
+
+        // Ngày trung tâm nghỉ thì hiện "Trung tâm nghỉ", không phải "Chưa điểm danh"; điểm danh rồi thì hết
+        $this->postJson('/api/teacher-checkin/center-offs', ['from' => self::THURSDAY, 'to' => self::THURSDAY])->assertCreated();
+        $this->mark($student, '2026-10-26', 'present')->assertOk();
+        $sessions = collect($this->portal($student)['sessions']);
+        $this->assertSame([], $sessions->where('status', 'unmarked')->values()->all());
+        $this->assertSame('22/10/2026', $sessions->firstWhere('status', 'off')['date']);
+    }
+
+    public function test_planned_end_date_counts_session_learned_before_first_scheduled_day(): void
+    {
+        // Bắt đầu học T5 29/10 rồi xếp lịch T3, 4 buổi: buổi 29/10 là buổi 1 → T3 03, 10, 17/11 (không phải 24/11)
+        $student = $this->createStudent();
+        $student->update(['join_date' => '2026-10-29', 'schedules' => [['id' => 't3', 'day' => 2, 'start' => '10:00']]]);
+        $courses = $student->registered_courses_list;
+        $courses[0] = [...$courses[0], 'start_date' => '2026-10-29', 'end_date' => null, 'total_sessions' => 4, 'schedule_ids' => []];
+        $student->update(['registered_courses' => $courses]);
+        $this->assertSame('24/11/2026', $student->fresh()->courseItemDates($courses[0])['end']);
+
+        Attendance::create(['student_id' => $student->id, 'course_item_id' => $courses[0]['id'], 'slot_id' => null,
+            'attended_at' => '2026-10-29 10:00:00', 'status' => 'present', 'deducts_session' => true, 'session_number' => 1]);
+        $this->assertSame('17/11/2026', $student->fresh()->courseItemDates($courses[0])['end']);
+
+        // Buổi bù / học lẻ sau khi đã vào lịch không làm ngày kết thúc đổi
+        Attendance::create(['student_id' => $student->id, 'course_item_id' => $courses[0]['id'], 'slot_id' => null,
+            'attended_at' => '2026-11-05 10:00:00', 'status' => 'present', 'deducts_session' => true, 'session_number' => 3]);
+        $this->assertSame('17/11/2026', $student->fresh()->courseItemDates($courses[0])['end']);
+    }
+
     public function test_teacher_leave_without_substitute_makes_session_off(): void
     {
         $student = $this->createStudent();

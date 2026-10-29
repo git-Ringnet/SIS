@@ -175,7 +175,8 @@ class StudentSchedule
         // đếm lần lượt các ca theo lịch từ ngày bắt đầu đến khi đủ tổng số buổi
         if ($perDay !== []) {
             $day = Carbon::parse($from)->startOfDay();
-            for ($count = 0, $i = 0; $i < 3650; $i++, $day = $day->copy()->addDay()) {
+            $count = self::sessionsBeforeSchedule($student, $item, $day, $perDay);
+            for ($i = 0; $i < 3650; $i++, $day = $day->copy()->addDay()) {
                 $count += $perDay[$day->dayOfWeek] ?? 0;
                 if ($count >= $total) {
                     return $day;
@@ -190,6 +191,30 @@ class StudentSchedule
             ?: (preg_match('/(\d+)\s*buổi/u', (string) ($item['schedule_info'] ?? $student->schedule_info), $m) ? (int) $m[1] : 1);
 
         return Carbon::parse($from)->startOfDay()->addWeeks((int) ceil($total / max(1, $perWeek)) - 1);
+    }
+
+    /**
+     * Số buổi đã trừ của khóa học từ ngày bắt đầu đến trước buổi đầu tiên theo lịch tuần
+     * (vd bắt đầu học T5 29/10 rồi mới xếp lịch T3: buổi 29/10 đã là buổi 1, lịch T3 đếm tiếp từ buổi 2).
+     * Buổi bù / học lẻ sau khi đã vào lịch không tính, để ngày kết thúc vẫn cố định.
+     */
+    private static function sessionsBeforeSchedule(Student $student, ?array $item, Carbon $from, array $perDay): int
+    {
+        $firstScheduled = $from->copy();
+        while (! isset($perDay[$firstScheduled->dayOfWeek])) {
+            $firstScheduled->addDay();
+        }
+        if ($firstScheduled->eq($from)) {
+            return 0;
+        }
+
+        $key = self::itemKey($student, isset($item['id']) ? (int) $item['id'] : null);
+        $attendances = $student->relationLoaded('attendances') ? $student->attendances : $student->attendances()->get();
+
+        return $attendances->filter(fn ($a) => $a->deductsSession()
+            && self::itemKey($student, $a->course_item_id) === $key
+            && $a->attended_at->toDateString() >= $from->toDateString()
+            && $a->attended_at->toDateString() < $firstScheduled->toDateString())->count();
     }
 
     public static function find(Student $student, ?string $slotId): ?array

@@ -239,6 +239,8 @@ const STATUS_STYLES = {
   absent_with_leave: { card: 'border-amber-200 bg-amber-50/10', badge: 'bg-amber-100 text-amber-800', number: 'bg-amber-500 text-white border-amber-600' },
   absent_without_leave: { card: 'border-rose-200 bg-rose-50/10', badge: 'bg-rose-100 text-rose-800', number: 'bg-rose-500 text-white border-rose-600' },
   off: { card: 'border-violet-200 bg-violet-50/20', badge: 'bg-violet-100 text-violet-800', number: 'bg-violet-100 text-violet-600 border-violet-200' },
+  // Buổi đã qua trung tâm chưa điểm danh
+  unmarked: { card: 'border-dashed border-slate-300 bg-slate-50/60', badge: 'bg-slate-100 text-slate-600', number: 'bg-white text-slate-400 border-slate-300 border-dashed' },
   upcoming: { card: 'border-slate-200/80 bg-white', badge: 'bg-slate-100 text-slate-600', number: 'bg-slate-100 text-slate-500 border-slate-200' },
 };
 const styleOf = (s) => STATUS_STYLES[s.status] || STATUS_STYLES.upcoming;
