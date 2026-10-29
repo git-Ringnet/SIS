@@ -530,6 +530,22 @@ class LeaveRulesTest extends TestCase
         $this->assertSame('16/11/2026', $upcoming->last()['date']);
     }
 
+    public function test_paused_student_is_hidden_on_attendance_page_until_return_date(): void
+    {
+        // Bảo lưu tới T5 29/10: 19/10 → 26/10 không hiện (chỉ đếm ở thẻ "Đang tạm dừng"), từ 29/10 hiện lại để nhắc Kích hoạt
+        $student = $this->createStudent();
+        $student->update(['status' => 'paused', 'paused_until' => '2026-10-29']);
+
+        $day = $this->getJson('/api/attendance?date='.self::MONDAY)->json();
+        $this->assertSame([], $day['students']);
+        $this->assertSame([0, 1], [$day['metrics']['total_today'], $day['metrics']['paused']]);
+        $this->assertSame('paused', $this->getJson('/api/attendance?date=2026-10-29')->json('students.0.status'));
+
+        // Kích hoạt lại: điểm danh bình thường
+        $this->postJson("/api/inactive-students/{$student->id}/reactivate")->assertOk();
+        $this->assertSame('not_checked', $this->getJson('/api/attendance?date='.self::MONDAY)->json('students.0.status'));
+    }
+
     public function test_portal_does_not_flag_sessions_before_system_was_used_as_unmarked(): void
     {
         // Học từ 01/09 nhưng mới dùng hệ thống: 10 buổi trước đó nhập tay ở "Đã học", điểm danh đầu tiên 19/10

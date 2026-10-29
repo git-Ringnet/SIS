@@ -99,7 +99,8 @@ class AttendanceApiController extends Controller
         $periods = TeacherLeaves::all();
         // Toàn bộ điểm danh của các học viên trong ngày, để đánh số buổi chính thức giống Cổng phụ huynh
         $allAttendances = Attendance::whereIn('student_id', $students->pluck('id'))->get()->groupBy('student_id');
-        $studentsFormatted = $students->flatMap(function ($st) use ($dayAttendances, $todayLessons, $dateStr, $periods, $allAttendances) {
+        $pausedHidden = 0; // học viên đang bảo lưu có lịch ngày này (không hiện trong danh sách, chỉ đếm ở thẻ "Đang tạm dừng")
+        $studentsFormatted = $students->flatMap(function ($st) use ($dayAttendances, $todayLessons, $dateStr, $periods, $allAttendances, &$pausedHidden) {
             $records = $dayAttendances->get($st->id, collect());
             $official = StudentSchedule::officialNumbers($st, $allAttendances->get($st->id, collect()))['numbers'];
             $rows = [];
@@ -130,6 +131,17 @@ class AttendanceApiController extends Controller
                     || ($row['off'] !== null && $lastUpcoming !== null && $dateStr <= $lastUpcoming)
                     || $records->firstWhere('slot_id', $row['slot_id'])
                     || ($row['first'] && $records->contains(fn ($r) => $r->slot_id === null))));
+            }
+
+            // Đang bảo lưu (chưa tới ngày đi học lại, hoặc chưa nhập ngày): không hiện để không điểm danh / trừ buổi nhầm.
+            // Ca đã có điểm danh và buổi học lẻ / học bù vẫn hiện. Đã tới ngày đi học lại mà chưa Kích hoạt thì vẫn hiện "Đang tạm dừng".
+            if ($st->status === 'paused' && (! $st->paused_until || $st->paused_until->toDateString() > $dateStr)) {
+                $rows = array_values(array_filter($rows, fn ($row) => $row['is_single_lesson']
+                    || $records->firstWhere('slot_id', $row['slot_id'])
+                    || ($row['first'] && $records->contains(fn ($r) => $r->slot_id === null))));
+                if ($rows === []) {
+                    $pausedHidden++;
+                }
             }
 
             return array_map(function ($row) use ($st, $records, $official) {
@@ -213,7 +225,7 @@ class AttendanceApiController extends Controller
         // 5 Thống kê Metric Pills (Khớp 100% hình tham khảo)
         $totalToday = $studentsFormatted->count();
         $actualPresent = $studentsFormatted->where('status', 'present')->count();
-        $pausedCount = $studentsFormatted->where('status', 'paused')->count();
+        $pausedCount = $studentsFormatted->where('status', 'paused')->count() + $pausedHidden;
         $absentCount = $studentsFormatted->whereIn('status', ['absent_with_leave', 'absent_without_leave'])->count();
         $notCheckedCount = $studentsFormatted->where('status', 'not_checked')->count();
         $offCount = $studentsFormatted->where('status', 'off')->count();
