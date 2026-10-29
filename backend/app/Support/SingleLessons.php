@@ -64,4 +64,20 @@ class SingleLessons
     {
         return isset($lesson['time']) && preg_match('/\d{1,2}:\d{2}/', $lesson['time'], $m) ? $m[0] : null;
     }
+
+    /**
+     * Giờ bắt đầu và kết thúc chuẩn "HH:MM" từ chuỗi giờ của buổi ("9:00 - 10:00" → ["09:00", "10:00"]).
+     *
+     * @return array{0: ?string, 1: ?string}
+     */
+    public static function timeRange(array $lesson): array
+    {
+        if (! isset($lesson['time']) || ! preg_match_all('/(\d{1,2}):(\d{2})/', (string) $lesson['time'], $m, PREG_SET_ORDER)) {
+            return [null, null];
+        }
+
+        $fmt = fn (array $match) => sprintf('%02d:%s', (int) $match[1], $match[2]);
+
+        return [$fmt($m[0]), isset($m[1]) ? $fmt($m[1]) : null];
+    }
 }

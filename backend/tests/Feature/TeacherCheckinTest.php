@@ -154,4 +154,51 @@ class TeacherCheckinTest extends TestCase
             ->assertJsonPath('today_shifts.0.status', 'late')
             ->assertJsonPath('today_shifts.0.minutes_late', 12);
     }
+
+    public function test_single_lesson_outside_weekly_schedule_creates_teacher_shift_for_checkin(): void
+    {
+        // Thứ 5, 29/10/2026 — Bé An chỉ có lịch cố định vào Thứ 3, nhưng đặt buổi học lẻ phát sinh ngày 29/10
+        Carbon::setTestNow('2026-10-29 17:55:00');
+        $student = Student::first();
+
+        $this->postJson('/api/attendance/single-lesson', [
+            'student_id' => $student->id,
+            'course_id' => $student->course_id,
+            'center' => 'all',
+            'date' => '2026-10-29',
+            'time' => '18:00 - 19:00',
+            'teacher' => 'Cô Mai',
+            'room' => 'PIANO 01',
+            'note' => 'Buổi học lẻ phát sinh',
+        ])->assertCreated();
+
+        // Học viên điểm danh được trên trang Điểm danh ngày 29/10
+        $attRow = $this->getJson('/api/attendance?date=2026-10-29')
+            ->assertOk()
+            ->assertJsonCount(1, 'students')
+            ->json('students.0');
+        $this->postJson("/api/attendance/{$student->id}/mark", [
+            'date' => '2026-10-29',
+            'status' => 'present',
+            'slot_id' => $attRow['slot_id'],
+        ])->assertOk();
+
+        // Giáo viên Cô Mai đăng nhập vào phần chấm công ngày 29/10 thấy ca dạy hiện ra và check-in được
+        $this->actAsTeacherMai();
+        $shifts = $this->getJson('/api/teacher-checkin?date=2026-10-29')
+            ->assertOk()
+            ->assertJsonCount(1, 'today_shifts')
+            ->assertJsonPath('today_shifts.0.teacher_name', 'Cô Mai')
+            ->assertJsonPath('today_shifts.0.start_time', '18:00')
+            ->assertJsonPath('today_shifts.0.end_time', '19:00')
+            ->assertJsonPath('today_shifts.0.student_ids.0', $student->id)
+            ->json('today_shifts');
+
+        $qr = ['qr_center' => CenterStore::defaultName(), 'qr_token' => CheckinToken::current(CenterStore::defaultName())['token']];
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $shifts[0]['id'], ...$qr])
+            ->assertOk();
+
+        $this->getJson('/api/teacher-checkin?date=2026-10-29')
+            ->assertJsonPath('today_shifts.0.status', 'checked_in');
+    }
 }

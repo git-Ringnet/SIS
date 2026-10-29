@@ -50,6 +50,11 @@ class TeacherName
                 $names[self::key($t)] ??= $t;
             }
         }
+        foreach (SingleLessons::all() as $lesson) {
+            foreach (array_filter(array_map('trim', explode(',', (string) ($lesson['teacher'] ?? '')))) as $t) {
+                $names[self::key($t)] ??= $t;
+            }
+        }
 
         $list = array_values($names);
         sort($list);

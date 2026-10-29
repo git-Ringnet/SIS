@@ -11,6 +11,7 @@ use App\Support\CheckinToken;
 use App\Support\OwnerGuard;
 use App\Support\PagePermissions;
 use App\Support\ShiftTime;
+use App\Support\SingleLessons;
 use App\Support\StudentSchedule;
 use App\Support\TeacherLeaves;
 use App\Support\TeacherName;
@@ -60,22 +61,97 @@ class TeacherCheckinApiController extends Controller
         $entries = $entries->map(function ($e) use ($classTypes) {
             $item = StudentSchedule::courseItemForSlot($e['student'], $e['slot']['id']);
 
-            return [...$e, 'item' => $item, 'class_type' => $classTypes[$item['course_id'] ?? $e['student']->course_id] ?? null];
-        });
+            return [
+                ...$e,
+                'center' => $e['student']->center ?: CenterStore::defaultName(),
+                'item' => $item,
+                'course_id' => $item['course_id'] ?? $e['student']->course_id,
+                'class_type' => $classTypes[$item['course_id'] ?? $e['student']->course_id] ?? null,
+            ];
+        })->values()->all();
+
+        // Buổi học lẻ / học bù phát sinh trong ngày (scheduled_single_lessons.json)
+        $dayLessons = array_values(array_filter(SingleLessons::all(), fn ($l) => ($l['date'] ?? null) === $date));
+        if ($dayLessons !== []) {
+            $lessonStudents = Student::with('course')
+                ->whereIn('id', array_unique(array_map(fn ($l) => (int) ($l['student_id'] ?? 0), $dayLessons)))
+                ->get()
+                ->keyBy('id');
+
+            foreach ($dayLessons as $lesson) {
+                $st = $lessonStudents->get((int) ($lesson['student_id'] ?? 0));
+                if (! $st || in_array($st->status, ['dropped', 'inactive'], true)) {
+                    continue;
+                }
+
+                $rawTeacher = trim((string) ($lesson['teacher'] ?? '')) ?: (string) ($st->teacher ?? '');
+                $teacher = trim(explode(',', $rawTeacher)[0]);
+                if ($teacher === '') {
+                    continue;
+                }
+
+                [$start, $end] = SingleLessons::timeRange($lesson);
+                $start ??= '18:00';
+                $rawRoom = trim((string) ($lesson['room'] ?? '')) ?: (string) ($st->room ?? '');
+                $room = trim(explode(',', $rawRoom)[0]) ?: null;
+                $center = (! empty($lesson['center']) && $lesson['center'] !== 'all')
+                    ? $lesson['center']
+                    : ($st->center ?: CenterStore::defaultName());
+                $isMerged = ! empty($lesson['is_merged']) || ! empty($lesson['merged_slot_id']);
+
+                // Học ghép vào ca nhóm đang có của giáo viên cùng giờ: gộp chung vào ca đó, không tính thêm ca riêng
+                if ($isMerged) {
+                    $existing = collect($entries)->first(fn ($e) => empty($e['is_single'])
+                        && TeacherName::same($e['slot']['teacher'], $teacher)
+                        && $e['slot']['start'] === $start);
+                    if ($existing) {
+                        $teacher = $existing['slot']['teacher'];
+                        $room = $existing['slot']['room'];
+                        $center = $existing['center'];
+                        $end ??= $existing['slot']['end'];
+                    }
+                }
+
+                $item = ! empty($lesson['course_id'])
+                    ? (collect($st->registered_courses_list)->first(fn ($i) => (int) ($i['course_id'] ?? 0) === (int) $lesson['course_id'] || (int) ($i['id'] ?? 0) === (int) $lesson['course_id'])
+                        ?? StudentSchedule::courseItemForSlot($st, $lesson['id'] ?? null))
+                    : StudentSchedule::courseItemForSlot($st, $lesson['id'] ?? null);
+                $courseId = $lesson['course_id'] ?? $item['course_id'] ?? $st->course_id;
+
+                $entries[] = [
+                    'student' => $st,
+                    'slot' => [
+                        'id' => $lesson['id'] ?? uniqid('lesson_'),
+                        'start' => $start,
+                        'end' => $end,
+                        'teacher' => $teacher,
+                        'room' => $room,
+                    ],
+                    'center' => $center,
+                    'item' => $item,
+                    'course_id' => $courseId,
+                    'class_type' => $isMerged ? 'group' : ($classTypes[$courseId] ?? null),
+                    'is_single' => ! $isMerged,
+                ];
+            }
+        }
 
         // Ca dạy = gom các học viên cùng giáo viên + giờ + phòng + cơ sở. Khóa cá nhân: mỗi học viên một ca 1:1 riêng.
+        // Buổi học lẻ không chọn ghép ca được tách riêng khỏi ca cố định để giáo viên có ca chấm công.
         // Loại ca theo hình thức của khóa (khóa nhóm còn 1 bạn vẫn là ca nhóm); khóa chưa chọn hình thức thì 1 bạn = ca 1:1.
         $planned = [];
-        $groupKey = fn ($e) => implode('|', [$e['slot']['teacher'], $e['slot']['start'], $e['slot']['room'], $e['student']->center])
+        $groupKey = fn ($e) => implode('|', [$e['slot']['teacher'], $e['slot']['start'], $e['slot']['room'], $e['center']])
+            .(! empty($e['is_single']) ? '|single' : '')
             .($e['class_type'] === 'individual' ? '|hv'.$e['student']->id : '');
-        foreach ($entries->groupBy($groupKey) as $key => $group) {
-            $first = $group->first();
+        foreach (collect($entries)->groupBy($groupKey) as $key => $group) {
+            $uniqueGroup = $group->unique(fn ($e) => $e['student']->id)->values();
+            $first = $uniqueGroup->first();
             $slot = $first['slot'];
             $st = $first['student'];
             $isOneOnOne = match ($first['class_type']) {
                 'individual' => true,
                 'group' => false,
-                default => $group->count() === 1,
+                default => $uniqueGroup->count() === 1,
             };
             $item = $first['item'];
             $courseName = $item['course_name'] ?? $st->course?->name ?? 'Lớp học';
@@ -89,12 +165,12 @@ class TeacherCheckinApiController extends Controller
                 'end_time' => $slot['end'],
                 'class_name' => $isOneOnOne
                     ? "{$courseName} 1:1 - {$st->name}"
-                    : "{$courseName} nhóm ({$group->count()} bạn)",
+                    : "{$courseName} nhóm ({$uniqueGroup->count()} bạn)",
                 'room' => $slot['room'],
                 'type' => $isOneOnOne ? 'Ca 1-1' : 'Ca nhóm',
-                'center' => $st->center ?: CenterStore::defaultName(),
-                'course_id' => $item['course_id'] ?? $st->course_id,
-                'student_ids' => $group->map(fn ($e) => $e['student']->id)->values()->all(),
+                'center' => $first['center'],
+                'course_id' => $first['course_id'],
+                'student_ids' => $uniqueGroup->map(fn ($e) => $e['student']->id)->values()->all(),
             ];
         }
 

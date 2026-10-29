@@ -13,6 +13,7 @@ use App\Support\ShiftTime;
 use App\Support\SingleLessons;
 use App\Support\StudentSchedule;
 use App\Support\TeacherLeaves;
+use App\Support\TeacherName;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -112,7 +113,10 @@ class AttendanceApiController extends Controller
                     'off' => StudentSchedule::offReason($st, $dateStr, $slot, $periods)];
             }
             foreach ($todayLessons->get($st->id, []) as $lesson) {
-                $rows[] = ['slot_id' => $lesson['id'], 'first' => $rows === [], 'room' => $lesson['room'] ?? null, 'teacher' => $lesson['teacher'] ?? null,
+                $fallbackTeacher = $st->teacher ? trim(explode(',', (string) $st->teacher)[0]) : null;
+                $fallbackRoom = $st->room ? trim(explode(',', (string) $st->room)[0]) : null;
+                $rows[] = ['slot_id' => $lesson['id'], 'first' => $rows === [], 'room' => ($lesson['room'] ?? null) ?: $fallbackRoom,
+                    'teacher' => ($lesson['teacher'] ?? null) ?: $fallbackTeacher,
                     'shift_time' => $lesson['time'] ?? null, 'is_single_lesson' => true, 'is_makeup' => ! empty($lesson['is_makeup']), 'off' => null];
             }
             // Dữ liệu cũ chỉ có lịch dạng chữ (schedule_info) → một dòng chung cho cả ngày
@@ -243,9 +247,9 @@ class AttendanceApiController extends Controller
 
         $classes = $classOptions;
 
-        // Phòng học theo màn Trung tâm (+ phòng đang có lịch trong ngày), giáo viên có lịch dạy trong ngày
+        // Phòng học theo màn Trung tâm (+ phòng đang có lịch trong ngày), giáo viên theo màn Nhân sự / lịch học
         $rooms = array_values(array_unique([...CenterStore::roomNames($center), ...$roomOptions]));
-        $teachers = array_values($teacherOptions);
+        $teachers = array_values(array_unique([...TeacherName::all(), ...$teacherOptions]));
 
         // Danh sách đơn xin nghỉ phép gần đây từ Cổng phụ huynh
         $parentLeaveRequests = Attendance::with(['student.course'])
@@ -473,14 +477,23 @@ class AttendanceApiController extends Controller
                 .' lúc '.SingleLessons::startTime($duplicate).' ngày này rồi.'], 422);
         }
 
+        $student = Student::find($validated['student_id']);
+        $center = (! empty($validated['center']) && $validated['center'] !== 'all')
+            ? $validated['center']
+            : ($student?->center ?: CenterStore::defaultName());
+        $rawTeacher = trim((string) ($validated['teacher'] ?? '')) ?: (string) ($student?->teacher ?? '');
+        $teacher = trim(explode(',', $rawTeacher)[0]) ?: null;
+        $rawRoom = trim((string) ($validated['room'] ?? '')) ?: (string) ($student?->room ?? '');
+        $room = trim(explode(',', $rawRoom)[0]) ?: null;
+
         SingleLessons::add([
             'id' => uniqid('lesson_'),
             'student_id' => (int) $validated['student_id'],
             'date' => Carbon::parse($validated['date'])->toDateString(),
-            'center' => $validated['center'] ?? null,
+            'center' => $center,
             'course_id' => $validated['course_id'] ?? null,
-            'room' => $validated['room'] ?? null,
-            'teacher' => $validated['teacher'] ?? null,
+            'room' => $room,
+            'teacher' => $teacher,
             'time' => $time,
             'merged_slot_id' => $validated['merged_slot_id'] ?? null,
             'merged_class_id' => $validated['merged_class_id'] ?? null,
@@ -490,8 +503,6 @@ class AttendanceApiController extends Controller
             'note' => $validated['note'] ?? 'Buổi học lẻ / học bù',
             'created_at' => Carbon::now()->toDateTimeString(),
         ]);
-
-        $student = Student::find($validated['student_id']);
 
         return response()->json([
             'message' => "Đã đặt buổi học lẻ ngày {$validated['date']} cho học viên {$student->name}!",

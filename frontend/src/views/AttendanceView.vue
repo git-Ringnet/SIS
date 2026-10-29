@@ -221,8 +221,14 @@ const onStudentChange = () => {
   if (st) {
     const list = getStudentCourses(st);
     singleLessonForm.value.course_id = list[0]?.id || st.course_id || '';
+    if (st.center && (!singleLessonForm.value.center || singleLessonForm.value.center === 'all')) {
+      singleLessonForm.value.center = st.center;
+    }
+    if (st.room) {
+      singleLessonForm.value.room = String(st.room).split(',')[0].trim();
+    }
     if (st.teacher) {
-      singleLessonForm.value.teacher = st.teacher;
+      singleLessonForm.value.teacher = String(st.teacher).split(',')[0].trim();
     }
     fetchAvailableGroupSlots();
   }
@@ -241,6 +247,9 @@ const onMergedSlotChange = () => {
     }
     if (slot.teacher) {
       singleLessonForm.value.teacher = slot.teacher;
+    }
+    if (slot.room) {
+      singleLessonForm.value.room = slot.room;
     }
   }
 };
@@ -308,14 +317,20 @@ const openSingleLessonModal = () => {
     : allStudentsRaw.value.filter((s) => s.center === targetCenter);
   const defaultStudent = availableStudents[0] || allStudentsRaw.value[0] || null;
   const defaultCourses = defaultStudent ? getStudentCourses(defaultStudent) : [];
+  const defaultTeacher = defaultStudent?.teacher
+    ? String(defaultStudent.teacher).split(',')[0].trim()
+    : ((teachers.value[0] && teachers.value[0] !== 'all') ? teachers.value[0] : '');
+  const defaultRoom = defaultStudent?.room
+    ? String(defaultStudent.room).split(',')[0].trim()
+    : (rooms.value[0] || '');
 
   singleLessonForm.value = {
-    center: targetCenter,
+    center: targetCenter !== 'all' ? targetCenter : (defaultStudent?.center || 'all'),
     student_id: defaultStudent?.id || '',
     course_id: defaultCourses[0]?.id || defaultStudent?.course_id || '',
     date: selectedDate.value || toLocalDateString(),
-    room: rooms.value[0] || '',
-    teacher: defaultStudent?.teacher || (teachers.value[0] !== 'all' ? teachers.value[0] : '') || '',
+    room: defaultRoom,
+    teacher: defaultTeacher,
     time: '18:00',
     merged_slot_id: '',
     merged_class_id: null,
