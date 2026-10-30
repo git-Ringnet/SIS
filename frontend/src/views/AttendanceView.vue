@@ -834,14 +834,10 @@ const openMessageModal = (student) => {
           <!-- Học viên -->
           <div>
             <label class="block font-medium text-slate-700 mb-1">Học viên</label>
-            <select v-model="singleLessonForm.student_id" @change="onStudentChange"
-              class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-800 focus:border-rose-500 focus:outline-none cursor-pointer"
-              required>
-              <option value="" disabled>-- Chọn học viên --</option>
-              <option v-for="st in filteredStudentsForModal" :key="st.id" :value="st.id">
-                {{ st.name }}
-              </option>
-            </select>
+            <!-- Tìm theo tên / mã học viên, không phân biệt dấu -->
+            <SearchableSelect v-model="singleLessonForm.student_id" :options="filteredStudentsForModal"
+              sublabel-key="code" placeholder="-- Chọn học viên --" search-placeholder="Tìm tên hoặc mã học viên..."
+              required @change="onStudentChange" />
           </div>
 
           <!-- Khoá học -->

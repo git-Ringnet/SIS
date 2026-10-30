@@ -7,6 +7,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { teacherCheckinApi } from '../services/api';
 import { useAuth } from '../services/useAuth';
 import MoneyInput from '../components/MoneyInput.vue';
+import Pagination from '../components/Pagination.vue';
 import QrScannerModal from '../components/QrScannerModal.vue';
 import {
   FileSpreadsheet,
@@ -351,6 +352,27 @@ const visibleMonthlyShifts = computed(() =>
     .filter((ms) => !monthlyTeacher.value || ms.earner === monthlyTeacher.value)
     .sort((a, b) => `${b.date} ${b.start_time || ''}`.localeCompare(`${a.date} ${a.start_time || ''}`)),
 );
+// Phân trang trên danh sách đã lọc: đổi giáo viên / tháng thì về trang 1, tải lại sau khi sửa ca thì giữ trang
+const monthlyPage = ref(1);
+const monthlyPerPage = ref(20);
+const monthlyPageMeta = computed(() => {
+  const total = visibleMonthlyShifts.value.length;
+  const lastPage = Math.max(1, Math.ceil(total / monthlyPerPage.value));
+  const current = Math.min(monthlyPage.value, lastPage);
+  const from = total ? (current - 1) * monthlyPerPage.value + 1 : 0;
+  return { current_page: current, last_page: lastPage, per_page: monthlyPerPage.value, total, from, to: Math.min(total, current * monthlyPerPage.value) };
+});
+const pagedMonthlyShifts = computed(() => {
+  const { from, to } = monthlyPageMeta.value;
+  return visibleMonthlyShifts.value.slice(Math.max(0, from - 1), to);
+});
+const changeMonthlyPerPage = (n) => {
+  monthlyPerPage.value = n;
+  monthlyPage.value = 1;
+};
+watch([monthlyTeacher, () => monthlySummary.value.month], () => {
+  monthlyPage.value = 1;
+});
 const visibleDeletedShifts = computed(() =>
   (monthlySummary.value.deleted_shifts || []).filter((ms) => !monthlyTeacher.value || ms.earner === monthlyTeacher.value),
 );
@@ -760,7 +782,7 @@ const exportMonthly = async () => {
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
-              <tr v-for="ms in visibleMonthlyShifts" :key="ms.id" class="hover:bg-slate-50/70 transition-colors">
+              <tr v-for="ms in pagedMonthlyShifts" :key="ms.id" class="hover:bg-slate-50/70 transition-colors">
                 <td class="py-2.5 px-3 whitespace-nowrap">
                   <span class="font-semibold text-slate-800">{{ formatDateDisplay(ms.date) }}</span>
                   <span class="block text-[11px] text-slate-400">{{ weekdayOf(ms.date) }}</span>
@@ -803,6 +825,7 @@ const exportMonthly = async () => {
               </tr>
             </tbody>
           </table>
+          <Pagination :meta="monthlyPageMeta" @change-page="monthlyPage = $event" @change-per-page="changeMonthlyPerPage" />
         </div>
       </div>
 
