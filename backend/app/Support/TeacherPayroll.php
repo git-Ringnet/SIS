@@ -58,6 +58,14 @@ class TeacherPayroll
             return $full($legacy);
         }
 
+        if (($shift['pay_override'] ?? null) === TeacherRates::PAY_OVERRIDE_CUSTOM) {
+            $amount = (float) ($shift['pay_amount'] ?? 0);
+            $rate = (float) $shift['unit_rate'];
+
+            return ['amount' => $amount, 'factor' => $rate > 0 ? $amount / $rate : 1.0,
+                'note' => 'Chấm tay · '.number_format($amount, 0, ',', '.').'đ'];
+        }
+
         $factor = TeacherRates::payFactor($shift, $statuses);
 
         return ['amount' => (float) $shift['unit_rate'] * $factor['factor'], ...$factor];

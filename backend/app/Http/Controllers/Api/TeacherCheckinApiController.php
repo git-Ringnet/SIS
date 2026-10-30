@@ -21,6 +21,7 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class TeacherCheckinApiController extends Controller
@@ -33,7 +34,7 @@ class TeacherCheckinApiController extends Controller
     private const PATH = TeacherPayroll::CHECKINS_PATH;
 
     // Dữ liệu ghi lúc check-in, bỏ đi khi khôi phục ca
-    private const CHECKIN_FIELDS = ['checked_in_by', 'checkin_method', 'checked_in_at', 'pay_mode', 'unit_rate', 'free_threshold', 'free_per_shift', 'group_size'];
+    private const CHECKIN_FIELDS = ['checked_in_by', 'checkin_method', 'checked_in_at', 'pay_mode', 'unit_rate', 'free_threshold', 'free_per_shift', 'group_size', 'pay_override', 'pay_amount'];
 
     /**
      * Sinh ca dạy của ngày từ lịch học cố định của học viên (giáo viên + giờ + phòng + trung tâm).
@@ -363,7 +364,7 @@ class TeacherCheckinApiController extends Controller
         // Ca dạy trong ngày: ẩn đơn giá đã chốt của ca không phải của người xem
         if ($payName !== null) {
             $todayShifts = array_map(
-                fn ($s) => TeacherName::same(TeacherPayroll::earner($s), $payName) ? $s : array_diff_key($s, array_flip(['pay_mode', 'unit_rate', 'free_threshold', 'free_per_shift', 'group_size', 'rate'])),
+                fn ($s) => TeacherName::same(TeacherPayroll::earner($s), $payName) ? $s : array_diff_key($s, array_flip(['pay_mode', 'unit_rate', 'free_threshold', 'free_per_shift', 'group_size', 'rate', 'pay_override', 'pay_amount'])),
                 $todayShifts,
             );
         }
@@ -612,7 +613,7 @@ class TeacherCheckinApiController extends Controller
     }
 
     /**
-     * Sửa ca đã check-in: giờ check-in (tính lại trễ), đơn giá đã chốt, ghi chú.
+     * Sửa ca đã check-in: giờ check-in (tính lại trễ), đơn giá đã chốt, mức lương chấm tay (100% / 50%, null = tự động), ghi chú.
      */
     public function updateShift(Request $request, int $id): JsonResponse
     {
@@ -623,8 +624,10 @@ class TeacherCheckinApiController extends Controller
         $validated = $request->validate([
             'checkin_time' => ['required', 'date_format:H:i'],
             'unit_rate' => 'nullable|numeric|min:0',
+            'pay_override' => ['nullable', Rule::in([...array_keys(TeacherRates::PAY_OVERRIDES), TeacherRates::PAY_OVERRIDE_CUSTOM])],
+            'pay_amount' => ['nullable', 'required_if:pay_override,'.TeacherRates::PAY_OVERRIDE_CUSTOM, 'numeric', 'min:0'],
             'note' => 'nullable|string|max:255',
-        ]);
+        ], ['pay_amount.required_if' => 'Nhập số tiền ca này nhận.']);
 
         return $this->updateStoredShift($id, function (array $s) use ($validated) {
             if (! in_array($s['status'] ?? null, self::PAID_STATUSES, true)) {
@@ -644,15 +647,26 @@ class TeacherCheckinApiController extends Controller
                 $s['unit_rate'] = (float) $validated['unit_rate'];
                 unset($s['rate']);
             }
+            if (array_key_exists('pay_override', $validated)) {
+                unset($s['pay_override'], $s['pay_amount']);
+                if ($validated['pay_override'] !== null) {
+                    $s['pay_override'] = $validated['pay_override'];
+                }
+                if ($validated['pay_override'] === TeacherRates::PAY_OVERRIDE_CUSTOM) {
+                    $s['pay_amount'] = (float) $validated['pay_amount'];
+                }
+            }
             $s['note'] = $validated['note'] ?? null;
 
             return $s;
         }, fn ($old, $new) => ['Sửa', [
             'checkin_time' => $old['checkin_time'] ?? null,
             'unit_rate' => $old['unit_rate'] ?? ($old['rate'] ?? null),
+            'pay_override' => self::payOverrideLabel($old),
         ], [
             'checkin_time' => $new['checkin_time'],
             'unit_rate' => $new['unit_rate'] ?? ($new['rate'] ?? null),
+            'pay_override' => self::payOverrideLabel($new),
         ]]);
     }
 
@@ -742,6 +756,16 @@ class TeacherCheckinApiController extends Controller
         }
 
         return response()->json(['message' => 'Không tìm thấy ca dạy!'], 404);
+    }
+
+    private static function payOverrideLabel(array $shift): string
+    {
+        return match ($shift['pay_override'] ?? null) {
+            'full' => 'Chấm tay 100%',
+            'half' => 'Chấm tay 50%',
+            TeacherRates::PAY_OVERRIDE_CUSTOM => 'Chấm tay '.number_format((float) ($shift['pay_amount'] ?? 0), 0, ',', '.').'đ',
+            default => 'Tự động',
+        };
     }
 
     private static function statusLabel(?string $status): string

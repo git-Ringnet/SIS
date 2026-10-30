@@ -14,6 +14,8 @@ use Illuminate\Support\Facades\Storage;
  * Hệ số theo điểm danh học viên (payFactor()):
  *  - Ca 1:1: học viên vắng không phép → 50%; vắng có phép → không tính lương (không có dạy).
  *  - Ca nhóm: số học viên đi học ≤ một nửa sĩ số lớp nhóm của cơ sở (mặc định 4 → ≤ 2 HV) → 50%.
+ *  - Quản lý chấm tay 100% / 50% / số tiền cụ thể cho từng ca (pay_override, sửa ca ở trang Check-in)
+ *    thì bỏ qua cách tính tự động (số tiền cụ thể tính ở TeacherPayroll::pay).
  *
  * Ca check-in trước khi đổi cách tính có thể còn pay_mode per_student / free: giữ cách tính cũ cho các ca đó
  * (legacyAmount) để thu nhập các tháng trước không đổi.
@@ -24,6 +26,12 @@ class TeacherRates
 
     // Sĩ số lớp nhóm mặc định khi cơ sở chưa đặt (lớp nhóm của trung tâm 4 bạn)
     public const DEFAULT_GROUP_SIZE = 4;
+
+    // Mức lương chấm tay cho một ca (pay_override), không có = tự động theo điểm danh
+    public const PAY_OVERRIDES = ['full' => 1.0, 'half' => 0.5];
+
+    // Chấm tay bằng số tiền cụ thể (pay_amount) thay cho đơn giá × hệ số
+    public const PAY_OVERRIDE_CUSTOM = 'custom';
 
     /**
      * @return array<string, array{name: string, group: float, one_on_one: float}>
@@ -106,6 +114,11 @@ class TeacherRates
      */
     public static function payFactor(array $shift, array $statuses): array
     {
+        $override = self::PAY_OVERRIDES[$shift['pay_override'] ?? ''] ?? null;
+        if ($override !== null) {
+            return ['factor' => $override, 'note' => 'Chấm tay · '.($override * 100).'%'];
+        }
+
         $ids = $shift['student_ids'] ?? [];
         if ($ids === []) {
             return ['factor' => 1.0, 'note' => null];

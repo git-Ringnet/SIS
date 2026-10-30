@@ -341,6 +341,45 @@ class TeacherPayAndLeaveTest extends TestCase
         $this->assertEquals(0, $pay()['Thầy Bình']['amount']);
     }
 
+    public function test_manager_can_set_shift_pay_to_full_or_half_by_hand(): void
+    {
+        $group = collect(['A', 'B', 'C', 'D'])->map(fn ($n) => $this->student($n, 'Cô Mai', $this->guitar, 'G1'));
+        $this->setPay([['name' => 'Cô Mai', 'group' => 200000]]);
+        $id = $this->shifts()['Cô Mai']['id'];
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $id, 'checkin_time' => '17:30'])->assertOk();
+        $pay = fn () => collect($this->monthly()['shifts'])->firstWhere('id', $id);
+
+        // Đủ lớp nhưng quản lý chấm 50%
+        $this->putJson("/api/teacher-checkin/{$id}", ['checkin_time' => '17:30', 'pay_override' => 'half'])->assertOk();
+        $this->assertEquals(100000, $pay()['amount']);
+        $this->assertSame('Chấm tay · 50%', $pay()['pay_note']);
+
+        // Vắng 2/4 (tự động 50%) nhưng quản lý chấm 100%
+        $this->mark($group[0], 'absent_without_leave');
+        $this->mark($group[1], 'absent_with_leave');
+        $this->putJson("/api/teacher-checkin/{$id}", ['checkin_time' => '17:30', 'pay_override' => 'full'])->assertOk();
+        $this->assertEquals(200000, $pay()['amount']);
+        $this->assertSame('Chấm tay · 100%', $pay()['pay_note']);
+
+        // Về tự động: lại theo điểm danh
+        $this->putJson("/api/teacher-checkin/{$id}", ['checkin_time' => '17:30', 'pay_override' => null])->assertOk();
+        $this->assertEquals(100000, $pay()['amount']);
+        $this->assertSame('2/4 HV đi học · 50%', $pay()['pay_note']);
+
+        // Nhập số tiền cụ thể (không theo đơn giá / điểm danh); chọn nhập mà bỏ trống số tiền thì báo lỗi
+        $this->putJson("/api/teacher-checkin/{$id}", ['checkin_time' => '17:30', 'pay_override' => 'custom', 'pay_amount' => 10000])->assertOk();
+        $this->assertEquals(10000, $pay()['amount']);
+        $this->assertSame('Chấm tay · 10.000đ', $pay()['pay_note']);
+        $this->assertEquals(10000, $this->monthly()['total_salary']);
+        $this->putJson("/api/teacher-checkin/{$id}", ['checkin_time' => '17:30', 'pay_override' => 'custom'])->assertStatus(422);
+
+        // Mức không hợp lệ bị từ chối; khôi phục ca thì bỏ luôn mức chấm tay
+        $this->putJson("/api/teacher-checkin/{$id}", ['checkin_time' => '17:30', 'pay_override' => 'quarter'])->assertStatus(422);
+        $this->putJson("/api/teacher-checkin/{$id}", ['checkin_time' => '17:30', 'pay_override' => 'half'])->assertOk();
+        $this->postJson("/api/teacher-checkin/{$id}/reset")->assertOk();
+        $this->assertArrayNotHasKey('pay_override', $this->shifts()['Cô Mai']);
+    }
+
     public function test_group_size_is_configurable_per_center(): void
     {
         // Sĩ số lớp nhóm 6: ca có 6 bạn, nghỉ 3 → 50%; nghỉ 2 → đủ lương

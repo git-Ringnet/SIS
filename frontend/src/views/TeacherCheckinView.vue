@@ -204,7 +204,26 @@ const submitAbsence = async () => {
 // Khôi phục / Sửa / Xoá ca dạy (chỉ quản lý)
 const PAID_STATUSES = ['checked_in', 'late', 'substitute'];
 const showEditModal = ref(false);
-const editForm = ref({ id: null, checkin_time: '', unit_rate: null, note: '' });
+const editForm = ref({ id: null, checkin_time: '', unit_rate: null, pay_override: null, pay_amount: null, note: '' });
+// Mức lương chấm tay cho ca: null = tự động theo điểm danh học viên
+const PAY_OVERRIDE_OPTIONS = [
+  { value: null, label: 'Tự động' },
+  { value: 'full', label: '100%' },
+  { value: 'half', label: '50%' },
+  { value: 'custom', label: 'Nhập số tiền' },
+];
+// Số tiền ca nhận = đơn giá × mức lương; "Tự động" chỉ biết trước khi ca mở từ bảng tháng và chưa chấm tay
+const editPayPreview = computed(() => {
+  const rate = Number(editForm.value.unit_rate) || 0;
+  const override = editForm.value.pay_override;
+  if (override === 'custom') return formatCurrency(Number(editForm.value.pay_amount) || 0);
+  if (override) return formatCurrency(rate * (override === 'half' ? 0.5 : 1));
+  const s = selectedShift.value;
+  if (s?.pay_factor !== undefined && !s.pay_override) {
+    return `${formatCurrency(rate * s.pay_factor)}${s.pay_note ? ` (${s.pay_note})` : ''}`;
+  }
+  return `${formatCurrency(rate)} × hệ số theo điểm danh học viên`;
+});
 const savingEdit = ref(false);
 
 const resetShift = async (shift) => {
@@ -248,6 +267,8 @@ const openEditModal = (shift) => {
     id: shift.id,
     checkin_time: shift.checkin_time || shift.start_time || '',
     unit_rate: shift.unit_rate ?? shift.rate ?? null,
+    pay_override: shift.pay_override ?? null,
+    pay_amount: shift.pay_amount ?? null,
     note: shift.note || '',
   };
   showEditModal.value = true;
@@ -626,7 +647,7 @@ const exportMonthly = async () => {
             <template v-if="!isTeacher">
               <button v-if="seesAllPay && PAID_STATUSES.includes(s.status)" type="button" @click="openEditModal(s)"
                 class="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 cursor-pointer"
-                title="Sửa giờ check-in / đơn giá">
+                title="Sửa giờ check-in / đơn giá / mức lương">
                 <Pencil class="h-4 w-4" />
               </button>
               <button v-if="s.status === 'not_checked_in' && s.substitute_teacher && !s.substitute_from_period" type="button"
@@ -735,7 +756,7 @@ const exportMonthly = async () => {
                 <th class="py-2.5 px-3">Ca dạy</th>
                 <th class="py-2.5 px-3">Check-in</th>
                 <th class="py-2.5 px-3 text-right">Thu nhập</th>
-                <th v-if="isOwner" class="py-2.5 px-3 w-10"></th>
+                <th v-if="seesAllPay" class="py-2.5 px-3 w-20"></th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
@@ -767,8 +788,13 @@ const exportMonthly = async () => {
                   <!-- Ca bị giảm lương theo điểm danh học viên (nhóm vắng ≥ 50%, 1:1 vắng) -->
                   <span v-if="ms.pay_note" class="block text-[11px] font-semibold text-amber-700">{{ ms.pay_note }}</span>
                 </td>
-                <td v-if="isOwner" class="py-2.5 px-3 text-right">
-                  <button type="button" @click="deleteShift(ms)"
+                <td v-if="seesAllPay" class="py-2.5 px-3 text-right whitespace-nowrap">
+                  <button type="button" @click="openEditModal(ms)"
+                    class="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-800 cursor-pointer"
+                    title="Sửa giờ check-in / đơn giá / mức lương">
+                    <Pencil class="h-4 w-4" />
+                  </button>
+                  <button v-if="isOwner" type="button" @click="deleteShift(ms)"
                     class="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 cursor-pointer"
                     title="Xoá ca (bỏ khỏi thu nhập, khôi phục được)">
                     <Trash2 class="h-4 w-4" />
@@ -894,6 +920,29 @@ const exportMonthly = async () => {
             </label>
             <MoneyInput v-model="editForm.unit_rate"
               class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none" />
+          </div>
+
+          <!-- Ca theo cách tính cũ (theo lượt HV / dạy tự do) giữ nguyên thù lao, không chấm tay -->
+          <div v-if="!['per_student', 'free'].includes(selectedShift?.pay_mode)">
+            <label class="block font-medium text-slate-700 mb-1">Mức lương ca này</label>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+              <button v-for="opt in PAY_OVERRIDE_OPTIONS" :key="opt.label" type="button"
+                @click="editForm.pay_override = opt.value"
+                class="rounded-xl border px-3 py-2 font-semibold cursor-pointer"
+                :class="editForm.pay_override === opt.value
+                  ? 'border-rose-500 bg-rose-50 text-rose-700'
+                  : 'border-slate-200 text-slate-600 hover:bg-slate-50'">
+                {{ opt.label }}
+              </button>
+            </div>
+            <p class="mt-1 text-[11px] text-slate-500">Tự động: 1:1 vắng không phép 50%, vắng có phép không tính; nhóm
+              đi học ≤ nửa sĩ số 50%. Chọn 100% / 50% / Nhập số tiền để chấm tay, không theo điểm danh.</p>
+            <MoneyInput v-if="editForm.pay_override === 'custom'" v-model="editForm.pay_amount"
+              placeholder="Số tiền ca này nhận (VNĐ)"
+              class="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none" />
+            <p class="mt-2 rounded-xl bg-emerald-50 px-3 py-2 font-semibold text-emerald-800">
+              Ca này nhận: {{ editPayPreview }}
+            </p>
           </div>
 
           <div>
