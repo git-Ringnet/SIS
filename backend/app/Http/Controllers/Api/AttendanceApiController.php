@@ -478,6 +478,9 @@ class AttendanceApiController extends Controller
         }
 
         $student = Student::find($validated['student_id']);
+        if ($overlap = self::regularSlotOverlap($request, $student, $validated['date'], $time)) {
+            return $overlap;
+        }
         $center = (! empty($validated['center']) && $validated['center'] !== 'all')
             ? $validated['center']
             : ($student?->center ?: CenterStore::defaultName());
@@ -507,6 +510,28 @@ class AttendanceApiController extends Controller
         return response()->json([
             'message' => "Đã đặt buổi học lẻ ngày {$validated['date']} cho học viên {$student->name}!",
         ], 201);
+    }
+
+    /**
+     * Buổi học lẻ / học bù trùng giờ ca học cố định của học viên ngày đó (vd đặt bù 20:00 T5 trong khi T5 vẫn học 20:00):
+     * trả về 409 để giáo vụ xác nhận lại, vì buổi bù cũng trừ 1 buổi và được đánh số, hôm đó sẽ thành 2 buổi.
+     * Gửi lại với confirm_overlap = true thì vẫn đặt.
+     */
+    public static function regularSlotOverlap(Request $request, ?Student $student, string $date, string $time): ?JsonResponse
+    {
+        if (! $student || $request->boolean('confirm_overlap')) {
+            return null;
+        }
+        $slot = StudentSchedule::regularSlotAt($student, Carbon::parse($date)->toDateString(), $time);
+        if (! $slot) {
+            return null;
+        }
+
+        return response()->json([
+            'overlap' => true,
+            'message' => "Ngày ".Carbon::parse($date)->format('d/m/Y')." học viên {$student->name} đã có buổi học theo lịch lúc "
+                .StudentSchedule::timeLabel($slot).'. Nếu đặt thêm, ngày này sẽ có 2 buổi và cả 2 đều trừ buổi, được đánh số.',
+        ], 409);
     }
 
     /**

@@ -217,6 +217,28 @@ class StudentSchedule
             && $a->attended_at->toDateString() < $firstScheduled->toDateString())->count();
     }
 
+    /**
+     * Ca học cố định của học viên ngày $date trùng giờ với buổi học lẻ / học bù $time ("20:00" hoặc "20:00 - 21:00"),
+     * bỏ qua ca rơi vào ngày trung tâm / giáo viên nghỉ. Dùng để cảnh báo khi giáo vụ đặt buổi bù trùng buổi học thường.
+     */
+    public static function regularSlotAt(Student $student, string $date, string $time): ?array
+    {
+        [$start, $end] = SingleLessons::timeRange(['time' => $time]);
+        if (! $start) {
+            return null;
+        }
+        $end ??= Carbon::parse($start)->addHour()->format('H:i');
+
+        foreach (self::slotsOnDate($student, $date) as $slot) {
+            $slotEnd = $slot['end'] ?: Carbon::parse($slot['start'])->addHour()->format('H:i');
+            if ($start < $slotEnd && $slot['start'] < $end && ! self::offReason($student, $date, $slot)) {
+                return $slot;
+            }
+        }
+
+        return null;
+    }
+
     public static function find(Student $student, ?string $slotId): ?array
     {
         foreach (self::slots($student) as $slot) {

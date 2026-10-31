@@ -1,6 +1,7 @@
 <script setup>
 import { toLocalDateString } from '../services/date';
 import { notify, errorMessage } from '../services/notify';
+import { confirmDialog } from '../services/useConfirm';
 import { ref, onMounted, computed } from 'vue';
 import { dailyAttendanceApi, studentApi } from '../services/api';
 import SearchableSelect from '../components/SearchableSelect.vue';
@@ -199,9 +200,9 @@ const fetchAvailableGroupSlots = async () => {
   try {
     loadingGroupSlots.value = true;
     const res = await dailyAttendanceApi.getAvailableGroupSlots({
-      date: singleLessonForm.value.date,
-      teacher: singleLessonForm.value.teacher,
-      center: singleLessonForm.value.center || 'all',
+    date: singleLessonForm.value.date,
+    teacher: singleLessonForm.value.teacher,
+    center: singleLessonForm.value.center || 'all',
     });
     availableGroupSlots.value = res.data.slots || [];
     if (singleLessonForm.value.merged_slot_id && !availableGroupSlots.value.some((s) => s.id === singleLessonForm.value.merged_slot_id)) {
@@ -342,30 +343,52 @@ const openSingleLessonModal = () => {
   fetchAvailableGroupSlots();
 };
 
+// Buổi bù / học lẻ trùng giờ ca học cố định: backend trả 409 (overlap) → hỏi lại, đồng ý thì gửi lại với confirm_overlap
+const withOverlapConfirm = async (send) => {
+  try {
+    return await send({});
+  } catch (err) {
+    if (err.response?.status !== 409 || !err.response?.data?.overlap) throw err;
+    const ok = await confirmDialog({
+      title: 'Trùng buổi học theo lịch',
+      message: `${err.response.data.message} Vẫn đặt buổi này?`,
+      confirmText: 'Vẫn đặt',
+      variant: 'warning',
+    });
+    if (!ok) {
+      const cancelled = new Error('cancelled');
+      cancelled.cancelled = true;
+      throw cancelled;
+    }
+    return send({ confirm_overlap: true });
+  }
+};
+
 const submitSingleLesson = async () => {
   if (!singleLessonForm.value.student_id) {
     notify.warning('Vui lòng chọn học viên!');
     return;
   }
+  const payload = {
+    student_id: singleLessonForm.value.student_id,
+    course_id: singleLessonForm.value.course_id,
+    center: singleLessonForm.value.center,
+    date: singleLessonForm.value.date,
+    room: singleLessonForm.value.room,
+    time: singleLessonForm.value.time,
+    teacher: singleLessonForm.value.teacher,
+    merged_slot_id: singleLessonForm.value.merged_slot_id || null,
+    merged_class_id: singleLessonForm.value.merged_class_id || null,
+    note: singleLessonForm.value.note,
+    is_makeup: singleLessonForm.value.is_makeup,
+  };
   try {
-    await dailyAttendanceApi.scheduleSingleLesson({
-      student_id: singleLessonForm.value.student_id,
-      course_id: singleLessonForm.value.course_id,
-      center: singleLessonForm.value.center,
-      date: singleLessonForm.value.date,
-      room: singleLessonForm.value.room,
-      time: singleLessonForm.value.time,
-      teacher: singleLessonForm.value.teacher,
-      merged_slot_id: singleLessonForm.value.merged_slot_id || null,
-      merged_class_id: singleLessonForm.value.merged_class_id || null,
-      note: singleLessonForm.value.note,
-      is_makeup: singleLessonForm.value.is_makeup,
-    });
+    await withOverlapConfirm((extra) => dailyAttendanceApi.scheduleSingleLesson({ ...payload, ...extra }));
     showSingleLessonModal.value = false;
     notify.success(singleLessonForm.value.is_makeup ? 'Đã đặt buổi học bù thành công!' : 'Đã đặt buổi học lẻ thành công!');
     await fetchData();
   } catch (err) {
-    notify.apiError(err, err.message);
+    if (!err.cancelled) notify.apiError(err, err.message);
   }
 };
 

@@ -198,6 +198,10 @@ class AbsenceApiController extends Controller
             'note' => 'nullable|string',
         ]);
 
+        if ($overlap = AttendanceApiController::regularSlotOverlap($request, $student, $validated['date'], $validated['time'])) {
+            return $overlap;
+        }
+
         $makeupNote = "Lịch học bù: Ngày {$validated['date']} ({$validated['time']}) - Phòng: ".($validated['room'] ?? 'N/A').' - GV: '.($validated['teacher'] ?? 'N/A');
         $student->notes = ($student->notes ? $student->notes."\n" : '').'['.date('d/m/Y').'] '.$makeupNote;
         $student->save();

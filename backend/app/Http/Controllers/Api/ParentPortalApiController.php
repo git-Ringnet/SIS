@@ -292,9 +292,16 @@ class ParentPortalApiController extends Controller
             }
         }
 
-        // Buổi sắp tới theo lịch tuần: đủ số buổi còn lại của từng khóa, cùng danh sách với trang Điểm danh
-        // (nghỉ có phép không trừ buổi / trung tâm nghỉ thì buổi cuối tự lùi, để phụ huynh theo dõi đúng số buổi còn lại)
-        $planned = in_array($student->status, ['inactive', 'dropped'], true) ? [] : StudentSchedule::plannedSessions($student, $attendances);
+        // Buổi sắp tới theo lịch tuần (số buổi còn lại của từng khóa), nhưng chỉ tới đúng ngày kết thúc dự kiến của khóa:
+        // khách chốt Cổng PH không tự cộng thêm buổi sau ngày này (buổi thiếu do giáo vụ tự đặt buổi bù, buổi bù vẫn có số)
+        $planned = in_array($student->status, ['inactive', 'dropped'], true) ? [] : array_values(array_filter(
+            StudentSchedule::plannedSessions($student, $attendances),
+            function ($session) use ($student) {
+                $end = $student->courseItemDates($session['item'])['end'];
+
+                return ! $end || $session['date']->lte(Carbon::createFromFormat('d/m/Y', $end)->endOfDay());
+            },
+        ));
         foreach ($planned as ['date' => $date, 'slot' => $slot]) {
             $rows[] = $this->row([
                 'key' => 'plan-'.$date->toDateString().'-'.$slot['id'],
@@ -310,7 +317,7 @@ class ParentPortalApiController extends Controller
             ]);
         }
 
-        // Ngày trung tâm nghỉ / giáo viên nghỉ: từ ngày nhập học (hoặc buổi đầu tiên) đến ngày kết thúc dự kiến
+        // Ngày trung tâm nghỉ / giáo viên nghỉ: từ ngày nhập học (hoặc buổi đầu tiên) đến buổi sắp tới cuối cùng
         $from = collect([$student->join_date, $attendances->first()?->attended_at])->filter()->min() ?? $today;
         $to = $planned !== [] ? collect($planned)->max('date') : $today;
         foreach (StudentSchedule::offSessions($student, Carbon::parse($from)->max($today->copy()->subYear()), $to) as ['date' => $date, 'slot' => $slot, 'off' => $off]) {
