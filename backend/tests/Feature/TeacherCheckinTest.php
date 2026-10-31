@@ -58,6 +58,21 @@ class TeacherCheckinTest extends TestCase
             ->assertJsonPath('today_shifts.0.minutes_late', 0);
     }
 
+    public function test_checked_in_shift_with_old_key_is_not_duplicated_by_a_new_pending_shift(): void
+    {
+        // Ca đã check-in từ trước khi đổi cách gom ca (mã ca kiểu cũ): đổi mã ca, rồi mở lại trang
+        $id = $this->shiftId();
+        $this->postJson('/api/teacher-checkin/checkin', ['shift_id' => $id])->assertOk();
+        $shifts = json_decode(Storage::get('teacher_checkins.json'), true);
+        $shifts = array_map(fn ($s) => $s['id'] === $id ? [...$s, 'schedule_key' => '2026-10-20|ma-cu'] : $s, $shifts);
+        Storage::put('teacher_checkins.json', json_encode($shifts));
+
+        // Không sinh thêm ca "Chưa check-in" trùng giáo viên + giờ + học viên
+        $today = $this->getJson('/api/teacher-checkin?date=2026-10-20')->assertOk()->json('today_shifts');
+        $this->assertCount(1, $today);
+        $this->assertSame('checked_in', $today[0]['status']);
+    }
+
     /**
      * Thêm ca của giáo viên khác cùng ngày và đăng nhập bằng tài khoản giáo viên "Cô Mai".
      */

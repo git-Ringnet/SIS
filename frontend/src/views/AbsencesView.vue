@@ -130,23 +130,12 @@ const openMakeupModal = (st) => {
 
 const submitMakeup = async () => {
   if (!makeupForm.value.date || !selectedStudent.value) return;
-  const send = (extra = {}) => absenceApi.scheduleMakeup(selectedStudent.value.id, { ...makeupForm.value, ...extra });
   try {
-    try {
-      await send();
-    } catch (err) {
-      // Trùng giờ ca học cố định ngày đó (backend trả 409): hỏi lại, đồng ý thì vẫn đặt
-      if (err.response?.status !== 409 || !err.response?.data?.overlap) throw err;
-      if (!(await confirmDialog({
-        title: 'Trùng buổi học theo lịch',
-        message: `${err.response.data.message} Vẫn đặt buổi bù?`,
-        confirmText: 'Vẫn đặt',
-        variant: 'warning',
-      }))) return;
-      await send({ confirm_overlap: true });
-    }
+    const res = await absenceApi.scheduleMakeup(selectedStudent.value.id, makeupForm.value);
     showMakeupModal.value = false;
-    notify.success(`Đã lên lịch học bù cho học viên ${selectedStudent.value.name}!`);
+    // Trùng giờ ca học cố định: buổi bù thay cho ca đó, báo rõ cho giáo vụ
+    if (res.data.replaces_regular) notify.warning(res.data.message);
+    else notify.success(`Đã lên lịch học bù cho học viên ${selectedStudent.value.name}!`);
     await fetchData();
   } catch (err) {
     notify.apiError(err, err.message);

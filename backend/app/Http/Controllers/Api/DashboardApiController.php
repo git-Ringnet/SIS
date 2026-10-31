@@ -147,8 +147,11 @@ class DashboardApiController extends Controller
             ->filter(function ($st) use ($todayRecords, $today) {
                 $slots = StudentSchedule::slotsOnDate($st, $today->toDateString());
                 $marked = $todayRecords->get($st->id, collect())->pluck('slot_id')->all();
+                // Ca đã có buổi bù trùng giờ thay thế thì không còn là ca phải điểm danh
+                $replaced = StudentSchedule::replacedSlotIds($st, $today->toDateString());
                 foreach ($slots as $i => $slot) {
-                    if (! in_array($slot['id'], $marked, true) && ! ($i === 0 && in_array(null, $marked, true))) {
+                    if (! in_array($slot['id'], $replaced, true)
+                        && ! in_array($slot['id'], $marked, true) && ! ($i === 0 && in_array(null, $marked, true))) {
                         return true;
                     }
                 }

@@ -223,20 +223,47 @@ class StudentSchedule
      */
     public static function regularSlotAt(Student $student, string $date, string $time): ?array
     {
-        [$start, $end] = SingleLessons::timeRange(['time' => $time]);
-        if (! $start) {
-            return null;
-        }
-        $end ??= Carbon::parse($start)->addHour()->format('H:i');
-
         foreach (self::slotsOnDate($student, $date) as $slot) {
-            $slotEnd = $slot['end'] ?: Carbon::parse($slot['start'])->addHour()->format('H:i');
-            if ($start < $slotEnd && $slot['start'] < $end && ! self::offReason($student, $date, $slot)) {
+            if (self::overlapsLesson($slot, $time) && ! self::offReason($student, $date, $slot)) {
                 return $slot;
             }
         }
 
         return null;
+    }
+
+    /**
+     * Mã các ca theo lịch ngày $date bị buổi học lẻ / học bù của chính học viên trùng giờ thay thế:
+     * học viên không thể học 2 buổi cùng lúc, nên hôm đó chỉ có buổi bù (một buổi, một số, trừ một buổi, một ca dạy).
+     * $lessons: buổi học lẻ / học bù của học viên (truyền vào khi gọi nhiều ngày để khỏi đọc file nhiều lần).
+     *
+     * @return list<string>
+     */
+    public static function replacedSlotIds(Student $student, string $date, ?array $lessons = null): array
+    {
+        $times = array_column(array_filter($lessons ?? SingleLessons::forStudent($student->id),
+            fn ($l) => ($l['date'] ?? null) === $date && ! empty($l['time'])), 'time');
+        if ($times === []) {
+            return [];
+        }
+
+        return array_values(array_map(fn ($s) => $s['id'], array_filter(self::slotsOnDate($student, $date),
+            fn ($slot) => array_filter($times, fn ($t) => self::overlapsLesson($slot, $t)) !== [])));
+    }
+
+    /**
+     * Ca $slot có chồng giờ với buổi học lẻ / học bù giờ $time ("20:00" hoặc "20:00 - 21:00", thiếu giờ kết thúc = 1 tiếng).
+     */
+    private static function overlapsLesson(array $slot, string $time): bool
+    {
+        [$start, $end] = SingleLessons::timeRange(['time' => $time]);
+        if (! $start || empty($slot['start'])) {
+            return false;
+        }
+        $end ??= Carbon::parse($start)->addHour()->format('H:i');
+        $slotEnd = ($slot['end'] ?? null) ?: Carbon::parse($slot['start'])->addHour()->format('H:i');
+
+        return $start < $slotEnd && $slot['start'] < $end;
     }
 
     public static function find(Student $student, ?string $slotId): ?array
@@ -516,6 +543,7 @@ class StudentSchedule
 
         $yesterday = Carbon::yesterday();
         $periods = TeacherLeaves::all();
+        $lessons = SingleLessons::forStudent($student->id);
         $result = [];
         foreach ($student->registered_courses_list ?: [null] as $item) {
             $slotIds = array_column(self::courseSlots($student, $item), 'id');
@@ -531,9 +559,11 @@ class StudentSchedule
             $left = (int) ($item['remaining_sessions'] ?? $student->remaining_sessions);
 
             for ($day = Carbon::parse($from)->startOfDay()->max($yesterday->copy()->subYear()); $day->lte($yesterday) && $left > 0; $day = $day->copy()->addDay()) {
+                $replaced = self::replacedSlotIds($student, $day->toDateString(), $lessons);
                 foreach (self::slotsOnDate($student, $day->toDateString()) as $slot) {
                     $key = $day->toDateString().'|'.$slot['id'];
-                    if ($left <= 0 || ! in_array($slot['id'], $slotIds, true) || isset($recorded[$key])
+                    // Ca đã được buổi bù trùng giờ thay thế thì không phải buổi bị quên điểm danh
+                    if ($left <= 0 || ! in_array($slot['id'], $slotIds, true) || isset($recorded[$key]) || in_array($slot['id'], $replaced, true)
                         || self::offReason($student, $day->toDateString(), $slot, $periods)) {
                         continue;
                     }
@@ -708,7 +738,11 @@ class StudentSchedule
     {
         $today = now();
         $lessons = array_values(array_filter(SingleLessons::forStudent($student->id), fn ($l) => ($l['date'] ?? null) === $today->toDateString()));
-        $slots = [...self::slotsOnDate($student, $today->toDateString()), ...array_map(fn ($l) => ['id' => $l['id']], $lessons)];
+        // Ca theo lịch bị buổi bù trùng giờ thay thế thì điểm danh vào buổi bù
+        $replaced = self::replacedSlotIds($student, $today->toDateString(), $lessons);
+        $slots = [...array_filter(self::slotsOnDate($student, $today->toDateString()), fn ($s) => ! in_array($s['id'], $replaced, true)),
+            ...array_map(fn ($l) => ['id' => $l['id']], $lessons)];
+        $slots = array_values($slots);
         $marked = Attendance::where('student_id', $student->id)->whereDate('attended_at', $today->toDateString())->get();
 
         if ($slots === []) {
@@ -790,7 +824,7 @@ class StudentSchedule
     /**
      * Ngày học dự kiến của $count buổi tiếp theo, đi lần lượt theo các ca trong lịch tuần.
      * Bắt đầu từ hôm nay, học viên tạm dừng thì từ ngày hết bảo lưu, và không sớm hơn ngày nhập học.
-     * Bỏ các ca đã điểm danh / đã xin nghỉ trước và các ca rơi vào ngày nghỉ (trung tâm off, giáo viên nghỉ),
+     * Bỏ các ca đã điểm danh / đã xin nghỉ trước, ca đã có buổi bù trùng giờ thay thế và các ca rơi vào ngày nghỉ (trung tâm off, giáo viên nghỉ),
      * nên ngày kết thúc tự lùi lại. Học viên đã nghỉ / chưa có lịch thì không có ngày dự kiến.
      * $slotIds: chỉ tính các ca của một khoá (null = mọi ca). $from: ngày bắt đầu khoá nếu muộn hơn hôm nay.
      *
@@ -830,13 +864,17 @@ class StudentSchedule
                 || (in_array(null, $ids, true) && (self::slotsOn($student, $date->dayOfWeek)[0]['id'] ?? null) === $slot['id']);
         };
         $periods = TeacherLeaves::all();
+        $lessons = SingleLessons::forStudent($student->id);
 
         $result = [];
         // Giới hạn 2 năm để không lặp vô hạn khi lịch lỗi
         for ($i = 0; $i < 730 && count($result) < $count; $i++, $day = $day->copy()->addDay()) {
             $started = array_column(self::slotsOnDate($student, $day->toDateString()), 'id');
+            $replaced = self::replacedSlotIds($student, $day->toDateString(), $lessons);
             foreach ($slotsOn($day->dayOfWeek) as $slot) {
-                if (! in_array($slot['id'], $started, true) || $isMarked($day, $slot) || self::offReason($student, $day->toDateString(), $slot, $periods)) {
+                // Ca đã có buổi bù / học lẻ trùng giờ thay thế: buổi đó đã là buổi bù (đã trừ khỏi số buổi cần xếp)
+                if (! in_array($slot['id'], $started, true) || in_array($slot['id'], $replaced, true) || $isMarked($day, $slot)
+                    || self::offReason($student, $day->toDateString(), $slot, $periods)) {
                     continue;
                 }
                 $result[] = ['date' => $day->copy(), 'slot' => $slot];

@@ -773,6 +773,9 @@ onMounted(() => {
                       <span v-if="s.is_makeup" class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-sky-100 text-sky-800 flex items-center gap-1">
                         <RefreshCw class="h-3 w-3" /> Buổi bù
                       </span>
+                      <span v-else-if="s.is_single_lesson" class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-100 text-indigo-800 flex items-center gap-1">
+                        <Calendar class="h-3 w-3" /> Học lẻ
+                      </span>
 
                       <!-- Có trừ buổi hay không -->
                       <span v-if="s.is_absent && !s.deducts_session" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-white border border-amber-200 text-amber-700">

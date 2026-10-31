@@ -107,7 +107,12 @@ class AttendanceApiController extends Controller
             $rows = [];
 
             // Chỉ các ca đã bắt đầu học (không hiện buổi trước "Ngày bắt đầu học" / trước ngày bắt đầu của khóa thêm)
+            // Ca bị buổi học lẻ / học bù trùng giờ thay thế thì chỉ hiện buổi bù (trừ khi ca đó đã được điểm danh trước)
+            $replaced = StudentSchedule::replacedSlotIds($st, $dateStr, collect($todayLessons->get($st->id, []))->all());
             foreach (StudentSchedule::slotsOnDate($st, $dateStr) as $i => $slot) {
+                if (in_array($slot['id'], $replaced, true) && ! $records->firstWhere('slot_id', $slot['id'])) {
+                    continue;
+                }
                 $rows[] = ['slot_id' => $slot['id'], 'first' => $i === 0, 'room' => $slot['room'], 'teacher' => $slot['teacher'],
                     'shift_time' => StudentSchedule::timeLabel($slot), 'is_single_lesson' => false, 'is_makeup' => false,
                     'off' => StudentSchedule::offReason($st, $dateStr, $slot, $periods)];
@@ -478,9 +483,6 @@ class AttendanceApiController extends Controller
         }
 
         $student = Student::find($validated['student_id']);
-        if ($overlap = self::regularSlotOverlap($request, $student, $validated['date'], $time)) {
-            return $overlap;
-        }
         $center = (! empty($validated['center']) && $validated['center'] !== 'all')
             ? $validated['center']
             : ($student?->center ?: CenterStore::defaultName());
@@ -507,31 +509,23 @@ class AttendanceApiController extends Controller
             'created_at' => Carbon::now()->toDateTimeString(),
         ]);
 
+        $replaces = self::replacedRegularNote($student, $validated['date'], $time);
+
         return response()->json([
-            'message' => "Đã đặt buổi học lẻ ngày {$validated['date']} cho học viên {$student->name}!",
+            'message' => "Đã đặt buổi học lẻ ngày {$validated['date']} cho học viên {$student->name}!".($replaces ? " {$replaces}" : ''),
+            'replaces_regular' => $replaces !== null,
         ], 201);
     }
 
     /**
      * Buổi học lẻ / học bù trùng giờ ca học cố định của học viên ngày đó (vd đặt bù 20:00 T5 trong khi T5 vẫn học 20:00):
-     * trả về 409 để giáo vụ xác nhận lại, vì buổi bù cũng trừ 1 buổi và được đánh số, hôm đó sẽ thành 2 buổi.
-     * Gửi lại với confirm_overlap = true thì vẫn đặt.
+     * buổi bù thay cho ca đó (hôm đó chỉ 1 buổi). Trả về câu báo cho giáo vụ, không trùng thì null.
      */
-    public static function regularSlotOverlap(Request $request, ?Student $student, string $date, string $time): ?JsonResponse
+    public static function replacedRegularNote(?Student $student, string $date, string $time): ?string
     {
-        if (! $student || $request->boolean('confirm_overlap')) {
-            return null;
-        }
-        $slot = StudentSchedule::regularSlotAt($student, Carbon::parse($date)->toDateString(), $time);
-        if (! $slot) {
-            return null;
-        }
+        $slot = $student ? StudentSchedule::regularSlotAt($student, Carbon::parse($date)->toDateString(), $time) : null;
 
-        return response()->json([
-            'overlap' => true,
-            'message' => "Ngày ".Carbon::parse($date)->format('d/m/Y')." học viên {$student->name} đã có buổi học theo lịch lúc "
-                .StudentSchedule::timeLabel($slot).'. Nếu đặt thêm, ngày này sẽ có 2 buổi và cả 2 đều trừ buổi, được đánh số.',
-        ], 409);
+        return $slot ? 'Buổi này thay cho buổi học theo lịch lúc '.StudentSchedule::timeLabel($slot).' cùng ngày (ngày này chỉ tính 1 buổi).' : null;
     }
 
     /**

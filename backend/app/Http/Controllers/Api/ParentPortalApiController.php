@@ -245,7 +245,8 @@ class ParentPortalApiController extends Controller
             $rows[] = $this->row([
                 'key' => 'lesson-'.$lesson['id'],
                 'status' => 'upcoming',
-                'status_label' => ! empty($lesson['is_makeup']) ? 'Buổi bù' : 'Buổi học lẻ',
+                // Loại buổi (Buổi bù / Học lẻ) đã có nhãn riêng bên cạnh, trạng thái chỉ cần "Chưa học" như buổi thường
+                'status_label' => 'Chưa học',
                 'date' => Carbon::parse($lesson['date'].' '.(SingleLessons::startTime($lesson) ?? '00:00')),
                 'time' => $lesson['time'] ?? null,
                 'teacher' => $lesson['teacher'] ?? null,

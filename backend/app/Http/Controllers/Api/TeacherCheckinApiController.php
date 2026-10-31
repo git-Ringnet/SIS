@@ -50,12 +50,22 @@ class TeacherCheckinApiController extends Controller
             ->orderBy('name')
             ->get();
 
+        // Buổi học lẻ / học bù phát sinh trong ngày (scheduled_single_lessons.json)
+        $dayLessons = array_values(array_filter(SingleLessons::all(), fn ($l) => ($l['date'] ?? null) === $date));
+        $lessonsByStudent = collect($dayLessons)->groupBy(fn ($l) => (int) ($l['student_id'] ?? 0));
+
         // Từng ca của học viên trong ngày; ca có giáo viên mới sinh ca dạy
-        $entries = $students->flatMap(fn ($st) => array_map(
-            fn ($slot) => ['student' => $st, 'slot' => $slot],
-            // Không sinh ca dạy cho buổi học viên chưa bắt đầu học (tránh tính tiền buổi không có thật)
-            array_filter(StudentSchedule::slotsOnDate($st, $date), fn ($slot) => ! empty($slot['teacher'])),
-        ));
+        $entries = $students->flatMap(function ($st) use ($date, $lessonsByStudent) {
+            // Ca bị buổi học lẻ / học bù của chính học viên trùng giờ thay thế: chỉ sinh ca dạy cho buổi bù
+            $replaced = StudentSchedule::replacedSlotIds($st, $date, $lessonsByStudent->get($st->id, collect())->all());
+
+            return array_map(
+                fn ($slot) => ['student' => $st, 'slot' => $slot],
+                // Không sinh ca dạy cho buổi học viên chưa bắt đầu học (tránh tính tiền buổi không có thật)
+                array_filter(StudentSchedule::slotsOnDate($st, $date),
+                    fn ($slot) => ! empty($slot['teacher']) && ! in_array($slot['id'], $replaced, true)),
+            );
+        });
 
         // Hình thức học theo khóa của từng ca (lớp nhóm / cá nhân 1:1)
         $classTypes = Course::pluck('class_type', 'id');
@@ -71,8 +81,6 @@ class TeacherCheckinApiController extends Controller
             ];
         })->values()->all();
 
-        // Buổi học lẻ / học bù phát sinh trong ngày (scheduled_single_lessons.json)
-        $dayLessons = array_values(array_filter(SingleLessons::all(), fn ($l) => ($l['date'] ?? null) === $date));
         if ($dayLessons !== []) {
             $lessonStudents = Student::with('course')
                 ->whereIn('id', array_unique(array_map(fn ($l) => (int) ($l['student_id'] ?? 0), $dayLessons)))
@@ -175,6 +183,18 @@ class TeacherCheckinApiController extends Controller
             ];
         }
 
+        // Ca đã check-in / báo vắng / đã xoá của ngày (kể cả ca tạo theo mã cũ trước khi đổi cách gom ca 27/10):
+        // cùng giáo viên + giờ + học viên thì không sinh thêm ca chờ check-in trùng với nó
+        $sameShift = fn (array $s) => implode('|', [$s['teacher_name'] ?? '', $s['start_time'] ?? '',
+            implode(',', collect($s['student_ids'] ?? [])->sort()->values()->all())]);
+        $done = [];
+        foreach ($shifts as $shift) {
+            if (($shift['date'] ?? null) === $date && ($shift['status'] ?? 'not_checked_in') !== 'not_checked_in') {
+                $done[$sameShift($shift)][] = $shift['schedule_key'] ?? null;
+            }
+        }
+        $duplicateOfDone = fn (string $key, array $data) => array_diff($done[$sameShift($data)] ?? [], [$key]) !== [];
+
         $changed = false;
         $seen = [];
         $result = [];
@@ -189,8 +209,8 @@ class TeacherCheckinApiController extends Controller
             $seen[$key] = true;
             $pending = ($shift['status'] ?? 'not_checked_in') === 'not_checked_in';
 
-            if ($pending && ! isset($planned[$key])) {
-                $changed = true; // không còn học viên trong khung giờ này
+            if ($pending && (! isset($planned[$key]) || $duplicateOfDone($key, $planned[$key]))) {
+                $changed = true; // không còn học viên trong khung giờ này, hoặc trùng ca đã check-in mang mã khác
 
                 continue;
             }
@@ -204,7 +224,7 @@ class TeacherCheckinApiController extends Controller
 
         $nextId = (int) (collect($shifts)->max('id') ?? 0) + 1;
         foreach ($planned as $key => $data) {
-            if (isset($seen[$key])) {
+            if (isset($seen[$key]) || $duplicateOfDone($key, $data)) {
                 continue;
             }
             $result[] = ['id' => $nextId++, 'schedule_key' => $key, ...$data, 'status' => 'not_checked_in',
