@@ -5,9 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Course;
 use App\Models\Invoice;
-use App\Models\MessageTemplate;
 use App\Models\RetentionLog;
 use App\Models\Student;
+use App\Support\MessageTemplateDefaults;
 use App\Support\StudentSchedule;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -40,7 +40,7 @@ class RetentionApiController extends Controller
             $students = $query->get();
         }
 
-        $templates = MessageTemplate::all();
+        $templates = MessageTemplateDefaults::forGroup('renewal');
         $courses = Course::where('is_active', true)->get();
 
         $counts = [

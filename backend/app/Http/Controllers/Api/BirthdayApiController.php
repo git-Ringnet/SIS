@@ -3,9 +3,9 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\MessageTemplate;
 use App\Models\Student;
 use App\Support\CenterStore;
+use App\Support\MessageTemplateDefaults;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -59,21 +59,7 @@ class BirthdayApiController extends Controller
             ];
         });
 
-        $templates = MessageTemplate::where('category', 'birthday_greeting')->get();
-        if ($templates->isEmpty()) {
-            $templates = collect([
-                [
-                    'id' => 1,
-                    'title' => 'Chúc mừng sinh nhật học viên & Tặng voucher ưu đãi',
-                    'template_content' => 'Trung tâm xin gửi lời chúc mừng sinh nhật tuổi mới đến bé {ten_hoc_vien} 🎂🎉! Chúc con luôn vui vẻ, chăm ngoan và thăng hoa cùng niềm đam mê âm nhạc. Nhân dịp sinh nhật con, trung tâm xin gửi tặng bé và gia đình voucher ưu đãi 10% cho khóa học tiếp theo hoặc 1 phần quà học cụ đặc biệt. Chúc con có một ngày sinh nhật thật ấm áp bên gia đình ạ! ❤️',
-                ],
-                [
-                    'id' => 2,
-                    'title' => 'Lời chúc sinh nhật ngắn gọn qua Zalo',
-                    'template_content' => 'Happy Birthday bé {ten_hoc_vien} 🎈! Thầy cô bộ môn {khoa_hoc} và trung tâm chúc con thêm một tuổi mới thật nhiều niềm vui, học giỏi và luôn yêu thích từng giờ học nhé con ơi!',
-                ],
-            ]);
-        }
+        $templates = MessageTemplateDefaults::forGroup('birthday');
 
         $centers = CenterStore::names();
 

@@ -104,6 +104,7 @@ export const messageTemplateApi = {
   create: (data) => api.post('/message-templates', data),
   update: (id, data) => api.put(`/message-templates/${id}`, data),
   reset: (id) => api.post(`/message-templates/${id}/reset`),
+  remove: (id) => api.delete(`/message-templates/${id}`),
 };
 
 export const leadApi = {
@@ -112,6 +113,8 @@ export const leadApi = {
   update: (id, data) => api.put(`/leads/${id}`, data),
   updateStatus: (id, data) => api.post(`/leads/${id}/status`, data),
   convertToStudent: (id, data) => api.post(`/leads/${id}/convert`, data),
+  uploadImage: (id, formData) => api.post(`/leads/${id}/image`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  deleteImage: (id) => api.delete(`/leads/${id}/image`),
   delete: (id) => api.delete(`/leads/${id}`),
   exportCsv: (params = {}) => downloadFile('/leads/export', params, 'khach-hang-tiem-nang.csv'),
 };

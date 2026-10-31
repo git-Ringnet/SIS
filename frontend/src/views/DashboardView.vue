@@ -41,7 +41,6 @@ const absenceAlerts = ref([]);
 const expiringEndDateStudents = ref([]);
 const recentAttendances = ref([]);
 const courses = ref([]);
-const templates = ref([]);
 const centers = ref([]);
 const loading = ref(true);
 
@@ -76,7 +75,6 @@ const fetchData = async () => {
     expiringEndDateStudents.value = res.data.expiringEndDateStudents || [];
     recentAttendances.value = res.data.recentAttendances || [];
     courses.value = res.data.courses || [];
-    templates.value = res.data.templates || [];
   } catch (err) {
     console.error('Error fetching dashboard data: ', err);
   } finally {
@@ -782,10 +780,9 @@ const visibleTodoTasks = computed(() =>
     </div>
 
     <!-- Modals -->
-    <MessageTemplateModal
+    <MessageTemplateModal group="renewal"
       :show="showTemplateModal"
       :student="selectedStudent"
-      :templates="templates"
       @close="showTemplateModal = false"
     />
 

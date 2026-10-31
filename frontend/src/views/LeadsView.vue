@@ -77,7 +77,6 @@ const newLeadForm = ref({
   center: '',
   trial_date: '',
   notes: '',
-  image_url: '',
 });
 
 // Form chuyển thành học viên
@@ -93,27 +92,10 @@ const convertForm = ref({
 // Form chăm sóc
 const careNote = ref('');
 
-// Form hình ảnh
-const imageUrlInput = ref('');
+// Ảnh của khách (phiếu đăng ký, bài test...): tải ảnh từ máy / điện thoại
+const uploadingImage = ref(false);
+const imageInput = ref(null);
 
-// Mẫu tin nhắn chăm sóc khách hàng tiềm năng
-const leadTemplates = ref([
-  {
-    id: 1,
-    title: 'Xác nhận lịch hẹn học thử / Test năng khiếu âm nhạc',
-    template_content: 'Dạ trung tâm xin chào phụ huynh {ten_hoc_vien} ạ! Trung tâm đã ghi nhận lịch hẹn buổi test năng khiếu & tư vấn lộ trình học cho bé vào ngày {ngay_hoc_thu}. Thầy cô rất mong được đón tiếp gia đình mình tại trung tâm ạ! ❤️',
-  },
-  {
-    id: 2,
-    title: 'Gửi bảng học phí & Ưu đãi khai giảng khóa mới',
-    template_content: 'Chào anh/chị, em gửi anh/chị thông tin học phí khóa {khoa_hoc} của trung tâm: Khóa 12 buổi (1-kèm-1), học 1-2 buổi/tuần, học phí ưu đãi tặng kèm 1 buổi test và giáo trình. Anh/chị cần em hỗ trợ thêm giờ học nào tiện cho bé không ạ?',
-  },
-  {
-    id: 3,
-    title: 'Hỏi thăm sau buổi học thử đầu tiên',
-    template_content: 'Dạ em chào anh/chị, hôm nay bé {ten_hoc_vien} học thử buổi đầu tiên về bé có chia sẻ cảm nhận gì với gia đình không ạ? Thầy/cô nhận xét bé có cảm thụ nhịp rất tốt đó ạ!',
-  },
-]);
 
 const pipelineColumns = [
   { key: 'new', label: '1. Mới tiếp nhận', badgeClass: 'bg-blue-500 text-white' },
@@ -273,21 +255,57 @@ const submitConvert = async () => {
 // Mở modal hình ảnh
 const openImageModal = (lead) => {
   selectedLead.value = lead;
-  imageUrlInput.value = lead.image_url || '';
   showImageModal.value = true;
 };
 
-const submitImage = async () => {
-  if (!selectedLead.value) return;
+// Ảnh cũ lưu dạng đường dẫn ngoài vẫn hiện; ảnh tải lên là đường dẫn /storage/...
+const imageSrc = (url) => (!url || /^(https?:|data:|\/)/.test(url) ? url : `/${url}`);
+
+// Ảnh chụp điện thoại thường rất nặng: thu nhỏ còn cạnh dài tối đa 1600px (JPEG) trước khi gửi
+const shrinkImage = (file, maxSide = 1600) => new Promise((resolve) => {
+  if (!file.type.startsWith('image/') || file.type === 'image/gif') return resolve(file);
+  const img = new window.Image();
+  img.onload = () => {
+    const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+    if (scale === 1 && file.size <= 2 * 1024 * 1024) return resolve(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((blob) => resolve(blob ? new File([blob], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }) : file), 'image/jpeg', 0.85);
+    URL.revokeObjectURL(img.src);
+  };
+  img.onerror = () => resolve(file);
+  img.src = URL.createObjectURL(file);
+});
+
+const uploadImage = async (event) => {
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if (!file || !selectedLead.value) return;
   try {
-    await leadApi.updateStatus(selectedLead.value.id, {
-      status: selectedLead.value.status,
-      image_url: imageUrlInput.value,
-    });
-    selectedLead.value.image_url = imageUrlInput.value;
-    showImageModal.value = false;
+    uploadingImage.value = true;
+    const formData = new FormData();
+    formData.append('image', await shrinkImage(file));
+    const res = await leadApi.uploadImage(selectedLead.value.id, formData);
+    selectedLead.value.image_url = res.data.image_url;
+    notify.success('Đã tải ảnh lên!');
   } catch (err) {
-    notify.error('Lỗi lưu hình ảnh', { description: errorMessage(err, err.message) });
+    notify.apiError(err, 'Không tải được ảnh');
+  } finally {
+    uploadingImage.value = false;
+  }
+};
+
+const removeImage = async () => {
+  if (!selectedLead.value?.image_url) return;
+  if (!(await confirmDialog({ title: 'Xóa ảnh của khách hàng này?', confirmText: 'Xóa ảnh' }))) return;
+  try {
+    await leadApi.deleteImage(selectedLead.value.id);
+    selectedLead.value.image_url = null;
+    notify.success('Đã xóa ảnh!');
+  } catch (err) {
+    notify.apiError(err, 'Không xóa được ảnh');
   }
 };
 
@@ -350,7 +368,6 @@ const openEditModal = (lead) => {
     center: lead.center || defaultCenter.value,
     trial_date: lead.trial_date ? String(lead.trial_date).slice(0, 10) : '',
     notes: lead.notes || '',
-    image_url: lead.image_url || '',
   };
   showCreateModal.value = true;
 };
@@ -368,7 +385,6 @@ const openCreateModal = () => {
     center: filterCenter.value !== 'all' ? filterCenter.value : defaultCenter.value,
     trial_date: '',
     notes: '',
-    image_url: '',
   };
   showCreateModal.value = true;
 };
@@ -553,7 +569,9 @@ const submitCreateLead = async () => {
                     '!bg-emerald-600': lead.status === 'registered',
                     '!bg-slate-500': lead.status === 'lost',
                   }">
-                  <option v-for="st in statusOptions" :key="st.value" :value="st.value">
+                  <!-- Danh sách xổ xuống nền sáng cho dễ đọc (không kế thừa màu đậm của ô trạng thái) -->
+                  <option v-for="st in statusOptions" :key="st.value" :value="st.value"
+                    class="bg-white text-slate-800 font-medium dark:bg-slate-800 dark:text-slate-100">
                     {{ st.label }}
                   </option>
                 </select>
@@ -601,7 +619,9 @@ const submitCreateLead = async () => {
               <!-- Nút [ 🖼️ Hình ảnh ] (Tím) -->
               <button type="button" @click="openImageModal(lead)"
                 class="inline-flex items-center gap-1 rounded-lg bg-purple-100 hover:bg-purple-200 text-purple-700 px-2.5 py-1 text-xs font-semibold border border-purple-200 transition-all cursor-pointer">
-                <Image class="h-3.5 w-3.5 text-purple-600" />
+                <!-- Đã có ảnh: hiện ảnh nhỏ thay biểu tượng -->
+                <img v-if="lead.image_url" :src="imageSrc(lead.image_url)" alt="" class="h-4 w-4 rounded object-cover" />
+                <Image v-else class="h-3.5 w-3.5 text-purple-600" />
                 <span>Hình ảnh</span>
               </button>
 
@@ -867,32 +887,47 @@ const submitCreateLead = async () => {
           Lưu trữ hình ảnh phiếu đăng ký, kết quả bài test đầu vào hoặc ảnh chân dung của học viên.
         </p>
 
-        <div>
-          <label class="block text-xs font-semibold text-slate-700 mb-1">Link URL hình ảnh</label>
-          <input v-model="imageUrlInput" type="url" placeholder="https://..."
-            class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none" />
+        <input ref="imageInput" type="file" accept="image/*" class="hidden" @change="uploadImage" />
+
+        <!-- Đã có ảnh: xem trước, bấm để mở ảnh lớn -->
+        <div v-if="selectedLead.image_url" class="space-y-2">
+          <a :href="imageSrc(selectedLead.image_url)" target="_blank" rel="noopener"
+            class="block rounded-xl border border-slate-200 overflow-hidden bg-slate-50" title="Bấm để xem ảnh lớn">
+            <img :src="imageSrc(selectedLead.image_url)" alt="Ảnh của khách hàng" class="mx-auto max-h-80 object-contain" />
+          </a>
+          <div class="flex flex-wrap justify-center gap-2">
+            <button type="button" @click="imageInput?.click()" :disabled="uploadingImage"
+              class="inline-flex items-center gap-1.5 rounded-xl border border-purple-200 bg-purple-50 px-4 py-2 text-xs font-semibold text-purple-700 hover:bg-purple-100 disabled:opacity-50">
+              <Image class="h-3.5 w-3.5" />
+              {{ uploadingImage ? 'Đang tải ảnh...' : 'Đổi ảnh khác' }}
+            </button>
+            <button type="button" @click="removeImage" :disabled="uploadingImage"
+              class="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-4 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50">
+              <Trash2 class="h-3.5 w-3.5" />
+              Xóa ảnh
+            </button>
+          </div>
         </div>
 
-        <div v-if="imageUrlInput"
-          class="rounded-xl border border-slate-200 overflow-hidden max-h-64 flex items-center justify-center bg-slate-50">
-          <img :src="imageUrlInput" alt="Ảnh phiếu đăng ký" class="max-h-64 object-contain" />
-        </div>
+        <!-- Chưa có ảnh: khung bấm để chọn ảnh từ máy / điện thoại -->
+        <button v-else type="button" @click="imageInput?.click()" :disabled="uploadingImage"
+          class="flex w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-purple-200 bg-purple-50/40 px-4 py-10 text-purple-700 hover:bg-purple-50 disabled:opacity-60">
+          <Image class="h-8 w-8 text-purple-400" />
+          <span class="text-sm font-semibold">{{ uploadingImage ? 'Đang tải ảnh...' : 'Bấm để chọn ảnh' }}</span>
+          <span class="text-[11px] text-slate-500">Ảnh từ máy tính hoặc chụp bằng điện thoại (JPG, PNG). Ảnh lớn tự thu nhỏ.</span>
+        </button>
 
-        <div class="flex justify-end gap-2 pt-2 border-t border-slate-100">
+        <div class="flex justify-end pt-2 border-t border-slate-100">
           <button type="button" @click="showImageModal = false"
             class="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">
             Đóng
-          </button>
-          <button type="button" @click="submitImage"
-            class="rounded-xl bg-purple-600 hover:bg-purple-700 px-5 py-2 text-xs font-semibold text-white shadow-2xs">
-            Lưu hình ảnh
           </button>
         </div>
       </div>
     </Modal>
 
     <!-- MODAL 5: MẪU TIN NHẮN (💬) -->
-    <MessageTemplateModal :show="showMessageModal" :student="selectedLead" :templates="leadTemplates"
+    <MessageTemplateModal group="lead" :show="showMessageModal" :student="selectedLead"
       @close="showMessageModal = false" />
   </div>
 </template>

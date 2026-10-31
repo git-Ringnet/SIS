@@ -14,7 +14,6 @@ const selectedCenter = ref('all');
 const selectedYear = ref(new Date().getFullYear());
 const students = ref([]);
 const centers = ref([]);
-const templates = ref([]);
 
 // Modal
 const showTemplateModal = ref(false);
@@ -30,7 +29,6 @@ const fetchData = async () => {
     });
     students.value = res.data.students || [];
     centers.value = res.data.centers || [];
-    templates.value = res.data.templates || [];
   } catch (err) {
     console.error('Error fetching birthdays:', err);
   } finally {
@@ -150,7 +148,7 @@ const openGreetingModal = (student) => {
     </div>
 
     <!-- MODAL MẪU TIN NHẮN CHÚC MỪNG SINH NHẬT -->
-    <MessageTemplateModal :show="showTemplateModal" :student="selectedStudent" :templates="templates"
+    <MessageTemplateModal group="birthday" :show="showTemplateModal" :student="selectedStudent"
       @close="showTemplateModal = false" />
   </div>
 </template>

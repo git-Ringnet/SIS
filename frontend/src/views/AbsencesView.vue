@@ -28,7 +28,6 @@ const rooms = ref([]);
 const teachers = ref([]);
 const students = ref([]);
 const centers = ref([]);
-const templates = ref([]);
 const totalCount = ref(0);
 
 const roomOptions = computed(() => rooms.value.map((r) => ({ id: r, name: r })));
@@ -73,7 +72,6 @@ const fetchData = async () => {
     students.value = res.data.students || [];
     totalCount.value = res.data.total || 0;
     centers.value = res.data.centers || [];
-    templates.value = res.data.templates || [];
     parentLeaveRequests.value = res.data.parent_leave_requests || [];
     rooms.value = res.data.rooms || [];
     teachers.value = res.data.teachers || [];
@@ -501,7 +499,7 @@ const openMessageModal = (st) => {
     </div>
 
     <!-- MODAL 3: MẪU TIN NHẮN -->
-    <MessageTemplateModal :show="showMessageModal" :student="selectedStudent" :templates="templates"
+    <MessageTemplateModal group="absence" :show="showMessageModal" :student="selectedStudent"
       @close="showMessageModal = false" />
   </div>
 </template>

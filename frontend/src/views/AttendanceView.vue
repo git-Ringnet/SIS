@@ -92,19 +92,6 @@ const noteForm = ref({
   content: '',
 });
 
-// Mẫu tin nhắn
-const attendanceTemplates = ref([
-  {
-    id: 1,
-    title: 'Báo bài buổi học gửi phụ huynh',
-    template_content: 'Chào phụ huynh bé {ten_hoc_vien}! Trung tâm gửi báo bài buổi học {khoa_hoc} ngày {ngay_hoc}:\n\n{nhan_xet}\n\nCon còn {so_buoi_con_lai} buổi học. Ba mẹ nhớ nhắc con luyện tập ở nhà nhé ạ! ❤️',
-  },
-  {
-    id: 2,
-    title: 'Thông báo học viên vắng học',
-    template_content: 'Dạ trung tâm xin chào phụ huynh {ten_hoc_vien}! Hôm nay không thấy bé đến lớp học môn {khoa_hoc}, trung tâm nhắn tin hỏi thăm tình hình sức khỏe của con ạ. Ba mẹ phản hồi giúp trung tâm để xếp lịch học bù cho bé nhé!',
-  },
-]);
 
 // Ngày của danh sách đang hiển thị: điểm danh luôn gửi ngày này (không phải ngày vừa chọn mà danh sách chưa tải xong),
 // tránh ghi buổi của ngày mới vào ca của ngày cũ khi đổi ngày rồi bấm quá nhanh
@@ -997,7 +984,7 @@ const openMessageModal = (student) => {
     </div>
 
     <!-- MODAL 3: MẪU TIN NHẮN -->
-    <MessageTemplateModal :show="showMessageModal" :student="selectedStudent" :templates="attendanceTemplates"
+    <MessageTemplateModal group="attendance" :show="showMessageModal" :student="selectedStudent"
       @close="showMessageModal = false" />
   </div>
 </template>

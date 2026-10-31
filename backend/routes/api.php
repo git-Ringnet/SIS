@@ -86,6 +86,7 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::post('/', [MessageTemplateApiController::class, 'store']);
         Route::put('/{template}', [MessageTemplateApiController::class, 'update']);
         Route::post('/{template}/reset', [MessageTemplateApiController::class, 'reset']);
+        Route::delete('/{template}', [MessageTemplateApiController::class, 'destroy']);
     });
 
     // Leads CRM
@@ -96,6 +97,8 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::put('/{lead}', [LeadApiController::class, 'update']);
         Route::post('/{lead}/status', [LeadApiController::class, 'updateStatus']);
         Route::post('/{lead}/convert', [LeadApiController::class, 'convertToStudent']);
+        Route::post('/{lead}/image', [LeadApiController::class, 'uploadImage']);
+        Route::delete('/{lead}/image', [LeadApiController::class, 'deleteImage']);
         Route::delete('/{lead}', [LeadApiController::class, 'destroy']);
     });
 

@@ -18,7 +18,8 @@ import {
   ChevronDown, 
   ChevronUp,
   Plus,
-  Eye
+  Eye,
+  Trash2
 } from 'lucide-vue-next';
 import { messageTemplateApi } from '../services/api';
 
@@ -34,6 +35,11 @@ const props = defineProps({
   templates: {
     type: Array,
     default: () => [],
+  },
+  // Trang đang mở (renewal | attendance | absence | birthday | lead | inactive): mỗi trang có nhóm mẫu riêng
+  group: {
+    type: String,
+    default: 'renewal',
   },
 });
 
@@ -71,38 +77,18 @@ const availableVariables = [
   { tag: '{so_buoi_con_duoc_nghi}', label: 'Số buổi còn được nghỉ', desc: 'Số buổi còn được nghỉ có phép của khóa', example: '2/3' },
 ];
 
-const categories = [
-  { id: 'all', label: 'Tất cả mẫu' },
-  { id: 'tuition_reminder', label: 'Nhắc học phí' },
-  { id: 'absence_alert', label: 'Cảnh báo vắng' },
-  { id: 'payment_confirmation', label: 'Xác nhận đóng phí' },
-  { id: 'general_care', label: 'Chăm sóc & Lời khen' },
-];
+// Loại mẫu của trang (backend trả về theo nhóm), dùng cho bộ lọc và ô chọn khi thêm mẫu
+const categoryOptions = ref([]);
+const categories = computed(() => [{ id: 'all', label: 'Tất cả mẫu' }, ...categoryOptions.value]);
+const categoryLabel = (id) => categoryOptions.value.find((c) => c.id === id)?.label || id;
 
-// Initialize and sync templates
-watch(() => props.templates, (newVal) => {
-  if (newVal && newVal.length > 0) {
-    localTemplates.value = JSON.parse(JSON.stringify(newVal));
-  }
-}, { immediate: true, deep: true });
-
-// If templates were empty, fetch them from backend API
-watch(() => props.show, async (isOpen) => {
-  if (isOpen && (!localTemplates.value || localTemplates.value.length === 0)) {
-    try {
-      const res = await messageTemplateApi.getAll();
-      if (res.data?.templates) {
-        localTemplates.value = res.data.templates;
-      }
-    } catch (e) {
-      console.error('Lỗi khi tải mẫu tin nhắn:', e);
-    }
-  }
-});
-
+const NEW_ID = 'new';
 const filteredTemplates = computed(() => {
-  if (selectedCategory.value === 'all') return localTemplates.value;
-  return localTemplates.value.filter(t => t.category === selectedCategory.value);
+  const list = selectedCategory.value === 'all'
+    ? localTemplates.value
+    : localTemplates.value.filter(t => t.category === selectedCategory.value);
+  // Đang thêm mẫu mới: thẻ soạn mẫu nằm đầu danh sách
+  return editingTemplateId.value === NEW_ID ? [{ ...editForm.value, id: NEW_ID }, ...list] : list;
 });
 
 const formatVND = (val) => {
@@ -177,6 +163,34 @@ const startEdit = (tmpl) => {
   });
 };
 
+// Thêm mẫu mới: mặc định thuộc loại đang lọc (hoặc loại đầu tiên của trang)
+const startCreate = () => {
+  editingTemplateId.value = NEW_ID;
+  editForm.value = {
+    id: null,
+    title: '',
+    template_content: '',
+    category: selectedCategory.value !== 'all' ? selectedCategory.value : (categoryOptions.value[0]?.id || 'general_care'),
+  };
+  nextTick(() => textareaRefs.value[NEW_ID]?.focus());
+};
+
+// Xóa mẫu tự tạo (mẫu mặc định chỉ sửa / khôi phục gốc)
+const deleteTemplate = async (tmpl) => {
+  if (!(await confirmDialog({
+    title: 'Xóa mẫu tin nhắn?',
+    message: `Mẫu "${tmpl.title}" sẽ bị xóa khỏi danh sách.`,
+    confirmText: 'Xóa',
+  }))) return;
+  try {
+    await messageTemplateApi.remove(tmpl.id);
+    localTemplates.value = localTemplates.value.filter((t) => t.id !== tmpl.id);
+    notify.success('Đã xóa mẫu tin nhắn!');
+  } catch (err) {
+    notify.apiError(err, 'Không xóa được mẫu tin nhắn');
+  }
+};
+
 // Cancel editing
 const cancelEdit = () => {
   editingTemplateId.value = null;
@@ -187,6 +201,23 @@ const cancelEdit = () => {
     category: '',
   };
 };
+
+// Mỗi lần mở: tải mẫu của trang từ backend (loại mẫu chưa có thì backend tự tạo mẫu mặc định)
+watch(() => props.show, async (isOpen) => {
+  if (!isOpen) return;
+  cancelEdit();
+  try {
+    const res = await messageTemplateApi.getAll({ group: props.group });
+    localTemplates.value = res.data?.templates || [];
+    categoryOptions.value = res.data?.categories || [];
+    if (selectedCategory.value !== 'all' && !categoryOptions.value.some((c) => c.id === selectedCategory.value)) {
+      selectedCategory.value = 'all';
+    }
+  } catch (e) {
+    console.error('Lỗi khi tải mẫu tin nhắn:', e);
+    localTemplates.value = JSON.parse(JSON.stringify(props.templates || []));
+  }
+}, { immediate: true });
 
 // Insert variable tag at cursor position
 const insertVariable = (tag) => {
@@ -220,23 +251,27 @@ const saveTemplate = async (tmpl) => {
 
   isSaving.value = true;
   try {
-    const res = await messageTemplateApi.update(tmpl.id, {
+    const payload = {
       title: editForm.value.title.trim(),
       template_content: editForm.value.template_content.trim(),
-      category: editForm.value.category,
-    });
-
-    const updated = res.data.template;
-
-    // Update in local state
-    const index = localTemplates.value.findIndex(t => t.id === tmpl.id);
-    if (index !== -1) {
-      localTemplates.value[index] = { ...localTemplates.value[index], ...updated };
+    };
+    let updated;
+    if (tmpl.id === NEW_ID) {
+      const res = await messageTemplateApi.create({ ...payload, category: editForm.value.category });
+      updated = res.data.template;
+      localTemplates.value.push(updated);
+    } else {
+      const res = await messageTemplateApi.update(tmpl.id, payload);
+      updated = res.data.template;
+      const index = localTemplates.value.findIndex(t => t.id === tmpl.id);
+      if (index !== -1) {
+        localTemplates.value[index] = { ...localTemplates.value[index], ...updated };
+      }
     }
 
     emit('template-updated', updated);
 
-    saveSuccessId.value = tmpl.id;
+    saveSuccessId.value = updated.id;
     setTimeout(() => {
       saveSuccessId.value = null;
     }, 2500);
@@ -244,7 +279,7 @@ const saveTemplate = async (tmpl) => {
     editingTemplateId.value = null;
   } catch (err) {
     console.error('Lỗi khi lưu mẫu tin nhắn:', err);
-    notify.error('Không thể lưu mẫu tin nhắn. Vui lòng thử lại!');
+    notify.apiError(err, 'Không thể lưu mẫu tin nhắn. Vui lòng thử lại!');
   } finally {
     isSaving.value = false;
   }
@@ -266,6 +301,7 @@ const resetToDefault = async (tmpl) => {
     const res = await messageTemplateApi.reset(tmpl.id);
     const updated = res.data.template;
 
+    editForm.value.title = updated.title;
     editForm.value.template_content = updated.template_content;
     const index = localTemplates.value.findIndex(t => t.id === tmpl.id);
     if (index !== -1) {
@@ -338,8 +374,8 @@ const resetToDefault = async (tmpl) => {
           </div>
         </div>
 
-        <!-- Category Filter Pills -->
-        <div class="mt-3 flex flex-wrap gap-1.5">
+        <!-- Category Filter Pills + thêm mẫu mới -->
+        <div class="mt-3 flex flex-wrap items-center gap-1.5">
           <button
             v-for="cat in categories"
             :key="cat.id"
@@ -348,6 +384,14 @@ const resetToDefault = async (tmpl) => {
             :class="selectedCategory === cat.id ? 'bg-indigo-600 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
           >
             {{ cat.label }}
+          </button>
+          <button
+            @click="startCreate"
+            :disabled="editingTemplateId === NEW_ID"
+            class="ml-auto inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+          >
+            <Plus class="h-3.5 w-3.5" />
+            <span>Thêm mẫu mới</span>
           </button>
         </div>
       </div>
@@ -365,8 +409,19 @@ const resetToDefault = async (tmpl) => {
               <div class="flex items-center gap-2">
                 <span class="flex h-2 w-2 rounded-full bg-indigo-500"></span>
                 <h4 class="text-sm font-semibold text-slate-800">{{ tmpl.title }}</h4>
+                <span v-if="categoryOptions.length > 1" class="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">{{ categoryLabel(tmpl.category) }}</span>
               </div>
               <div class="flex items-center gap-2">
+                <!-- Xóa mẫu tự tạo -->
+                <button
+                  v-if="!tmpl.default_key"
+                  @click="deleteTemplate(tmpl)"
+                  class="inline-flex items-center rounded-lg border border-slate-200 bg-white p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-colors"
+                  title="Xóa mẫu tin nhắn này"
+                >
+                  <Trash2 class="h-3.5 w-3.5" />
+                </button>
+
                 <!-- Edit Button -->
                 <button
                   @click="startEdit(tmpl)"
@@ -403,7 +458,7 @@ const resetToDefault = async (tmpl) => {
               <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
                 <div class="flex items-center gap-2">
                   <span class="flex h-2 w-2 rounded-full bg-amber-500 animate-pulse"></span>
-                  <span class="text-xs font-bold uppercase tracking-wider text-amber-700">Đang chỉnh sửa mẫu tin nhắn</span>
+                  <span class="text-xs font-bold uppercase tracking-wider text-amber-700">{{ tmpl.id === NEW_ID ? 'Thêm mẫu tin nhắn mới' : 'Đang chỉnh sửa mẫu tin nhắn' }}</span>
                 </div>
                 <div class="flex items-center gap-1.5">
                   <button
@@ -417,6 +472,7 @@ const resetToDefault = async (tmpl) => {
                     <ChevronDown v-else class="h-3 w-3" />
                   </button>
                   <button
+                    v-if="tmpl.default_key"
                     @click="resetToDefault(tmpl)"
                     :disabled="isSaving"
                     type="button"
@@ -427,6 +483,17 @@ const resetToDefault = async (tmpl) => {
                     <span>Khôi phục gốc</span>
                   </button>
                 </div>
+              </div>
+
+              <!-- Loại mẫu (chỉ khi thêm mới, trang có nhiều loại) -->
+              <div v-if="tmpl.id === NEW_ID && categoryOptions.length > 1">
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Loại mẫu:</label>
+                <select
+                  v-model="editForm.category"
+                  class="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-800 shadow-xs focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ c.label }}</option>
+                </select>
               </div>
 
               <!-- Title input -->

@@ -7,8 +7,8 @@ use App\Models\Attendance;
 use App\Models\Course;
 use App\Models\Invoice;
 use App\Models\Lead;
-use App\Models\MessageTemplate;
 use App\Models\Student;
+use App\Support\MessageTemplateDefaults;
 use App\Support\PagePermissions;
 use App\Support\StudentSchedule;
 use Carbon\Carbon;
@@ -133,7 +133,7 @@ class DashboardApiController extends Controller
                 $q->where('center', 'like', "%{$centerFilter}%");
             }
         }])->get();
-        $templates = MessageTemplate::all();
+        $templates = MessageTemplateDefaults::forGroup('renewal');
 
         // 8. Việc cần xử lý hôm nay (Today's Urgent Actions)
         $todoDebtInvoices = $debtInvoicesCount;

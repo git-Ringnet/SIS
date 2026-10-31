@@ -11,6 +11,7 @@ use App\Support\CenterStore;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class LeadApiController extends Controller
@@ -106,7 +107,6 @@ class LeadApiController extends Controller
             'notes' => 'nullable|string',
             'assigned_to' => 'nullable|string|max:255',
             'center' => 'nullable|string|max:255',
-            'image_url' => 'nullable|string|max:1000',
         ];
     }
 
@@ -237,9 +237,49 @@ class LeadApiController extends Controller
         ]);
     }
 
+    /**
+     * Tải ảnh phiếu đăng ký / bài test / ảnh học viên của khách (thay ảnh cũ). Ảnh lưu ở storage public (leads/).
+     */
+    public function uploadImage(Request $request, Lead $lead): JsonResponse
+    {
+        $request->validate([
+            'image' => 'required|image|mimes:jpeg,png,jpg,webp|max:5120',
+        ]);
+
+        $this->deleteStoredImage($lead);
+        $lead->image_url = Storage::url($request->file('image')->store('leads', 'public'));
+        $lead->save();
+
+        return response()->json([
+            'message' => 'Đã tải ảnh lên!',
+            'image_url' => $lead->image_url,
+        ]);
+    }
+
+    public function deleteImage(Lead $lead): JsonResponse
+    {
+        $this->deleteStoredImage($lead);
+        $lead->image_url = null;
+        $lead->save();
+
+        return response()->json(['message' => 'Đã xóa ảnh!']);
+    }
+
+    /**
+     * Xóa file ảnh đã tải lên (ảnh cũ dạng đường dẫn ngoài thì không có file để xóa).
+     */
+    private function deleteStoredImage(Lead $lead): void
+    {
+        $prefix = Storage::url('leads/');
+        if ($lead->image_url && str_starts_with($lead->image_url, $prefix)) {
+            Storage::disk('public')->delete('leads/'.substr($lead->image_url, strlen($prefix)));
+        }
+    }
+
     public function destroy(Lead $lead): JsonResponse
     {
         $name = $lead->parent_name;
+        $this->deleteStoredImage($lead);
         $lead->delete();
 
         return response()->json([

@@ -46,18 +46,6 @@ const editForm = ref({
 });
 const savingEdit = ref(false);
 
-const templates = ref([
-  {
-    id: 1,
-    title: 'Mời học viên quay lại lớp sau kỳ bảo lưu',
-    template_content: 'Dạ em chào anh/chị {ten_phu_huynh} ạ. Em là quản lý tại trung tâm. Thời gian bảo lưu/tạm dừng của bé {ten_hoc_vien} sắp kết thúc rồi ạ. Thầy cô bộ môn {khoa_hoc} đang rất mong gặp lại con. Anh/chị cho em xin lịch rảnh trong tuần để trung tâm xếp khung giờ đẹp nhất cho con quay lại lớp nhé ạ!',
-  },
-  {
-    id: 2,
-    title: 'Hỏi thăm học viên đã nghỉ & Giới thiệu khóa mới',
-    template_content: 'Dạ em chào anh/chị {ten_phu_huynh}. Lâu rồi trung tâm chưa gặp lại bé {ten_hoc_vien}. Không biết dạo này bé có còn tự luyện tập tại nhà không ạ? Tháng này trung tâm đang có chương trình trải nghiệm nâng cao và ưu đãi đặc quyền cho cựu học viên quay lại lớp, bố mẹ tham khảo qua nhé ạ!',
-  },
-]);
 
 const showToast = (msg, type = 'success') => {
   if (type === 'success') {
@@ -442,7 +430,7 @@ const formatDate = (val) => {
     </div>
 
     <!-- MODAL MẪU TIN NHẮN -->
-    <MessageTemplateModal :show="showTemplateModal" :student="selectedStudent" :templates="templates"
+    <MessageTemplateModal group="inactive" :show="showTemplateModal" :student="selectedStudent"
       @close="showTemplateModal = false" />
   </div>
 </template>

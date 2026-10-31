@@ -4,10 +4,10 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Attendance;
-use App\Models\MessageTemplate;
 use App\Models\RetentionLog;
 use App\Models\Student;
 use App\Support\CenterStore;
+use App\Support\MessageTemplateDefaults;
 use App\Support\SingleLessons;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -67,21 +67,7 @@ class AbsenceApiController extends Controller
             ];
         });
 
-        $templates = MessageTemplate::where('category', 'absence_care')->get();
-        if ($templates->isEmpty()) {
-            $templates = collect([
-                [
-                    'id' => 1,
-                    'title' => 'Hỏi thăm học viên vắng 2 buổi & Hẹn lịch học bù',
-                    'template_content' => 'Dạ trung tâm xin chào phụ huynh {ten_hoc_vien} ạ! Thầy cô thấy bé đã vắng 2 buổi học gần đây nên nhắn tin hỏi thăm tình hình sức khỏe và lịch trình của bé ạ. Trung tâm có thể hỗ trợ sắp xếp lịch học bù bổ sung kiến thức cho con vào tuần tới, anh/chị tiện giờ nào để trung tâm xếp lớp cho bé ạ? ❤️',
-                ],
-                [
-                    'id' => 2,
-                    'title' => 'Nhắc lịch học và giữ số buổi bảo lưu',
-                    'template_content' => 'Chào anh/chị phụ huynh bé {ten_hoc_vien}! Khóa học {khoa_hoc} của con hiện còn {buoi_con_lai} buổi. Để đảm bảo tiến độ và phản xạ ngón đàn của bé, trung tâm gửi tin nhắn để hỗ trợ gia đình mình sắp xếp lịch học sớm nhất nhé ạ!',
-                ],
-            ]);
-        }
+        $templates = MessageTemplateDefaults::forGroup('absence');
 
         $centers = CenterStore::names();
 

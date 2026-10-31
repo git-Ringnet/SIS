@@ -20,7 +20,6 @@ import {
 } from 'lucide-vue-next';
 
 const students = ref([]);
-const templates = ref([]);
 const courses = ref([]);
 const counts = ref({
   total_expiring: 0,
@@ -57,7 +56,6 @@ const fetchData = async () => {
       return fetchData();
     }
     students.value = res.data.students || [];
-    templates.value = res.data.templates || [];
     courses.value = res.data.courses || [];
     counts.value = res.data.counts || {};
   } catch (err) {
@@ -380,10 +378,9 @@ const formatDate = (val) => {
     </div>
 
     <!-- Modals -->
-    <MessageTemplateModal
+    <MessageTemplateModal group="renewal"
       :show="showTemplateModal"
       :student="selectedStudent"
-      :templates="templates"
       @close="showTemplateModal = false"
     />
 
