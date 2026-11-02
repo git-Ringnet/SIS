@@ -184,13 +184,8 @@ const lockPortal = () => {
 };
 
 // Lọc danh sách buổi học
-// Buổi của các khóa đang học (khóa đã xong thu gọn riêng)
-const courseSessions = computed(() => {
-  const all = portalData.value?.sessions || [];
-  const active = doneIds.value.length ? all.filter((x) => !doneIds.value.includes(courseOfSession(x))) : all;
-  return courseFilter.value === 'all' ? active : active.filter((x) => courseOfSession(x) === courseFilter.value);
-});
-
+// Một khóa: mọi buổi; học nhiều khóa: buổi nằm trong khối của từng khóa (courseGroups)
+const courseSessions = computed(() => portalData.value?.sessions || []);
 const applyFilter = (list) => {
   switch (sessionFilter.value) {
     case 'completed':
@@ -206,39 +201,41 @@ const applyFilter = (list) => {
   }
 };
 const filteredSessions = computed(() => applyFilter(courseSessions.value));
-const filteredAll = computed(() => applyFilter(portalData.value?.sessions || []));
 
 const countBy = (fn) => courseSessions.value.filter(fn).length;
 
-// Học từ 2 khóa (song song hoặc học tiếp): mặc định chỉ hiện các khóa đang học (song song thì xen kẽ theo ngày);
-// khóa đã học xong gom thành một dòng gọn đầu danh sách, bấm mới mở các buổi của khóa đó (phụ huynh xem bằng điện thoại)
+// Học từ 2 khóa (song song hoặc học tiếp): mỗi khóa một khối thu gọn / mở được (phụ huynh xem bằng điện thoại);
+// mặc định chỉ mở khóa đang học hiện tại, các khóa khác thu gọn, bấm tiêu đề để mở
 const courseList = computed(() => portalData.value?.courses || []);
 const hasManyCourses = computed(() => courseList.value.length > 1);
 const activeCourses = computed(() => courseList.value.filter((c) => !c.completed));
-// Khóa đã xong được thu gọn (chỉ khi còn khóa đang học; tất cả đã xong thì hiện như bình thường)
-const doneCourses = computed(() => (hasManyCourses.value && activeCourses.value.length ? courseList.value.filter((c) => c.completed) : []));
-const doneIds = computed(() => doneCourses.value.map((c) => c.course_item_id));
-const openDone = ref({});
-// Lọc theo khóa (từ 2 khóa đang học): 'all' = tất cả khóa đang học
-const courseFilter = ref('all');
-const showCourseFilter = computed(() => activeCourses.value.length > 1);
-watch(() => activeCourses.value.map((c) => c.course_item_id).join(','), () => {
-  if (courseFilter.value !== 'all' && !activeCourses.value.some((c) => c.course_item_id === courseFilter.value)) courseFilter.value = 'all';
-});
-// Màu nhãn tên khóa trên từng buổi (đang xem tất cả khóa đang học)
-const COURSE_COLORS = ['bg-indigo-100 text-indigo-800', 'bg-pink-100 text-pink-800', 'bg-teal-100 text-teal-800', 'bg-orange-100 text-orange-800'];
-const courseColor = (id) => COURSE_COLORS[Math.max(0, activeCourses.value.findIndex((c) => c.course_item_id === id)) % COURSE_COLORS.length];
+const openGroups = ref({});
+watch(() => [portalData.value?.current_course_item_id, courseList.value.length], ([id]) => {
+  openGroups.value = id != null ? { [id]: true } : {};
+}, { immediate: true });
+const toggleGroup = (id) => {
+  openGroups.value = { ...openGroups.value, [id]: !openGroups.value[id] };
+};
 // Buổi không gắn khóa (dữ liệu cũ) tính cho khóa đang học
 const courseOfSession = (sess) => sess.course_item_id ?? portalData.value?.current_course_item_id ?? courseList.value[0]?.course_item_id;
-// Buổi của một khóa đã xong (theo bộ lọc đang chọn)
-const doneSessions = (id) => filteredAll.value.filter((x) => courseOfSession(x) === id);
+// Khối từng khóa: khóa đang học trước (theo ngày bắt đầu), khóa đã xong sau (mới nhất trước); một khóa thì một khối không tiêu đề
+const startKey = (c) => (c.start || '').split('/').reverse().join('');
+const courseGroups = computed(() => {
+  if (!hasManyCourses.value) return [{ id: 'all', course: null, sessions: filteredSessions.value }];
+  const active = [...activeCourses.value].sort((a, b) => startKey(a).localeCompare(startKey(b)));
+  const done = courseList.value.filter((c) => c.completed).sort((a, b) => startKey(b).localeCompare(startKey(a)));
+  return [...active, ...done].map((c) => ({
+    id: c.course_item_id,
+    course: c,
+    sessions: filteredSessions.value.filter((x) => courseOfSession(x) === c.course_item_id),
+  }));
+});
 
 // Số liệu các thẻ: học nhiều khóa thì cộng các khóa đang học, không thì tổng như trước
 const viewStats = computed(() => {
   const all = portalData.value?.stats || {};
-  // Đang lọc một khóa: số liệu khóa đó; học nhiều khóa: cộng các khóa đang học
-  const picked = activeCourses.value.filter((c) => c.course_item_id === courseFilter.value);
-  const list = picked.length ? picked : (doneCourses.value.length || showCourseFilter.value ? activeCourses.value : []);
+  // Học nhiều khóa: cộng các khóa đang học (khóa đã xong không tính); một khóa / tất cả đã xong: tổng như trước
+  const list = hasManyCourses.value ? activeCourses.value : [];
   if (!list.length) return all;
   const sum = (key) => list.reduce((t, c) => t + Number(c.stats?.[key] || 0), 0);
   const total = sum('total_sessions');
@@ -772,14 +769,6 @@ onMounted(() => {
         <div v-if="activeTab === 'sessions'" class="space-y-4">
           <!-- Bộ lọc trạng thái buổi học -->
           <div class="flex flex-wrap items-center justify-between gap-3 bg-white p-3 rounded-2xl border border-slate-200/80">
-            <!-- Học từ 2 khóa: chọn khóa để xem (điện thoại mở bảng chọn của máy, không chiếm chỗ) -->
-            <label v-if="showCourseFilter" class="w-full flex items-center gap-2 text-xs">
-              <span class="text-slate-400 text-[11px] font-semibold shrink-0">Khóa:</span>
-              <select v-model="courseFilter" class="flex-1 min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-bold text-slate-800 focus:border-indigo-500 focus:outline-none">
-                <option value="all">Tất cả khóa đang học ({{ activeCourses.length }})</option>
-                <option v-for="c in activeCourses" :key="c.course_item_id" :value="c.course_item_id">{{ c.course_name }}</option>
-              </select>
-            </label>
             <div class="flex flex-wrap items-center gap-1.5 text-xs">
               <span class="text-slate-400 text-[11px] font-semibold mr-1">Bộ lọc:</span>
               <button
@@ -807,125 +796,130 @@ onMounted(() => {
 
           <!-- Danh sách card các buổi học -->
           <div class="space-y-3">
-            <p v-if="filteredSessions.length === 0" class="bg-white rounded-2xl p-6 border border-slate-200/80 text-center text-xs text-slate-400">
+            <p v-if="!hasManyCourses && filteredSessions.length === 0" class="bg-white rounded-2xl p-6 border border-slate-200/80 text-center text-xs text-slate-400">
               Không có buổi học nào.
             </p>
-            <!-- Khóa đã học xong (đang học khóa khác): gom gọn, bấm để xem lại các buổi -->
-            <div v-for="c in doneCourses" :key="`done-${c.course_item_id}`" class="rounded-2xl border border-slate-200 bg-slate-50">
-              <button type="button" @click="openDone = { ...openDone, [c.course_item_id]: !openDone[c.course_item_id] }"
-                class="w-full flex items-center justify-between gap-2 px-4 py-3 text-left text-xs">
+            <!-- Học nhiều khóa: mỗi khóa một khối, mặc định chỉ mở khóa đang học hiện tại; bấm tiêu đề để mở / thu gọn -->
+            <template v-for="g in courseGroups" :key="g.id">
+              <button
+                v-if="g.course"
+                type="button"
+                @click="toggleGroup(g.id)"
+                class="w-full flex items-center justify-between gap-2 rounded-2xl border px-4 py-3 text-left text-xs transition-colors"
+                :class="g.course.completed ? 'bg-slate-50 border-slate-200' : 'bg-indigo-50/60 border-indigo-200'"
+              >
                 <span class="min-w-0">
-                  <span class="block font-extrabold text-slate-800 truncate">{{ c.course_name }}</span>
-                  <span class="text-slate-500">Hoàn thành · {{ c.total_sessions - c.remaining_sessions }}/{{ c.total_sessions }} buổi<template v-if="c.start"> · {{ c.start }}<template v-if="c.end"> → {{ c.end }}</template></template></span>
+                  <span class="flex items-center gap-2">
+                    <span class="font-extrabold text-slate-900 text-sm truncate">{{ g.course.course_name }}</span>
+                    <span class="shrink-0 px-2 py-0.5 rounded-full font-bold text-[11px]"
+                      :class="g.course.completed ? 'bg-slate-200 text-slate-600' : 'bg-emerald-100 text-emerald-800'">
+                      {{ g.course.completed ? 'Hoàn thành' : 'Đang học' }}
+                    </span>
+                  </span>
+                  <span class="block text-slate-500 mt-0.5">
+                    Đã học {{ g.course.total_sessions - g.course.remaining_sessions }}/{{ g.course.total_sessions }} buổi<template v-if="g.course.start"> · {{ g.course.start }}<template v-if="g.course.end"> → {{ g.course.end }}</template></template>
+                  </span>
                 </span>
-                <span class="shrink-0 font-bold text-indigo-600">{{ openDone[c.course_item_id] ? 'Thu gọn ▲' : 'Xem lại ▼' }}</span>
+                <span class="shrink-0 font-bold text-indigo-600">{{ openGroups[g.id] ? 'Thu gọn ▲' : 'Xem buổi ▼' }}</span>
               </button>
-              <div v-if="openDone[c.course_item_id]" class="px-3 pb-3 space-y-2">
-                <p v-if="!doneSessions(c.course_item_id).length" class="text-center text-[11px] text-slate-400 py-2">Không có buổi nào theo bộ lọc đang chọn.</p>
-                <div v-for="d in doneSessions(c.course_item_id)" :key="d.key" class="rounded-xl border bg-white px-3 py-2 text-xs flex flex-wrap items-center gap-x-3 gap-y-1" :class="styleOf(d).card">
-                  <span class="font-black text-slate-800">{{ d.session_number ? `Buổi ${d.session_number}` : d.status_label }}</span>
-                  <span class="px-2 py-0.5 rounded-full font-bold text-[11px]" :class="styleOf(d).badge">{{ d.status_label }}</span>
-                  <span class="text-slate-500">{{ d.weekday }}, {{ d.date }}<template v-if="d.time"> · {{ d.time }}</template></span>
-                </div>
-              </div>
-            </div>
-            <div
-              v-for="s in filteredSessions"
-              :key="s.key"
-              class="rounded-2xl p-4 sm:p-5 border shadow-xs transition-all duration-200"
-              :class="styleOf(s).card"
-            >
-              <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-                <div class="flex items-start gap-3.5">
-                  <!-- Số thứ tự buổi (chỉ buổi trừ vào số buổi học) -->
-                  <div
-                    class="h-10 w-10 sm:h-11 sm:w-11 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 border"
-                    :class="styleOf(s).number"
-                  >
-                    <template v-if="s.session_number">#{{ s.session_number }}</template>
-                    <CalendarOff v-else-if="s.status === 'off'" class="h-5 w-5" />
-                    <Calendar v-else class="h-5 w-5" />
-                  </div>
-
-                  <div class="space-y-1">
-                    <div class="flex flex-wrap items-center gap-2">
-                      <h4 class="text-sm font-extrabold text-slate-900">
-                        {{ s.session_number ? `Buổi ${s.session_number}` : s.status_label }}
-                      </h4>
-                      <span v-if="showCourseFilter && courseFilter === 'all' && s.course_name" class="px-2 py-0.5 rounded-md text-[11px] font-bold max-w-[160px] truncate" :class="courseColor(courseOfSession(s))">
-                        {{ s.course_name }}
-                      </span>
-
-                      <!-- Trạng thái -->
-                      <span v-if="s.session_number" class="px-2.5 py-0.5 rounded-full text-xs font-bold flex items-center gap-1" :class="styleOf(s).badge">
-                        <CheckCircle2 v-if="s.status === 'present'" class="h-3 w-3" />
-                        <AlertTriangle v-else-if="s.is_absent" class="h-3 w-3" />
-                        <Clock v-else class="h-3 w-3" />
-                        <span>{{ s.status_label }}</span>
-                      </span>
-
-                      <span v-if="s.is_makeup" class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-sky-100 text-sky-800 flex items-center gap-1">
-                        <RefreshCw class="h-3 w-3" /> Buổi bù
-                      </span>
-                      <span v-else-if="s.is_single_lesson" class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-100 text-indigo-800 flex items-center gap-1">
-                        <Calendar class="h-3 w-3" /> Học lẻ
-                      </span>
-
-                      <!-- Có trừ buổi hay không -->
-                      <span v-if="s.is_absent && !s.deducts_session" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-white border border-amber-200 text-amber-700">
-                        Không trừ buổi
-                      </span>
-                      <span v-else-if="s.is_absent" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-white border border-rose-200 text-rose-700">
-                        Trừ 1 buổi
-                      </span>
-                      <span v-else-if="s.status === 'off'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-white border border-violet-200 text-violet-700">
-                        Không trừ buổi · không cần xin nghỉ
-                      </span>
-                    </div>
-
-                    <!-- Ngày giờ học -->
-                    <div class="text-xs text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
-                      <span v-if="s.date" class="flex items-center gap-1" :class="s.status === 'upcoming' ? 'text-indigo-600 font-medium' : ''">
-                        <Calendar class="h-3.5 w-3.5" />
-                        <span>{{ s.weekday }}, {{ s.date }}</span>
-                      </span>
-                      <span v-else class="text-slate-400 italic">Chưa xếp lịch</span>
-                      <span v-if="s.time" class="flex items-center gap-1">
-                        <Clock class="h-3.5 w-3.5 text-slate-400" />
-                        <span>{{ s.time }}</span>
-                      </span>
-                      <span v-if="s.teacher" class="flex items-center gap-1">
-                        <User class="h-3.5 w-3.5 text-slate-400" />
-                        <span>GV: {{ s.teacher }}</span>
-                      </span>
-                      <span v-if="multiCourse && s.course_name && !showCourseFilter" class="flex items-center gap-1">
-                        <BookOpen class="h-3.5 w-3.5 text-slate-400" />
-                        <span>{{ s.course_name }}</span>
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Xin nghỉ buổi sắp tới -->
-                <button
-                  v-if="s.can_request_leave"
-                  type="button"
-                  @click="openLeaveModal(s)"
-                  class="self-start shrink-0 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold flex items-center gap-1.5"
+              <template v-if="!g.course || openGroups[g.id]">
+                <p v-if="g.course && !g.sessions.length" class="text-center text-[11px] text-slate-400 py-2">Không có buổi nào theo bộ lọc đang chọn.</p>
+                <div
+                  v-for="s in g.sessions"
+                  :key="s.key"
+                  class="rounded-2xl p-4 sm:p-5 border shadow-xs transition-all duration-200"
+                  :class="styleOf(s).card"
                 >
-                  <Calendar class="h-3.5 w-3.5 text-amber-600" />
-                  <span>Xin nghỉ buổi này</span>
-                </button>
-              </div>
+                  <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                    <div class="flex items-start gap-3.5">
+                      <!-- Số thứ tự buổi (chỉ buổi trừ vào số buổi học) -->
+                      <div
+                        class="h-10 w-10 sm:h-11 sm:w-11 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 border"
+                        :class="styleOf(s).number"
+                      >
+                        <template v-if="s.session_number">#{{ s.session_number }}</template>
+                        <CalendarOff v-else-if="s.status === 'off'" class="h-5 w-5" />
+                        <Calendar v-else class="h-5 w-5" />
+                      </div>
 
-              <!-- Nhận xét / lý do -->
-              <div v-if="s.note && s.status !== 'upcoming'" class="mt-3 text-xs bg-white/70 p-3 rounded-xl border border-slate-100">
-                <span class="font-bold text-slate-700 block mb-0.5">
-                  {{ s.status === 'present' ? 'Nhận xét buổi học:' : s.status === 'off' ? 'Lý do:' : 'Ghi chú:' }}
-                </span>
-                <ExpandableText :text="s.note" :lines="4" class="text-slate-600 leading-relaxed" />
-              </div>
-            </div>
+                      <div class="space-y-1">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <h4 class="text-sm font-extrabold text-slate-900">
+                            {{ s.session_number ? `Buổi ${s.session_number}` : s.status_label }}
+                          </h4>
+
+                          <!-- Trạng thái -->
+                          <span v-if="s.session_number" class="px-2.5 py-0.5 rounded-full text-xs font-bold flex items-center gap-1" :class="styleOf(s).badge">
+                            <CheckCircle2 v-if="s.status === 'present'" class="h-3 w-3" />
+                            <AlertTriangle v-else-if="s.is_absent" class="h-3 w-3" />
+                            <Clock v-else class="h-3 w-3" />
+                            <span>{{ s.status_label }}</span>
+                          </span>
+
+                          <span v-if="s.is_makeup" class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-sky-100 text-sky-800 flex items-center gap-1">
+                            <RefreshCw class="h-3 w-3" /> Buổi bù
+                          </span>
+                          <span v-else-if="s.is_single_lesson" class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-100 text-indigo-800 flex items-center gap-1">
+                            <Calendar class="h-3 w-3" /> Học lẻ
+                          </span>
+
+                          <!-- Có trừ buổi hay không -->
+                          <span v-if="s.is_absent && !s.deducts_session" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-white border border-amber-200 text-amber-700">
+                            Không trừ buổi
+                          </span>
+                          <span v-else-if="s.is_absent" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-white border border-rose-200 text-rose-700">
+                            Trừ 1 buổi
+                          </span>
+                          <span v-else-if="s.status === 'off'" class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-white border border-violet-200 text-violet-700">
+                            Không trừ buổi · không cần xin nghỉ
+                          </span>
+                        </div>
+
+                        <!-- Ngày giờ học -->
+                        <div class="text-xs text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span v-if="s.date" class="flex items-center gap-1" :class="s.status === 'upcoming' ? 'text-indigo-600 font-medium' : ''">
+                            <Calendar class="h-3.5 w-3.5" />
+                            <span>{{ s.weekday }}, {{ s.date }}</span>
+                          </span>
+                          <span v-else class="text-slate-400 italic">Chưa xếp lịch</span>
+                          <span v-if="s.time" class="flex items-center gap-1">
+                            <Clock class="h-3.5 w-3.5 text-slate-400" />
+                            <span>{{ s.time }}</span>
+                          </span>
+                          <span v-if="s.teacher" class="flex items-center gap-1">
+                            <User class="h-3.5 w-3.5 text-slate-400" />
+                            <span>GV: {{ s.teacher }}</span>
+                          </span>
+                          <span v-if="multiCourse && s.course_name && !hasManyCourses" class="flex items-center gap-1">
+                            <BookOpen class="h-3.5 w-3.5 text-slate-400" />
+                            <span>{{ s.course_name }}</span>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Xin nghỉ buổi sắp tới -->
+                    <button
+                      v-if="s.can_request_leave"
+                      type="button"
+                      @click="openLeaveModal(s)"
+                      class="self-start shrink-0 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold flex items-center gap-1.5"
+                    >
+                      <Calendar class="h-3.5 w-3.5 text-amber-600" />
+                      <span>Xin nghỉ buổi này</span>
+                    </button>
+                  </div>
+
+                  <!-- Nhận xét / lý do -->
+                  <div v-if="s.note && s.status !== 'upcoming'" class="mt-3 text-xs bg-white/70 p-3 rounded-xl border border-slate-100">
+                    <span class="font-bold text-slate-700 block mb-0.5">
+                      {{ s.status === 'present' ? 'Nhận xét buổi học:' : s.status === 'off' ? 'Lý do:' : 'Ghi chú:' }}
+                    </span>
+                    <ExpandableText :text="s.note" :lines="4" class="text-slate-600 leading-relaxed" />
+                  </div>
+                </div>
+              </template>
+            </template>
 
           </div>
         </div>
