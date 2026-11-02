@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, nextTick, watch } from 'vue';
+import { ref, computed, onMounted, nextTick } from 'vue';
 import { useRoute } from 'vue-router';
 import { parentPortalApi } from '../services/api';
 import ExpandableText from '../components/ExpandableText.vue';
@@ -205,26 +205,24 @@ const filteredSessions = computed(() => applyFilter(courseSessions.value));
 const countBy = (fn) => courseSessions.value.filter(fn).length;
 
 // Học từ 2 khóa (song song hoặc học tiếp): mỗi khóa một khối thu gọn / mở được (phụ huynh xem bằng điện thoại);
-// mặc định chỉ mở khóa đang học hiện tại, các khóa khác thu gọn, bấm tiêu đề để mở
+// mặc định thu gọn hết, bấm tiêu đề khóa để mở
 const courseList = computed(() => portalData.value?.courses || []);
 const hasManyCourses = computed(() => courseList.value.length > 1);
 const activeCourses = computed(() => courseList.value.filter((c) => !c.completed));
+// Mặc định mọi khóa đều thu gọn (kể cả khóa đang học), phụ huynh bấm khóa nào thì mở khóa đó
 const openGroups = ref({});
-watch(() => [portalData.value?.current_course_item_id, courseList.value.length], ([id]) => {
-  openGroups.value = id != null ? { [id]: true } : {};
-}, { immediate: true });
 const toggleGroup = (id) => {
   openGroups.value = { ...openGroups.value, [id]: !openGroups.value[id] };
 };
 // Buổi không gắn khóa (dữ liệu cũ) tính cho khóa đang học
 const courseOfSession = (sess) => sess.course_item_id ?? portalData.value?.current_course_item_id ?? courseList.value[0]?.course_item_id;
-// Khối từng khóa: khóa đang học trước (theo ngày bắt đầu), khóa đã xong sau (mới nhất trước); một khóa thì một khối không tiêu đề
+// Khối từng khóa: khóa đã hoàn thành ở trên, khóa đang học ở dưới (mỗi nhóm theo ngày bắt đầu); một khóa thì một khối không tiêu đề
 const startKey = (c) => (c.start || '').split('/').reverse().join('');
 const courseGroups = computed(() => {
   if (!hasManyCourses.value) return [{ id: 'all', course: null, sessions: filteredSessions.value }];
   const active = [...activeCourses.value].sort((a, b) => startKey(a).localeCompare(startKey(b)));
-  const done = courseList.value.filter((c) => c.completed).sort((a, b) => startKey(b).localeCompare(startKey(a)));
-  return [...active, ...done].map((c) => ({
+  const done = courseList.value.filter((c) => c.completed).sort((a, b) => startKey(a).localeCompare(startKey(b)));
+  return [...done, ...active].map((c) => ({
     id: c.course_item_id,
     course: c,
     sessions: filteredSessions.value.filter((x) => courseOfSession(x) === c.course_item_id),
@@ -799,7 +797,7 @@ onMounted(() => {
             <p v-if="!hasManyCourses && filteredSessions.length === 0" class="bg-white rounded-2xl p-6 border border-slate-200/80 text-center text-xs text-slate-400">
               Không có buổi học nào.
             </p>
-            <!-- Học nhiều khóa: mỗi khóa một khối, mặc định chỉ mở khóa đang học hiện tại; bấm tiêu đề để mở / thu gọn -->
+            <!-- Học nhiều khóa: mỗi khóa một khối, mặc định thu gọn hết; bấm tiêu đề để mở / thu gọn -->
             <template v-for="g in courseGroups" :key="g.id">
               <button
                 v-if="g.course"
