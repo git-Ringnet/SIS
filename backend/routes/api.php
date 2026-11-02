@@ -66,6 +66,7 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::post('/{student}/supplies', [StudentApiController::class, 'addSupplies']);
         Route::post('/{student}/supplies/{supplyId}/return', [StudentApiController::class, 'returnSupply']);
         Route::put('/{student}/progress', [StudentApiController::class, 'updateCourseProgress']);
+        Route::get('/{student}/courses/suggest-start', [StudentApiController::class, 'suggestCourseStart']);
         Route::post('/{student}/courses', [StudentApiController::class, 'addCourse']);
         Route::put('/{student}/courses/{courseIndex}', [StudentApiController::class, 'updateCourseItem']);
         Route::delete('/{student}/courses/{courseIndex}', [StudentApiController::class, 'deleteCourseItem']);
@@ -127,6 +128,7 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::post('/{invoice}/cancel', [InvoiceApiController::class, 'cancel']);
         Route::post('/{invoice}/restore', [InvoiceApiController::class, 'restore']);
         Route::get('/{invoice}/pdf', [InvoiceApiController::class, 'pdf']);
+        Route::get('/payables/{student}', [InvoiceApiController::class, 'payables']);
     });
 
     // Reports

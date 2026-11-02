@@ -11,6 +11,8 @@ import DatePickerVN from '../components/DatePickerVN.vue';
 import Pagination from '../components/Pagination.vue';
 import { Receipt, Plus, X, Edit3, Trash2, FileDown, Loader2, Ban, Undo2, Hourglass } from 'lucide-vue-next';
 import MoneyInput from '../components/MoneyInput.vue';
+import InvoicePaymentModal from '../components/InvoicePaymentModal.vue';
+import { useRoute, useRouter } from 'vue-router';
 
 const invoices = ref([]);
 const monthlyTotal = ref(0);
@@ -102,15 +104,38 @@ const changePerPage = (n) => {
   applyFilters();
 };
 
-onMounted(fetchData);
+// Lập / sửa hóa đơn thanh toán (khóa học / học cụ còn nợ)
+const showPayment = ref(false);
+const payingInvoice = ref(null);
+const presetStudentId = ref(null);
+const route = useRoute();
+const router = useRouter();
+
+onMounted(async () => {
+  await fetchData();
+  // Mở từ trang học viên (?student=ID): lập hóa đơn cho học viên đó
+  if (route.query.student) {
+    presetStudentId.value = Number(route.query.student);
+    payingInvoice.value = null;
+    showPayment.value = true;
+    router.replace({ query: {} });
+  }
+});
 
 const openCreate = () => {
-  editingId.value = null;
-  form.value = emptyForm();
-  showModal.value = true;
+  presetStudentId.value = null;
+  payingInvoice.value = null;
+  showPayment.value = true;
 };
 
 const openEdit = (inv) => {
+  // Hóa đơn thanh toán (có dòng khóa học / học cụ): sửa số tiền từng khoản
+  if (inv.lines?.length) {
+    payingInvoice.value = inv;
+    showPayment.value = true;
+    return;
+  }
+  // Phiếu cũ (nhập học / gia hạn cộng buổi): sửa như trước
   editingId.value = inv.id;
   editingStudentName.value = inv.student?.name || '';
   form.value = {
@@ -317,7 +342,7 @@ const formatDate = (val) => {
             <th class="py-4 px-4 font-semibold">Học viên / Phụ huynh</th>
             <th class="py-4 px-4 font-semibold">Khóa học</th>
             <th class="py-4 px-4 font-semibold">Số tiền thu</th>
-            <th class="py-4 px-4 font-semibold text-center">Cộng số buổi</th>
+            <th class="py-4 px-4 font-semibold text-center">Nội dung / Số buổi</th>
             <th class="py-4 px-4 font-semibold">Hình thức</th>
             <th class="py-4 px-4 font-semibold">Thời gian thanh toán</th>
             <th class="py-4 px-4 font-semibold">Ghi chú</th>
@@ -335,9 +360,15 @@ const formatDate = (val) => {
               <span class="font-bold text-slate-900 dark:text-white">{{ inv.student?.name }}</span>
               <span class="block text-slate-400 text-xs dark:text-white/60">PH: {{ inv.student?.parent_name }}</span>
             </td>
-            <td class="py-4 px-4 dark:text-white/90">{{ inv.course?.name || inv.student?.course?.name }}</td>
+            <td class="py-4 px-4 dark:text-white/90">{{ inv.lines?.length ? inv.lines.map((l) => l.name).join(', ') : (inv.course?.name || inv.student?.course?.name) }}</td>
             <td class="py-4 px-4 font-extrabold text-base whitespace-nowrap" :class="inv.status === 'cancelled' ? 'text-slate-400 line-through dark:text-white/40' : 'text-emerald-600 dark:text-emerald-400'">{{ formatVND(inv.amount) }}</td>
-            <td class="py-4 px-4 text-center font-bold" :class="inv.status === 'cancelled' ? 'text-slate-400 line-through dark:text-white/40' : 'text-indigo-600 dark:text-indigo-400'">+{{ inv.sessions_added }} buổi</td>
+            <td class="py-4 px-4 text-center font-bold" :class="inv.status === 'cancelled' ? 'text-slate-400 line-through dark:text-white/40' : 'text-indigo-600 dark:text-indigo-400'">
+              <!-- Hóa đơn thanh toán: không cộng buổi; phiếu cũ (nhập học / gia hạn): số buổi đã cấp -->
+              <template v-if="inv.lines?.length">
+                <span class="text-xs font-semibold text-slate-500 dark:text-white/60">Thanh toán {{ inv.lines.length }} khoản</span>
+              </template>
+              <template v-else>{{ inv.sessions_added ? `+${inv.sessions_added} buổi` : '—' }}</template>
+            </td>
             <td class="py-4 px-4">
               <Badge variant="gray" size="sm">{{ paymentMethodLabels[inv.payment_method] || inv.payment_method }}</Badge>
             </td>
@@ -402,7 +433,7 @@ const formatDate = (val) => {
     <Modal :show="showModal" max-width="lg" @close="showModal = false">
       <div class="p-6">
         <div class="flex items-center justify-between border-b border-slate-100 pb-4">
-          <h3 class="text-base font-bold text-slate-900">{{ editingId ? 'Sửa Phiếu Thu Học Phí' : 'Tạo Phiếu Thu Học Phí' }}</h3>
+          <h3 class="text-base font-bold text-slate-900">{{ editingId ? 'Sửa phiếu thu (nhập học / gia hạn)' : 'Tạo Phiếu Thu Học Phí' }}</h3>
           <button @click="showModal = false" class="text-slate-400 hover:text-slate-600"><X class="h-5 w-5" /></button>
         </div>
 
@@ -468,5 +499,14 @@ const formatDate = (val) => {
         </form>
       </div>
     </Modal>
+
+    <InvoicePaymentModal
+      :show="showPayment"
+      :invoice="payingInvoice"
+      :students="students"
+      :preset-student-id="presetStudentId"
+      @close="showPayment = false"
+      @saved="fetchData"
+    />
   </div>
 </template>

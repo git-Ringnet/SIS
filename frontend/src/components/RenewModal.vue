@@ -2,11 +2,14 @@
 import { notify } from '../services/notify';
 import { confirmDialog } from '../services/useConfirm';
 import { computed, ref, watch } from 'vue';
-import { invoiceApi, retentionApi } from '../services/api';
+import { invoiceApi, studentApi } from '../services/api';
 import Modal from './Modal.vue';
 import { CheckCircle2, DollarSign, PlusCircle, X } from 'lucide-vue-next';
 import MoneyInput from './MoneyInput.vue';
-import { latestPaidInvoice, pendingInvoice, tuitionPaid } from '../services/tuition';
+import { latestPaidInvoice, pendingInvoice, tuitionPaid, tuitionDebt } from '../services/tuition';
+import { useRouter } from 'vue-router';
+import { canRecordPayment } from '../services/tuition';
+import { useAuth } from '../services/useAuth';
 
 const props = defineProps({
   show: {
@@ -21,8 +24,23 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'renewed']);
 
+// Còn nợ học phí / học cụ: lập hóa đơn thanh toán ở trang Hóa đơn (chọn đúng khoản còn nợ)
+const router = useRouter();
+// Không có quyền trang Hóa đơn (giáo vụ): không thu tiền / lập hóa đơn ở đây, khóa mới hiện "còn nợ"
+const { user: authUser } = useAuth();
+const canPay = computed(() => canRecordPayment(authUser.value));
+const debt = computed(() => tuitionDebt(props.student));
+const debtItems = computed(() => (props.student?.tuition?.courses || []).filter((c) => c.debt > 0));
+const openInvoice = () => {
+  emit('close');
+  router.push({ path: '/invoices', query: { student: props.student.id } });
+};
+
 const renewSessions = ref(12);
-const renewAmount = ref(3600000);
+// Số tiền đã thu: để trống mặc định (chỉ nhập khi phụ huynh thật sự đã đóng, tránh lập hóa đơn nhầm)
+const renewAmount = ref(null);
+// Gia hạn = đăng ký khóa học tiếp: bắt đầu sau buổi cuối dự kiến của khóa đang học (dùng lại ca cũ)
+const startDate = ref('');
 const paymentMethod = ref('bank_transfer');
 const note = ref('');
 const isSubmitting = ref(false);
@@ -32,7 +50,7 @@ watch(
   (s) => {
     if (s) {
       renewSessions.value = s.course ? s.course.default_sessions : 12;
-      renewAmount.value = s.course ? Number(s.course.price) : 3600000;
+      renewAmount.value = null;
       note.value = `Thu học phí khóa học ${s.course?.name || ''} cho học viên ${s.name}`;
     }
   },
@@ -85,18 +103,33 @@ const cancelLastPaid = async () => {
 
 const formatDay = (value) => (value ? new Date(value).toLocaleDateString('vi-VN') : '');
 
+// Mở cửa sổ: lấy ngày bắt đầu gợi ý cho khóa học tiếp
+watch(() => props.show, async (open) => {
+  if (!open || !props.student) return;
+  startDate.value = '';
+  try {
+    const res = await studentApi.suggestCourseStart(props.student.id, null);
+    startDate.value = res.data.start_date || '';
+  } catch {
+    // để trống: backend tự gợi ý khi lưu
+  }
+});
+
 const submit = async () => {
   if (!props.student) return;
 
   try {
     isSubmitting.value = true;
-    const res = await retentionApi.updateStatus(props.student.id, {
-      status: 'renewed',
-      renew_sessions: renewSessions.value,
-      renew_amount: renewAmount.value,
+    // Học tiếp = khóa mới cùng khóa học, dùng lại ca cũ, đếm lại từ Buổi 1; đã thu tiền thì lập hóa đơn cho khóa mới
+    const res = await studentApi.addCourse(props.student.id, {
+      mode: 'continue',
+      course_id: props.student.course_id || props.student.course?.id,
+      total_sessions: renewSessions.value,
+      start_date: startDate.value || null,
+      paid_amount: canPay.value ? Number(renewAmount.value) || 0 : 0,
       payment_method: paymentMethod.value,
-      note: note.value,
     });
+    notify.success(res.data.message);
     emit('renewed', res.data.student);
     emit('close');
   } catch (err) {
@@ -117,7 +150,7 @@ const submit = async () => {
           </div>
           <div>
             <h3 class="text-base font-bold text-slate-900">
-              Thu Học Phí & Cấp Buổi Học
+              Học phí & Đăng ký học tiếp
             </h3>
             <p v-if="student" class="text-xs text-slate-500">
               Học viên: <span class="font-semibold text-slate-800">{{ student.name }}</span> (Hiện còn {{ student.remaining_sessions }} buổi)
@@ -132,8 +165,22 @@ const submit = async () => {
         </button>
       </div>
 
+      <!-- Còn nợ học phí / học cụ: thu qua hóa đơn (không cộng buổi) -->
+      <div v-if="debt > 0" class="mt-4 rounded-xl bg-rose-50 p-3 text-xs text-rose-900 border border-rose-200 space-y-2">
+        <p class="font-bold">Học viên còn nợ {{ debt.toLocaleString('vi-VN') }}đ</p>
+        <ul class="list-disc list-inside space-y-0.5">
+          <li v-for="c in debtItems" :key="c.course_item_id">{{ c.name }}: còn nợ {{ Number(c.debt).toLocaleString('vi-VN') }}đ (đã đóng {{ Number(c.paid).toLocaleString('vi-VN') }}đ / {{ Number(c.fee - (c.discount || 0)).toLocaleString('vi-VN') }}đ)</li>
+          <li v-if="debt > debtItems.reduce((t, c) => t + Number(c.debt), 0)">Học cụ đã giao chưa thanh toán</li>
+        </ul>
+        <button v-if="canPay" type="button" @click="openInvoice" class="rounded-lg bg-rose-600 hover:bg-rose-700 px-3 py-1.5 font-bold text-white">
+          Lập hóa đơn thu tiền
+        </button>
+        <p v-else class="text-[11px] font-semibold">Phụ huynh đóng tiền thì báo chủ trung tâm / quản lý lập hóa đơn.</p>
+        <p class="text-[11px] text-rose-700">Phụ huynh đóng tiền khóa đang học thì lập hóa đơn, không dùng form gia hạn bên dưới (gia hạn sẽ cộng thêm buổi).</p>
+      </div>
+
       <!-- Phụ huynh chưa đóng học phí lúc đăng ký: xác nhận thu phiếu chờ -->
-      <div v-if="pending" class="mt-4 rounded-xl bg-amber-50 p-3 text-xs text-amber-900 border border-amber-300 space-y-2">
+      <div v-if="pending && canPay" class="mt-4 rounded-xl bg-amber-50 p-3 text-xs text-amber-900 border border-amber-300 space-y-2">
         <p>
           <span class="font-bold">Phiếu chờ thu {{ pending.invoice_code }}:</span>
           {{ Number(pending.amount || 0).toLocaleString('vi-VN') }}đ<template v-if="pending.sessions_added"> ({{ pending.sessions_added }} buổi đã cấp)</template>.
@@ -151,7 +198,7 @@ const submit = async () => {
             {{ confirmingPaid ? 'Đang lưu...' : 'Xác nhận đã thu' }}
           </button>
         </div>
-        <p class="text-[11px] text-amber-700">Hoặc dùng form bên dưới để thu thêm / gia hạn khóa mới (cộng thêm buổi).</p>
+        <p class="text-[11px] text-amber-700">Đăng ký học tiếp khóa mới thì dùng form bên dưới.</p>
       </div>
 
       <form @submit.prevent="submit" class="mt-4 space-y-4">
@@ -160,23 +207,25 @@ const submit = async () => {
             ({{ Number(lastPaid?.amount || 0).toLocaleString('vi-VN') }}đ<template v-if="lastPaid?.sessions_added">, +{{ lastPaid.sessions_added }} buổi</template>)
             và còn {{ student.remaining_sessions }} buổi.</p>
           <p class="mt-0.5">Chỉ thu tiếp khi phụ huynh đóng thêm / gia hạn khóa mới, tránh cộng trùng buổi.</p>
-          <button type="button" @click="cancelLastPaid" :disabled="cancellingPaid"
+          <button v-if="canPay" type="button" @click="cancelLastPaid" :disabled="cancellingPaid"
             class="mt-2 rounded-lg border border-rose-300 bg-white hover:bg-rose-50 disabled:opacity-50 px-2.5 py-1 font-semibold text-rose-700">
             {{ cancellingPaid ? 'Đang hủy...' : 'Thu / gia hạn nhầm? Hủy lần thu này' }}
           </button>
         </div>
         <div class="rounded-xl bg-emerald-50/70 p-3 text-xs text-emerald-900 border border-emerald-200/60">
-          <p class="font-medium">🎉 Khi xác nhận, hệ thống sẽ tự động:</p>
+          <p class="font-medium">Đăng ký học tiếp: hệ thống sẽ</p>
           <ul class="mt-1 list-disc list-inside space-y-0.5 text-emerald-800">
-            <li>Cộng thêm <strong class="font-bold">+{{ renewSessions }} buổi</strong> vào tài khoản học viên.</li>
-            <li>Chuyển trạng thái sang <strong class="font-bold">[Đã Đóng] (Màu xanh lá)</strong>.</li>
-            <li>Tạo 1 hóa đơn thu tiền vào báo cáo doanh thu tài chính.</li>
+            <li>Tạo <strong class="font-bold">khóa mới {{ renewSessions }} buổi</strong>, dùng lại ca học cũ, bắt đầu
+              <strong class="font-bold">{{ startDate ? startDate.split('-').reverse().join('/') : 'sau buổi cuối của khóa đang học' }}</strong> (đếm lại từ Buổi 1).</li>
+            <li>Khóa đang học vẫn học hết số buổi còn lại rồi mới sang khóa mới.</li>
+            <li v-if="canPay">Số tiền đã thu &gt; 0 thì lập hóa đơn cho khóa mới; để 0 nếu phụ huynh chưa đóng (khóa mới hiện còn nợ).</li>
+            <li v-else>Học phí khóa mới hiện "còn nợ"; chủ trung tâm / quản lý lập hóa đơn khi phụ huynh đóng tiền.</li>
           </ul>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-semibold text-slate-700">Số buổi cộng thêm</label>
+            <label class="block text-xs font-semibold text-slate-700">Số buổi khóa mới</label>
             <input
               type="number"
               min="1"
@@ -185,18 +234,18 @@ const submit = async () => {
               class="mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
             />
           </div>
-          <div>
-            <label class="block text-xs font-semibold text-slate-700">Số tiền thu (VNĐ)</label>
+          <div v-if="canPay">
+            <label class="block text-xs font-semibold text-slate-700">Số tiền đã thu (VNĐ)</label>
             <MoneyInput
               v-model="renewAmount"
-              required
+              :placeholder="`Để trống nếu chưa thu (học phí ${Number(student?.course?.price || 0).toLocaleString('vi-VN')}đ)`"
               class="mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-emerald-700 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
             />
           </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
-          <div>
+          <div v-if="canPay">
             <label class="block text-xs font-semibold text-slate-700">Hình thức thanh toán</label>
             <select
               v-model="paymentMethod"
@@ -220,14 +269,12 @@ const submit = async () => {
         </div>
 
         <div>
-          <label class="block text-xs font-semibold text-slate-700">Ghi chú phiếu thu</label>
-          <input
-            type="text"
-            v-model="note"
-            placeholder="Ghi chú xác nhận thu tiền..."
-            class="mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-xs focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
-          />
+          <label class="block text-xs font-semibold text-slate-700">Ngày bắt đầu khóa mới</label>
+          <input type="date" v-model="startDate"
+            class="mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-xs focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
+          <p class="mt-0.5 text-[11px] text-slate-400">Gợi ý: buổi kế tiếp sau buổi cuối dự kiến của khóa đang học (đã tính tạm dừng, ngày nghỉ, buổi bù).</p>
         </div>
+
 
         <div class="flex items-center justify-end gap-2 border-t border-slate-100 pt-4">
           <button
@@ -243,7 +290,7 @@ const submit = async () => {
             class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50 transition-colors"
           >
             <CheckCircle2 class="h-3.5 w-3.5" />
-            <span>{{ isSubmitting ? 'Đang xử lý...' : 'Xác Nhận Tiền Về & Cấp Buổi' }}</span>
+            <span>{{ isSubmitting ? 'Đang xử lý...' : 'Đăng ký học tiếp' }}</span>
           </button>
         </div>
       </form>

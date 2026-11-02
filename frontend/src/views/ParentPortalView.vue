@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue';
+import { ref, computed, onMounted, nextTick, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { parentPortalApi } from '../services/api';
 import ExpandableText from '../components/ExpandableText.vue';
@@ -184,8 +184,14 @@ const lockPortal = () => {
 };
 
 // Lọc danh sách buổi học
-const filteredSessions = computed(() => {
-  const list = portalData.value?.sessions || [];
+// Buổi của các khóa đang học (khóa đã xong thu gọn riêng)
+const courseSessions = computed(() => {
+  const all = portalData.value?.sessions || [];
+  const active = doneIds.value.length ? all.filter((x) => !doneIds.value.includes(courseOfSession(x))) : all;
+  return courseFilter.value === 'all' ? active : active.filter((x) => courseOfSession(x) === courseFilter.value);
+});
+
+const applyFilter = (list) => {
   switch (sessionFilter.value) {
     case 'completed':
       return list.filter((s) => s.is_completed);
@@ -198,9 +204,67 @@ const filteredSessions = computed(() => {
     default:
       return list;
   }
-});
+};
+const filteredSessions = computed(() => applyFilter(courseSessions.value));
+const filteredAll = computed(() => applyFilter(portalData.value?.sessions || []));
 
-const countBy = (fn) => (portalData.value?.sessions || []).filter(fn).length;
+const countBy = (fn) => courseSessions.value.filter(fn).length;
+
+// Học từ 2 khóa (song song hoặc học tiếp): mặc định chỉ hiện các khóa đang học (song song thì xen kẽ theo ngày);
+// khóa đã học xong gom thành một dòng gọn đầu danh sách, bấm mới mở các buổi của khóa đó (phụ huynh xem bằng điện thoại)
+const courseList = computed(() => portalData.value?.courses || []);
+const hasManyCourses = computed(() => courseList.value.length > 1);
+const activeCourses = computed(() => courseList.value.filter((c) => !c.completed));
+// Khóa đã xong được thu gọn (chỉ khi còn khóa đang học; tất cả đã xong thì hiện như bình thường)
+const doneCourses = computed(() => (hasManyCourses.value && activeCourses.value.length ? courseList.value.filter((c) => c.completed) : []));
+const doneIds = computed(() => doneCourses.value.map((c) => c.course_item_id));
+const openDone = ref({});
+// Lọc theo khóa (từ 2 khóa đang học): 'all' = tất cả khóa đang học
+const courseFilter = ref('all');
+const showCourseFilter = computed(() => activeCourses.value.length > 1);
+watch(() => activeCourses.value.map((c) => c.course_item_id).join(','), () => {
+  if (courseFilter.value !== 'all' && !activeCourses.value.some((c) => c.course_item_id === courseFilter.value)) courseFilter.value = 'all';
+});
+// Màu nhãn tên khóa trên từng buổi (đang xem tất cả khóa đang học)
+const COURSE_COLORS = ['bg-indigo-100 text-indigo-800', 'bg-pink-100 text-pink-800', 'bg-teal-100 text-teal-800', 'bg-orange-100 text-orange-800'];
+const courseColor = (id) => COURSE_COLORS[Math.max(0, activeCourses.value.findIndex((c) => c.course_item_id === id)) % COURSE_COLORS.length];
+// Buổi không gắn khóa (dữ liệu cũ) tính cho khóa đang học
+const courseOfSession = (sess) => sess.course_item_id ?? portalData.value?.current_course_item_id ?? courseList.value[0]?.course_item_id;
+// Buổi của một khóa đã xong (theo bộ lọc đang chọn)
+const doneSessions = (id) => filteredAll.value.filter((x) => courseOfSession(x) === id);
+
+// Số liệu các thẻ: học nhiều khóa thì cộng các khóa đang học, không thì tổng như trước
+const viewStats = computed(() => {
+  const all = portalData.value?.stats || {};
+  // Đang lọc một khóa: số liệu khóa đó; học nhiều khóa: cộng các khóa đang học
+  const picked = activeCourses.value.filter((c) => c.course_item_id === courseFilter.value);
+  const list = picked.length ? picked : (doneCourses.value.length || showCourseFilter.value ? activeCourses.value : []);
+  if (!list.length) return all;
+  const sum = (key) => list.reduce((t, c) => t + Number(c.stats?.[key] || 0), 0);
+  const total = sum('total_sessions');
+  const remaining = sum('remaining_sessions');
+  const completed = sum('completed_sessions');
+  const used = Math.max(0, total - remaining);
+  const ids = list.map((c) => c.course_item_id);
+  const mine = (portalData.value?.sessions || []).filter((x) => ids.includes(courseOfSession(x)));
+  return {
+    ...all,
+    total_sessions: total,
+    remaining_sessions: remaining,
+    completed_sessions: completed,
+    used_sessions: used,
+    deducted_absences: Math.max(0, used - completed),
+    total_absences: sum('absent_with_leave') + sum('absent_without_leave'),
+    absent_with_leave: sum('absent_with_leave'),
+    absent_without_leave: sum('absent_without_leave'),
+    allowed_absences: sum('allowed_absences'),
+    leave_used: sum('leave_used'),
+    leave_left: sum('leave_left'),
+    off_sessions: mine.filter((x) => x.status === 'off').length,
+    makeup_sessions: mine.filter((x) => x.is_makeup).length,
+    progress_percent: total > 0 ? Math.round((used / total) * 100) : 0,
+  };
+});
 
 // Các buổi sắp tới có thể xin nghỉ (đã có ngày học, từ hôm nay trở đi)
 const leaveOptions = computed(() => (portalData.value?.sessions || []).filter((s) => s.can_request_leave));
@@ -563,7 +627,7 @@ onMounted(() => {
           <div class="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200/90 shadow-xs space-y-1">
             <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Tổng số buổi</span>
             <div class="flex items-baseline gap-1">
-              <span class="text-2xl sm:text-3xl font-black text-slate-900">{{ portalData.stats?.total_sessions }}</span>
+              <span class="text-2xl sm:text-3xl font-black text-slate-900">{{ viewStats.total_sessions }}</span>
               <span class="text-xs text-slate-500 font-semibold">buổi</span>
             </div>
             <p class="text-[11px] text-slate-400">Thời lượng khóa học</p>
@@ -573,11 +637,11 @@ onMounted(() => {
           <div class="bg-white rounded-2xl p-4 sm:p-5 border border-emerald-100 bg-emerald-50/20 shadow-xs space-y-1">
             <span class="text-[11px] font-bold uppercase tracking-wider text-emerald-600">Đã học</span>
             <div class="flex items-baseline gap-1">
-              <span class="text-2xl sm:text-3xl font-black text-emerald-600">{{ portalData.stats?.completed_sessions }}</span>
+              <span class="text-2xl sm:text-3xl font-black text-emerald-600">{{ viewStats.completed_sessions }}</span>
               <span class="text-xs text-emerald-600 font-semibold">buổi</span>
             </div>
             <p class="text-[11px] text-emerald-600/70 font-medium">
-              <template v-if="portalData.stats?.deducted_absences">+ {{ portalData.stats.deducted_absences }} buổi vắng bị trừ</template>
+              <template v-if="viewStats.deducted_absences">+ {{ viewStats.deducted_absences }} buổi vắng bị trừ</template>
               <template v-else>Đã điểm danh có mặt</template>
             </p>
           </div>
@@ -586,7 +650,7 @@ onMounted(() => {
           <div class="bg-white rounded-2xl p-4 sm:p-5 border border-indigo-100 bg-indigo-50/20 shadow-xs space-y-1">
             <span class="text-[11px] font-bold uppercase tracking-wider text-indigo-600">Số buổi còn lại</span>
             <div class="flex items-baseline gap-1">
-              <span class="text-2xl sm:text-3xl font-black text-indigo-600">{{ portalData.stats?.remaining_sessions }}</span>
+              <span class="text-2xl sm:text-3xl font-black text-indigo-600">{{ viewStats.remaining_sessions }}</span>
               <span class="text-xs text-indigo-600 font-semibold">buổi</span>
             </div>
             <p class="text-[11px] text-indigo-600/70 font-medium">Buổi học chưa sử dụng</p>
@@ -596,11 +660,11 @@ onMounted(() => {
           <div class="bg-white rounded-2xl p-4 sm:p-5 border border-amber-100 bg-amber-50/20 shadow-xs space-y-1">
             <span class="text-[11px] font-bold uppercase tracking-wider text-amber-700">Số buổi vắng</span>
             <div class="flex items-baseline gap-1">
-              <span class="text-2xl sm:text-3xl font-black text-amber-700">{{ portalData.stats?.total_absences }}</span>
+              <span class="text-2xl sm:text-3xl font-black text-amber-700">{{ viewStats.total_absences }}</span>
               <span class="text-xs text-amber-700 font-semibold">buổi</span>
             </div>
             <p class="text-[11px] text-amber-700/70 font-medium">
-              Có phép: {{ portalData.stats?.absent_with_leave }} &bull; K.phép: {{ portalData.stats?.absent_without_leave }}
+              Có phép: {{ viewStats.absent_with_leave }} &bull; K.phép: {{ viewStats.absent_without_leave }}
             </p>
           </div>
 
@@ -617,11 +681,11 @@ onMounted(() => {
             </template>
             <template v-else>
               <div class="flex items-baseline gap-1">
-                <span class="text-2xl sm:text-3xl font-black" :class="portalData.stats?.leave_left > 0 ? 'text-orange-700' : 'text-rose-600'">{{ portalData.stats?.leave_left }}</span>
-                <span class="text-xs text-orange-700 font-semibold">/ {{ portalData.stats?.allowed_absences }} buổi</span>
+                <span class="text-2xl sm:text-3xl font-black" :class="viewStats.leave_left > 0 ? 'text-orange-700' : 'text-rose-600'">{{ viewStats.leave_left }}</span>
+                <span class="text-xs text-orange-700 font-semibold">/ {{ viewStats.allowed_absences }} buổi</span>
               </div>
               <p class="text-[11px] text-orange-700/70 font-medium">
-                Đã dùng: {{ portalData.stats?.leave_used }} buổi
+                Đã dùng: {{ viewStats.leave_used }} buổi
               </p>
             </template>
           </div>
@@ -631,10 +695,10 @@ onMounted(() => {
         <div class="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200/90 shadow-xs space-y-3 text-xs">
           <div class="flex flex-wrap gap-2">
             <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-50 text-violet-800 border border-violet-200 font-semibold">
-              <CalendarOff class="h-3.5 w-3.5" /> Trung tâm / GV nghỉ: {{ portalData.stats?.off_sessions }}
+              <CalendarOff class="h-3.5 w-3.5" /> Trung tâm / GV nghỉ: {{ viewStats.off_sessions }}
             </span>
             <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-50 text-sky-800 border border-sky-200 font-semibold">
-              <RefreshCw class="h-3.5 w-3.5" /> Buổi bù: {{ portalData.stats?.makeup_sessions }}
+              <RefreshCw class="h-3.5 w-3.5" /> Buổi bù: {{ viewStats.makeup_sessions }}
             </span>
           </div>
           <!-- Quy định nghỉ học: trung tâm sửa ở Cài đặt → Thương hiệu -->
@@ -649,7 +713,7 @@ onMounted(() => {
           <div class="flex items-center justify-between text-xs">
             <span class="font-bold text-slate-700">Tiến độ khóa học</span>
             <span class="font-extrabold text-indigo-600 text-sm">
-              {{ portalData.stats?.used_sessions }} / {{ portalData.stats?.total_sessions }} buổi ({{ portalData.stats?.progress_percent }}%)
+              {{ viewStats.used_sessions }} / {{ viewStats.total_sessions }} buổi ({{ viewStats.progress_percent }}%)
             </span>
           </div>
 
@@ -657,16 +721,16 @@ onMounted(() => {
           <div class="h-3.5 w-full bg-slate-100 rounded-full overflow-hidden p-0.5 border border-slate-200/60 flex">
             <div
               class="h-full bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600 rounded-full transition-all duration-700 shadow-xs"
-              :style="{ width: `${Math.min(portalData.stats?.progress_percent || 0, 100)}%` }"
+              :style="{ width: `${Math.min(viewStats.progress_percent || 0, 100)}%` }"
             ></div>
           </div>
 
           <div class="flex items-center justify-between text-[11px] text-slate-400">
             <span>Bắt đầu</span>
-            <span v-if="portalData.stats?.remaining_sessions <= 3" class="text-rose-600 font-bold animate-pulse">
-              ⚠️ Khóa học sắp kết thúc (còn {{ portalData.stats?.remaining_sessions }} buổi)
+            <span v-if="viewStats.remaining_sessions <= 3" class="text-rose-600 font-bold animate-pulse">
+              ⚠️ Khóa học sắp kết thúc (còn {{ viewStats.remaining_sessions }} buổi)
             </span>
-            <span v-else>Còn {{ portalData.stats?.remaining_sessions }} buổi học</span>
+            <span v-else>Còn {{ viewStats.remaining_sessions }} buổi học</span>
             <span>Hoàn thành khóa</span>
           </div>
         </div>
@@ -708,11 +772,19 @@ onMounted(() => {
         <div v-if="activeTab === 'sessions'" class="space-y-4">
           <!-- Bộ lọc trạng thái buổi học -->
           <div class="flex flex-wrap items-center justify-between gap-3 bg-white p-3 rounded-2xl border border-slate-200/80">
+            <!-- Học từ 2 khóa: chọn khóa để xem (điện thoại mở bảng chọn của máy, không chiếm chỗ) -->
+            <label v-if="showCourseFilter" class="w-full flex items-center gap-2 text-xs">
+              <span class="text-slate-400 text-[11px] font-semibold shrink-0">Khóa:</span>
+              <select v-model="courseFilter" class="flex-1 min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 font-bold text-slate-800 focus:border-indigo-500 focus:outline-none">
+                <option value="all">Tất cả khóa đang học ({{ activeCourses.length }})</option>
+                <option v-for="c in activeCourses" :key="c.course_item_id" :value="c.course_item_id">{{ c.course_name }}</option>
+              </select>
+            </label>
             <div class="flex flex-wrap items-center gap-1.5 text-xs">
               <span class="text-slate-400 text-[11px] font-semibold mr-1">Bộ lọc:</span>
               <button
                 v-for="f in [
-                  { key: 'all', label: 'Tất cả', count: portalData.sessions?.length, active: 'bg-slate-900 text-white', idle: 'bg-slate-100 text-slate-600 hover:bg-slate-200' },
+                  { key: 'all', label: 'Tất cả', count: courseSessions.length, active: 'bg-slate-900 text-white', idle: 'bg-slate-100 text-slate-600 hover:bg-slate-200' },
                   { key: 'completed', label: 'Đã học', count: countBy((s) => s.is_completed), active: 'bg-emerald-600 text-white', idle: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' },
                   { key: 'absent', label: 'Nghỉ / vắng', count: countBy((s) => s.is_absent), active: 'bg-amber-600 text-white', idle: 'bg-amber-50 text-amber-800 hover:bg-amber-100' },
                   { key: 'off', label: 'Trung tâm / GV nghỉ', count: countBy((s) => s.status === 'off'), active: 'bg-violet-600 text-white', idle: 'bg-violet-50 text-violet-700 hover:bg-violet-100' },
@@ -738,6 +810,25 @@ onMounted(() => {
             <p v-if="filteredSessions.length === 0" class="bg-white rounded-2xl p-6 border border-slate-200/80 text-center text-xs text-slate-400">
               Không có buổi học nào.
             </p>
+            <!-- Khóa đã học xong (đang học khóa khác): gom gọn, bấm để xem lại các buổi -->
+            <div v-for="c in doneCourses" :key="`done-${c.course_item_id}`" class="rounded-2xl border border-slate-200 bg-slate-50">
+              <button type="button" @click="openDone = { ...openDone, [c.course_item_id]: !openDone[c.course_item_id] }"
+                class="w-full flex items-center justify-between gap-2 px-4 py-3 text-left text-xs">
+                <span class="min-w-0">
+                  <span class="block font-extrabold text-slate-800 truncate">{{ c.course_name }}</span>
+                  <span class="text-slate-500">Hoàn thành · {{ c.total_sessions - c.remaining_sessions }}/{{ c.total_sessions }} buổi<template v-if="c.start"> · {{ c.start }}<template v-if="c.end"> → {{ c.end }}</template></template></span>
+                </span>
+                <span class="shrink-0 font-bold text-indigo-600">{{ openDone[c.course_item_id] ? 'Thu gọn ▲' : 'Xem lại ▼' }}</span>
+              </button>
+              <div v-if="openDone[c.course_item_id]" class="px-3 pb-3 space-y-2">
+                <p v-if="!doneSessions(c.course_item_id).length" class="text-center text-[11px] text-slate-400 py-2">Không có buổi nào theo bộ lọc đang chọn.</p>
+                <div v-for="d in doneSessions(c.course_item_id)" :key="d.key" class="rounded-xl border bg-white px-3 py-2 text-xs flex flex-wrap items-center gap-x-3 gap-y-1" :class="styleOf(d).card">
+                  <span class="font-black text-slate-800">{{ d.session_number ? `Buổi ${d.session_number}` : d.status_label }}</span>
+                  <span class="px-2 py-0.5 rounded-full font-bold text-[11px]" :class="styleOf(d).badge">{{ d.status_label }}</span>
+                  <span class="text-slate-500">{{ d.weekday }}, {{ d.date }}<template v-if="d.time"> · {{ d.time }}</template></span>
+                </div>
+              </div>
+            </div>
             <div
               v-for="s in filteredSessions"
               :key="s.key"
@@ -761,6 +852,9 @@ onMounted(() => {
                       <h4 class="text-sm font-extrabold text-slate-900">
                         {{ s.session_number ? `Buổi ${s.session_number}` : s.status_label }}
                       </h4>
+                      <span v-if="showCourseFilter && courseFilter === 'all' && s.course_name" class="px-2 py-0.5 rounded-md text-[11px] font-bold max-w-[160px] truncate" :class="courseColor(courseOfSession(s))">
+                        {{ s.course_name }}
+                      </span>
 
                       <!-- Trạng thái -->
                       <span v-if="s.session_number" class="px-2.5 py-0.5 rounded-full text-xs font-bold flex items-center gap-1" :class="styleOf(s).badge">
@@ -804,7 +898,7 @@ onMounted(() => {
                         <User class="h-3.5 w-3.5 text-slate-400" />
                         <span>GV: {{ s.teacher }}</span>
                       </span>
-                      <span v-if="multiCourse && s.course_name" class="flex items-center gap-1">
+                      <span v-if="multiCourse && s.course_name && !showCourseFilter" class="flex items-center gap-1">
                         <BookOpen class="h-3.5 w-3.5 text-slate-400" />
                         <span>{{ s.course_name }}</span>
                       </span>
@@ -832,6 +926,7 @@ onMounted(() => {
                 <ExpandableText :text="s.note" :lines="4" class="text-slate-600 leading-relaxed" />
               </div>
             </div>
+
           </div>
         </div>
 
@@ -874,9 +969,41 @@ onMounted(() => {
 
         <!-- TAB 3: HỌC PHÍ & HÓA ĐƠN -->
         <div v-else-if="activeTab === 'tuition'" class="bg-white rounded-2xl p-6 border border-slate-200/90 shadow-xs space-y-4">
-          <h3 class="text-sm font-bold text-slate-900 flex items-center gap-2">
+          <!-- Học phí từng khóa / học cụ: đã thanh toán và còn phải đóng -->
+          <div v-if="portalData.tuition?.items?.length" class="space-y-2">
+            <h3 class="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <Receipt class="h-4 w-4 text-indigo-600" />
+              <span>Học phí cần thanh toán</span>
+            </h3>
+            <div class="rounded-xl border p-3 flex items-center justify-between"
+              :class="portalData.tuition.debt > 0 ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'">
+              <span class="text-xs font-semibold" :class="portalData.tuition.debt > 0 ? 'text-rose-800' : 'text-emerald-800'">
+                {{ portalData.tuition.debt > 0 ? 'Số tiền còn cần thanh toán' : 'Đã thanh toán đủ học phí' }}
+              </span>
+              <span class="text-lg font-black" :class="portalData.tuition.debt > 0 ? 'text-rose-600' : 'text-emerald-700'">
+                {{ Number(portalData.tuition.debt || 0).toLocaleString('vi-VN') }} đ
+              </span>
+            </div>
+            <div class="divide-y divide-slate-100 rounded-xl border border-slate-200">
+              <div v-for="(item, idx) in portalData.tuition.items" :key="idx" class="px-3 py-2.5 text-xs flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span class="font-bold text-slate-900">{{ item.name }}</span>
+                  <span class="ml-1.5 text-[10px] font-semibold text-slate-400">{{ item.type === 'course' ? 'Học phí' : 'Học cụ' }}</span>
+                  <p class="text-[11px] text-slate-500 mt-0.5">
+                    Tổng {{ Number(item.fee || 0).toLocaleString('vi-VN') }} đ &bull; Đã thanh toán {{ Number(item.paid || 0).toLocaleString('vi-VN') }} đ
+                  </p>
+                </div>
+                <span class="px-2 py-0.5 rounded-full font-bold text-[11px]"
+                  :class="item.debt > 0 ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'">
+                  {{ item.debt > 0 ? `Còn ${Number(item.debt).toLocaleString('vi-VN')} đ` : 'Đã thanh toán' }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <h3 class="text-sm font-bold text-slate-900 flex items-center gap-2 pt-2">
             <Receipt class="h-4 w-4 text-indigo-600" />
-            <span>Lịch sử học phí & Hóa đơn thu</span>
+            <span>Lịch sử hóa đơn thu</span>
           </h3>
 
           <div v-if="portalData.invoices && portalData.invoices.length > 0" class="divide-y divide-slate-100">
@@ -895,8 +1022,9 @@ onMounted(() => {
                     {{ inv.status === 'paid' ? 'Đã thanh toán' : 'Chưa thanh toán' }}
                   </span>
                 </div>
+                <p v-if="inv.items?.length" class="text-slate-600 text-[11px] mt-0.5">{{ inv.items.join(', ') }}</p>
                 <p class="text-slate-400 text-[11px] mt-0.5">
-                  Ngày lập: {{ inv.created_at }} &bull; Hình thức: {{ inv.payment_method || 'Chuyển khoản' }}
+                  {{ inv.paid_at ? `Ngày thanh toán: ${inv.paid_at}` : `Ngày lập: ${inv.created_at}` }} &bull; Hình thức: {{ ({ bank_transfer: 'Chuyển khoản', cash: 'Tiền mặt', pos: 'Quẹt thẻ', momo: 'MoMo / QR' })[inv.payment_method] || 'Chuyển khoản' }}
                 </p>
               </div>
 

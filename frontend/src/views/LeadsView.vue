@@ -849,10 +849,8 @@ const submitCreateLead = async () => {
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-xs font-semibold text-slate-700 mb-1">Khóa học đăng ký (*)</label>
-            <select v-model="convertForm.course_id" required
-              class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none">
-              <option v-for="c in courses" :key="c.id" :value="c.id">{{ c.name }}</option>
-            </select>
+            <!-- Nhiều khóa học: ô chọn có tìm kiếm -->
+            <SearchableSelect v-model="convertForm.course_id" :options="courses" placeholder="Tìm và chọn khóa học..." />
           </div>
           <div>
             <label class="block text-xs font-semibold text-slate-700 mb-1">Số buổi đăng ký (*)</label>

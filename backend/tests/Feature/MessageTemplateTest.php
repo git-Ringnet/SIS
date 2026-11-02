@@ -2,10 +2,14 @@
 
 namespace Tests\Feature;
 
+use App\Models\Course;
 use App\Models\MessageTemplate;
+use App\Models\Student;
 use App\Models\User;
+use App\Support\CenterStore;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -38,6 +42,26 @@ class MessageTemplateTest extends TestCase
         // Mở lại không tạo thêm mẫu mặc định
         $this->assertCount(2, $this->group('attendance')['templates']);
         $this->assertSame(9, MessageTemplate::count());
+    }
+
+    public function test_bank_info_comes_from_the_student_center_not_a_hardcoded_account(): void
+    {
+        Storage::fake('local');
+        CenterStore::save([['name' => 'Khoa Anh Music', 'is_main' => true, 'bank_info' => 'SỐ TÀI KHOẢN: HKD KHOA ANH MUSIC - TPBANK: 46294103684']]);
+
+        // Trả kèm thông tin chuyển khoản của trung tâm cho cửa sổ mẫu tin nhắn
+        $data = $this->group('renewal');
+        $this->assertSame('SỐ TÀI KHOẢN: HKD KHOA ANH MUSIC - TPBANK: 46294103684', $data['centers'][0]['bank_info']);
+
+        // Mẫu nhắc học phí mặc định dùng biến thông tin chuyển khoản, không còn STK / ngân hàng mẫu
+        $tuition = collect($data['templates'])->firstWhere('category', 'tuition_reminder');
+        $this->assertStringContainsString('{thong_tin_chuyen_khoan}', $tuition['template_content']);
+
+        $course = Course::create(['code' => 'P', 'name' => 'Piano', 'price' => 1, 'default_sessions' => 8]);
+        $student = Student::create(['code' => 'HV-1', 'name' => 'Bé An', 'gender' => 'Nam', 'parent_name' => 'Mẹ An', 'parent_phone' => '0900000000',
+            'course_id' => $course->id, 'center' => 'Khoa Anh Music', 'status' => 'active', 'total_sessions' => 8, 'remaining_sessions' => 2]);
+        $rendered = (new MessageTemplate(['template_content' => 'CK: {thong_tin_chuyen_khoan} | {so_tai_khoan} | {ngan_hang}.']))->render($student);
+        $this->assertSame('CK: SỐ TÀI KHOẢN: HKD KHOA ANH MUSIC - TPBANK: 46294103684 | SỐ TÀI KHOẢN: HKD KHOA ANH MUSIC - TPBANK: 46294103684 | .', $rendered);
     }
 
     public function test_create_edit_delete_and_reset_stay_within_the_page(): void

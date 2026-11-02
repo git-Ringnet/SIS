@@ -10,7 +10,7 @@ import AddSupplyModal from '../components/AddSupplyModal.vue';
 import MessageTemplateModal from '../components/MessageTemplateModal.vue';
 import RetentionNoteModal from '../components/RetentionNoteModal.vue';
 import RenewModal from '../components/RenewModal.vue';
-import { tuitionState, TUITION_BUTTON } from '../services/tuition';
+import { tuitionState, tuitionLabel, TUITION_BUTTON } from '../services/tuition';
 import ReturnSupplyModal from '../components/ReturnSupplyModal.vue';
 import {
   ArrowLeft,
@@ -331,7 +331,7 @@ const openParentPortalInNewTab = () => {
             :class="['inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 font-semibold transition-colors shrink-0 shadow-2xs', TUITION_BUTTON[tuitionState(student)].class]"
           >
             <CreditCard class="h-3.5 w-3.5" :class="TUITION_BUTTON[tuitionState(student)].icon" />
-            <span>{{ TUITION_BUTTON[tuitionState(student)].label }}</span>
+            <span>{{ tuitionLabel(student) }}</span>
           </button>
 
           <!-- [ Ngày đã học ] -->

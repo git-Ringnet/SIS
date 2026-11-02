@@ -34,10 +34,19 @@
 </head>
 <body>
 @php
-    $logoUrl = ! empty($center['logo_url']) ? $center['logo_url'] : ($brand['logo_url'] ?? '');
+    // Logo tải lên là đường dẫn /storage/... mà DomPDF không mở được: nhúng thẳng ảnh vào PDF
+    $logoUrl = \App\Support\PdfImage::src(! empty($center['logo_url']) ? $center['logo_url'] : ($brand['logo_url'] ?? ''));
     $centerName = ! empty($center['name']) ? $center['name'] : ($brand['brand_name'] ?? 'Trung tâm');
     $centerAddress = ! empty($center['address']) ? $center['address'] : ($brand['address'] ?? '');
     $centerPhone = ! empty($center['phone']) ? $center['phone'] : ($brand['phone'] ?? '');
+    // Khoản tiền này là cho khóa bao nhiêu buổi (không phải "cộng thêm"): phiếu có cấp buổi (nhập học / gia hạn)
+    // thì là số buổi của gói; phiếu chỉ thu tiền (không cấp buổi) thì là tổng số buổi của khóa đang học
+    $courseItem = collect($student?->registered_courses_list ?? [])->first(fn ($i) => (int) ($i['course_id'] ?? 0) === (int) $invoice->course_id);
+    // Hóa đơn thanh toán (có dòng khóa học / học cụ) và số còn phải thu của các khoản đó sau phiếu này
+    $lines = $invoice->lines ?: [];
+    $remainingAfter = max(0, array_sum(array_map(fn ($l) => ($l['debt_before'] ?? 0) - ($l['amount'] ?? 0) - ($l['discount'] ?? 0), $lines)));
+    $courseSessions = (int) $invoice->sessions_added
+        ?: (int) ($courseItem['total_sessions'] ?? $invoice->course?->default_sessions ?? 0);
 @endphp
     <table class="header">
         <tr>
@@ -88,27 +97,56 @@
         <thead>
             <tr>
                 <th>Nội dung</th>
-                <th class="center">Số buổi</th>
-                <th class="right">Số tiền</th>
+                <th class="center">{{ $lines ? 'Học phí / Thành tiền' : 'Số buổi khóa học' }}</th>
+                <th class="right">Số tiền thu</th>
             </tr>
         </thead>
         <tbody>
-            <tr>
-                <td>
-                    <strong>{{ $invoice->course?->name ?? $student?->course?->name ?? 'Học phí' }}</strong>
-                    @if ($invoice->note)
-                        <div class="light" style="font-size: 9px;">{{ $invoice->note }}</div>
-                    @endif
-                </td>
-                <td class="center"><strong>+{{ $invoice->sessions_added }} buổi</strong></td>
-                <td class="right"><strong style="color: #312e81;">{{ number_format($invoice->amount, 0, ',', '.') }} ₫</strong></td>
-            </tr>
+            @if ($lines)
+                {{-- Hóa đơn thanh toán: từng khoản (khóa học / học cụ), số tiền thu lần này --}}
+                @foreach ($lines as $line)
+                    <tr>
+                        <td>
+                            <strong>{{ $line['name'] }}</strong>
+                            <div class="light" style="font-size: 9px;">
+                                @if ($line['type'] === 'course')
+                                    Khóa {{ $line['total_sessions'] ?? '' }} buổi
+                                    @if (! empty($line['discount']))
+                                        · Giảm giá {{ number_format($line['discount'], 0, ',', '.') }} ₫
+                                    @endif
+                                @else
+                                    Học cụ · {{ $line['quantity'] ?? 1 }} x {{ number_format($line['price'] ?? 0, 0, ',', '.') }} ₫
+                                @endif
+                            </div>
+                        </td>
+                        <td class="center">{{ number_format($line['type'] === 'course' ? ($line['fee'] ?? 0) : ($line['price'] ?? 0) * ($line['quantity'] ?? 1), 0, ',', '.') }} ₫</td>
+                        <td class="right"><strong style="color: #312e81;">{{ number_format($line['amount'], 0, ',', '.') }} ₫</strong></td>
+                    </tr>
+                @endforeach
+            @else
+                <tr>
+                    <td>
+                        <strong>{{ $invoice->course?->name ?? $student?->course?->name ?? 'Học phí' }}</strong>
+                        @if ($invoice->note)
+                            <div class="light" style="font-size: 9px;">{{ $invoice->note }}</div>
+                        @endif
+                    </td>
+                    <td class="center"><strong>{{ $courseSessions ? $courseSessions.' buổi' : '—' }}</strong></td>
+                    <td class="right"><strong style="color: #312e81;">{{ number_format($invoice->amount, 0, ',', '.') }} ₫</strong></td>
+                </tr>
+            @endif
         </tbody>
         <tfoot>
             <tr>
                 <td colspan="2" class="right muted">Tổng đã thu:</td>
                 <td class="right total">{{ number_format($invoice->amount, 0, ',', '.') }} ₫</td>
             </tr>
+            @if ($lines)
+                <tr>
+                    <td colspan="2" class="right muted">Còn phải thanh toán (các khoản trên):</td>
+                    <td class="right" style="font-weight: bold; color: {{ $remainingAfter > 0 ? '#e11d48' : '#047857' }};">{{ number_format($remainingAfter, 0, ',', '.') }} ₫</td>
+                </tr>
+            @endif
         </tfoot>
     </table>
 

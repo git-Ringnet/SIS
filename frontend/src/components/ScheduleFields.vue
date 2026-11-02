@@ -11,6 +11,8 @@ const model = defineModel({ type: Object, required: true });
 const props = defineProps({
   // Trung tâm của học viên, dùng để gợi ý phòng học của đúng trung tâm
   center: { type: String, default: '' },
+  // Tiêu đề khối (form thêm khóa: "Ca mới cho khóa này")
+  title: { type: String, default: 'Lịch học' },
 });
 
 // Theo Carbon::dayOfWeek ở backend: 0 = Chủ nhật, 1 = Thứ 2 ...
@@ -78,7 +80,7 @@ const inputClass =
   <div class="rounded-xl border border-slate-200 bg-slate-50/50 p-4 space-y-3">
     <div class="flex items-start justify-between gap-3">
       <div>
-        <p class="text-xs font-bold text-slate-800">Lịch học</p>
+        <p class="text-xs font-bold text-slate-800">{{ title }}</p>
         <p class="text-[11px] text-slate-500 mt-0.5">
           Mỗi dòng là một ca học. Một ngày có thể nhiều ca, mỗi ca giờ, giáo viên, phòng riêng. Học viên hiện ở màn Điểm danh theo từng ca.
         </p>

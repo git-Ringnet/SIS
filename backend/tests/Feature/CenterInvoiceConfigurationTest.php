@@ -85,8 +85,7 @@ class CenterInvoiceConfigurationTest extends TestCase
         $res1 = $this->postJson('/api/invoices', [
             'student_id' => $studentBT->id,
             'course_id' => $this->course->id,
-            'amount' => 3000000,
-            'sessions_added' => 12,
+            'lines' => [['key' => 'course:1', 'amount' => 1500000]],
             'payment_method' => 'bank_transfer',
             'paid_at' => now()->toDateString(),
         ])->assertCreated();
@@ -96,8 +95,7 @@ class CenterInvoiceConfigurationTest extends TestCase
         $res2 = $this->postJson('/api/invoices', [
             'student_id' => $studentBT->id,
             'course_id' => $this->course->id,
-            'amount' => 3000000,
-            'sessions_added' => 12,
+            'lines' => [['key' => 'course:1', 'amount' => 1500000]],
             'payment_method' => 'bank_transfer',
             'paid_at' => now()->toDateString(),
         ])->assertCreated();
@@ -127,8 +125,7 @@ class CenterInvoiceConfigurationTest extends TestCase
 
         $res = $this->postJson('/api/invoices', [
             'student_id' => $student->id,
-            'amount' => 1500000,
-            'sessions_added' => 6,
+            'lines' => [['key' => 'course:1', 'amount' => 1500000]],
             'payment_method' => 'cash',
             'paid_at' => now()->toDateString(),
         ])->assertCreated();

@@ -17,6 +17,7 @@ use App\Support\ScheduleConflicts;
 use App\Support\StudentImport;
 use App\Support\StudentSchedule;
 use App\Support\SupplySales;
+use App\Support\Tuition;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -46,7 +47,7 @@ class StudentApiController extends Controller
         $sortBy = $request->input('sort_by', 'newest');
 
         $query = Student::query()
-            ->with(['course', 'latestAttendance', 'latestRetentionLog', 'attendances', 'latestPaidInvoice', 'pendingInvoice']);
+            ->with(['course', 'latestAttendance', 'latestRetentionLog', 'attendances', 'latestPaidInvoice', 'pendingInvoice', 'invoices']);
 
         if ($search) {
             $query->where(function ($q) use ($search) {
@@ -112,16 +113,10 @@ class StudentApiController extends Controller
             }
         }
 
-        if ($tuitionStatus === 'paid') {
-            $query->where(function ($q) {
-                $q->whereHas('invoices', fn ($iq) => $iq->where('status', 'paid'))
-                    ->orWhere('retention_status', 'renewed');
-            });
-        } elseif ($tuitionStatus === 'unpaid') {
-            $query->where(function ($q) {
-                $q->whereDoesntHave('invoices', fn ($iq) => $iq->where('status', 'paid'))
-                    ->where('retention_status', '!=', 'renewed');
-            });
+        // Đã / chưa thanh toán theo công nợ học phí + học cụ (cùng cách tính với Hóa đơn và Cổng phụ huynh)
+        if ($tuitionStatus === 'paid' || $tuitionStatus === 'unpaid') {
+            $owing = Tuition::studentIdsWithDebt();
+            $tuitionStatus === 'paid' ? $query->whereNotIn('id', $owing) : $query->whereIn('id', $owing);
         }
 
         if ($sessionsFilter === 'expiring') {
@@ -222,6 +217,8 @@ class StudentApiController extends Controller
             foreach ($paginator->items() as $st) {
                 $st->setAttribute('course_dates', collect($st->registered_courses_list)
                     ->mapWithKeys(fn ($item) => [$item['id'] => $st->courseItemDates($item)]));
+                $st->setAttribute('course_warnings', StudentSchedule::continuationWarnings($st));
+                $this->attachTuition($st);
             }
 
             return response()->json([
@@ -239,6 +236,8 @@ class StudentApiController extends Controller
         foreach ($students as $st) {
             $st->setAttribute('course_dates', collect($st->registered_courses_list)
                 ->mapWithKeys(fn ($item) => [$item['id'] => $st->courseItemDates($item)]));
+            $st->setAttribute('course_warnings', StudentSchedule::continuationWarnings($st));
+            $this->attachTuition($st);
         }
 
         return response()->json([
@@ -259,6 +258,11 @@ class StudentApiController extends Controller
             'retentionLogs' => fn ($q) => $q->orderBy('contact_date', 'desc'),
             'invoices' => fn ($q) => $q->orderBy('created_at', 'desc'),
         ]);
+
+        // Công nợ học phí / học cụ theo khóa (nút Học phí); trang chi tiết vẫn trả danh sách phiếu thu
+        $summary = Tuition::summary($student, $student->invoices);
+        $student->setAttribute('tuition', ['debt' => $summary['debt'], 'paid' => $summary['paid'], 'fee' => $summary['fee'],
+            'courses' => $summary['courses'], 'supplies' => $summary['supplies']]);
 
         // Kèm lớp học của từng khóa để gán lớp ở trang chi tiết học viên
         $courses = Course::with('classes')->where('is_active', true)->get();
@@ -288,7 +292,7 @@ class StudentApiController extends Controller
             'notes' => 'nullable|string',
             'create_invoice' => 'nullable|boolean',
             'invoice_amount' => 'nullable|numeric|min:0',
-            // Phụ huynh đã đóng học phí lúc đăng ký chưa; chưa đóng thì phiếu ở trạng thái chờ thu (công nợ)
+            // Phụ huynh đã đóng học phí lúc đăng ký chưa; chưa đóng thì khóa là khoản còn nợ (không lập phiếu)
             'invoice_paid' => 'nullable|boolean',
             ...$this->scheduleRules(),
         ]);
@@ -318,24 +322,34 @@ class StudentApiController extends Controller
             ...$this->scheduleAttributes($validated),
         ]);
 
-        if (! empty($validated['create_invoice'])) {
-            $amount = $validated['invoice_amount'] ?? ($course ? $course->price : 0);
-            $paid = (bool) ($validated['invoice_paid'] ?? false);
-
-            Invoice::create([
-                'invoice_code' => Invoice::nextInvoiceCodeForCenter($student->center),
-                'student_id' => $student->id,
-                'course_id' => $student->course_id,
-                'center' => $student->center,
-                'amount' => $amount,
-                'sessions_added' => $student->total_sessions,
-                'payment_method' => 'bank_transfer',
-                // Chưa đóng: không tính doanh thu, cổng phụ huynh hiện "Chưa thanh toán" cho tới khi xác nhận đã thu
-                'status' => $paid ? 'paid' : 'pending',
-                'paid_at' => $paid ? Carbon::now() : null,
-                'note' => $paid ? 'Học phí nhập học ban đầu' : 'Học phí nhập học ban đầu (chờ thu)',
-                'recorded_by' => 'Admin Thu Ngân',
-            ]);
+        // Học phí khóa đầu tiên là khoản phải thu (giá khóa). Phụ huynh đã đóng lúc đăng ký thì lập hóa đơn thanh toán;
+        // chưa đóng thì không lập phiếu nào, khóa hiện "còn nợ" ở trang Học viên / Hóa đơn / Cổng phụ huynh.
+        // Người không có quyền trang Hóa đơn (giáo vụ) không lập được hóa đơn: khóa hiện "còn nợ"
+        if (! empty($validated['create_invoice']) && ! empty($validated['invoice_paid']) && self::canRecordPayment($request)) {
+            $item = $student->registered_courses_list[0] ?? null;
+            $price = Tuition::coursePrice($student->course_id);
+            $amount = min((float) ($validated['invoice_amount'] ?? $price), $price ?: (float) ($validated['invoice_amount'] ?? 0));
+            if ($item && $amount > 0) {
+                Invoice::create([
+                    'invoice_code' => Invoice::nextInvoiceCodeForCenter($student->center),
+                    'student_id' => $student->id,
+                    'course_id' => $student->course_id,
+                    'course_item_id' => (int) $item['id'],
+                    'center' => $student->center,
+                    'amount' => $amount,
+                    'lines' => [[
+                        'type' => 'course', 'name' => $item['course_name'] ?? 'Khóa học', 'amount' => $amount, 'debt_before' => $price ?: $amount,
+                        'course_item_id' => (int) $item['id'], 'course_id' => $student->course_id, 'fee' => $price ?: $amount,
+                        'discount' => 0, 'total_sessions' => (int) ($item['total_sessions'] ?? 0),
+                    ]],
+                    'sessions_added' => 0,
+                    'payment_method' => 'bank_transfer',
+                    'status' => 'paid',
+                    'paid_at' => Carbon::now(),
+                    'note' => 'Học phí nhập học ban đầu',
+                    'recorded_by' => $request->user()?->name ?? 'Admin',
+                ]);
+            }
         }
 
         $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
@@ -388,7 +402,7 @@ class StudentApiController extends Controller
         $slots = StudentSchedule::slots($student);
         $slotCount = count($slots);
         $courses = $student->registered_courses;
-        if ($slotCount > 0 && $slots != $slotsBefore &&! empty($courses) && is_array($courses)) {
+        if ($slotCount > 0 && $slots != $slotsBefore && ! empty($courses) && is_array($courses)) {
             $changed = false;
             foreach ($courses as $key => $cItem) {
                 if (empty($cItem['schedule_ids'])) {
@@ -597,18 +611,11 @@ class StudentApiController extends Controller
             ], 422);
         }
 
-        // Giao học cụ = xuất kho + ghi doanh thu học cụ (nếu có giá)
+        // Giao học cụ = xuất kho; tiền học cụ là khoản phải thu của học viên (công nợ / doanh thu dự kiến),
+        // chỉ thành doanh thu thực tế khi lập hóa đơn thanh toán ở trang Hóa đơn
         SupplySales::deductStock($validated['items'], $center);
-        $revenue = SupplySales::recordRevenue($validated['items'], [
-            'date' => $validated['delivery_date'],
-            'student_name' => $student->name,
-            'center' => $center,
-            'payment_method' => $validated['payment_method'] ?? 'Tiền mặt',
-            'recorded_by' => $request->user()?->name ?? 'Admin',
-            'note' => 'Giao học cụ cho học viên '.$student->code,
-        ]);
 
-        // Lưu kèm học cụ trong kho và dòng doanh thu để thu hồi được đúng (nhập lại kho, bớt doanh thu)
+        // Lưu kèm học cụ trong kho để thu hồi được đúng (nhập lại kho)
         $currentSupplies = $student->supplies ?? [];
         foreach ($validated['items'] as $item) {
             $currentSupplies[] = [
@@ -617,7 +624,6 @@ class StudentApiController extends Controller
                 'quantity' => $item['quantity'],
                 'price' => $item['price'] ?? 0,
                 'inventory_id' => $item['inventory_id'] ?? null,
-                'revenue_id' => $revenue['id'] ?? null,
                 'delivery_date' => $validated['delivery_date'],
                 'center' => $center,
                 'status' => 'delivered',
@@ -648,6 +654,11 @@ class StudentApiController extends Controller
         }
 
         $supply = $supplies[$index];
+        // Đã thu tiền học cụ này trên hóa đơn: sửa / hủy hóa đơn trước để không lệch tiền
+        $paidRow = collect(Tuition::supplies($student))->firstWhere('supply_id', (string) $supplyId);
+        if (empty($supply['revenue_id']) && $paidRow && $paidRow['paid'] > 0) {
+            return response()->json(['message' => "Học cụ {$supply['name']} đã thu tiền trên hóa đơn, hãy sửa hoặc hủy hóa đơn trước khi thu hồi."], 422);
+        }
         $validated = $request->validate([
             'quantity' => 'nullable|integer|min:1|max:'.max(1, (int) $supply['quantity']),
             'reason' => 'nullable|string|max:255',
@@ -664,7 +675,8 @@ class StudentApiController extends Controller
 
         $center = $supply['center'] ?? $student->center;
         $restocked = SupplySales::restock([...$supply, 'quantity' => $quantity], $center);
-        $refund = SupplySales::reverseRevenue($supply, $quantity, $student->name);
+        // Chỉ học cụ giao theo cách cũ (ghi doanh thu ngay lúc giao) mới phải bớt doanh thu
+        $refund = ! empty($supply['revenue_id']) ? SupplySales::reverseRevenue($supply, $quantity, $student->name) : 0;
 
         ActivityLogger::log('updated', 'student', $student->name, $student->id, ActivityLogger::diff(
             ['note' => "Đã giao {$supply['name']} x{$supply['quantity']} ngày {$supply['delivery_date']}"],
@@ -731,59 +743,176 @@ class StudentApiController extends Controller
         ]);
     }
 
+    /**
+     * Ngày bắt đầu gợi ý cho khóa học tiếp: buổi theo lịch kế tiếp sau buổi cuối dự kiến của khóa đang học
+     * (đã tính tạm dừng, ngày nghỉ, buổi bù đã đặt, nghỉ phép).
+     */
+    public function suggestCourseStart(Request $request, Student $student): JsonResponse
+    {
+        $itemId = $request->integer('continue_from') ?: null;
+
+        return response()->json(['start_date' => StudentSchedule::nextStartAfter($student, $itemId)?->toDateString()]);
+    }
+
+    /**
+     * Thêm khóa học cho học viên:
+     *  - "parallel" (học song song môn khác): chọn ca riêng cho khóa (các ca chưa thuộc khóa khác), ngày bắt đầu do giáo vụ chọn.
+     *  - "continue" (học tiếp / gia hạn): dùng lại ca của khóa đang học, ngày bắt đầu mặc định là buổi kế tiếp sau khóa đó;
+     *    lịch dự kiến tự nối sau khóa cũ, điểm danh trừ khóa cũ tới khi hết buổi rồi mới sang khóa mới.
+     * Không đổi "Ngày bắt đầu học" / ngày kết thúc của học viên (đó là ngày của khóa đầu tiên).
+     * Học phí khóa mới là khoản phải thu (giá khóa); paid_amount > 0 thì lập luôn hóa đơn thanh toán.
+     */
     public function addCourse(Request $request, Student $student): JsonResponse
     {
         $validated = $request->validate([
             'course_id' => 'required|exists:courses,id',
             'total_sessions' => 'required|integer|min:1',
+            'mode' => 'nullable|in:parallel,continue',
+            'continue_from' => 'nullable|integer',
+            'schedule_ids' => 'nullable|array',
+            'schedule_ids.*' => 'string',
+            // Học song song: ca mới cho khóa (thứ, giờ, giáo viên, phòng), thêm vào lịch học của học viên
+            'new_slots' => 'nullable|array|max:14',
+            'new_slots.*.day' => 'required|integer|between:0,6',
+            'new_slots.*.start' => 'required|date_format:H:i',
+            'new_slots.*.end' => 'nullable|date_format:H:i',
+            'new_slots.*.teacher' => 'nullable|string|max:255',
+            'new_slots.*.room' => 'nullable|string|max:100',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date',
             'sessions_per_week' => 'nullable|string|max:100',
+            'paid_amount' => 'nullable|numeric|min:0',
+            'payment_method' => 'nullable|string|in:bank_transfer,cash,pos,momo',
         ]);
+
+        // Ghi nhận đã thu tiền = lập hóa đơn: chỉ người có quyền trang Hóa đơn (giáo vụ bị chặn trang này)
+        if ((float) ($validated['paid_amount'] ?? 0) > 0 && ! self::canRecordPayment($request)) {
+            return response()->json(['message' => 'Bạn không có quyền thu học phí / lập hóa đơn. Khóa mới sẽ hiện "còn nợ", chủ trung tâm hoặc quản lý lập hóa đơn sau.'], 403);
+        }
 
         $course = Course::findOrFail($validated['course_id']);
         $list = $student->registered_courses_list;
+        $mode = $validated['mode'] ?? 'parallel';
+        $slotIds = array_column(StudentSchedule::slots($student), 'id');
+
+        $previous = null;
+        if ($mode === 'continue') {
+            $previous = collect($list)->firstWhere('id', (int) ($validated['continue_from'] ?? 0))
+                ?? collect($list)->filter(fn ($i) => ($i['status'] ?? 'active') !== 'completed')->last()
+                ?? collect($list)->last();
+            if (! $previous) {
+                return response()->json(['message' => 'Học viên chưa có khóa nào để học tiếp.'], 422);
+            }
+            // Học tiếp dùng lại đúng ca của khóa trước (khóa trước không chọn ca riêng: các ca chung)
+            $scheduleIds = StudentSchedule::courseSlotIds($student, $previous);
+            $startDate = $validated['start_date'] ?? StudentSchedule::nextStartAfter($student, (int) $previous['id'])?->toDateString();
+        } else {
+            $scheduleIds = array_values(array_intersect($validated['schedule_ids'] ?? [], $slotIds));
+            // Ca đã thuộc khóa khác đang học thì không gán trùng
+            $claimed = collect($list)->filter(fn ($i) => ($i['status'] ?? 'active') !== 'completed')
+                ->flatMap(fn ($i) => $i['schedule_ids'] ?? [])->all();
+            if ($taken = array_values(array_intersect($scheduleIds, $claimed))) {
+                return response()->json(['message' => 'Ca '.implode(', ', array_map(fn ($id) => StudentSchedule::timeLabel(StudentSchedule::find($student, $id) ?? []), $taken))
+                    .' đang thuộc khóa khác. Học song song cần ca riêng (thêm ca ở phần lịch học của học viên).'], 422);
+            }
+            // Ca mới nhập ngay trong form thêm khóa: thêm vào lịch học của học viên và gán cho khóa này
+            if ($newSlots = $validated['new_slots'] ?? []) {
+                $existing = StudentSchedule::slots($student);
+                foreach ($newSlots as $slot) {
+                    $clash = collect($existing)->first(fn ($e) => (int) $e['day'] === (int) $slot['day'] && $e['start'] === $slot['start']);
+                    if ($clash) {
+                        return response()->json(['message' => 'Học viên đã có ca '.StudentSchedule::timeLabel($clash).' '
+                            .(StudentSchedule::DAY_LABELS[(int) $slot['day']] ?? '').', chọn ca đó ở trên hoặc đổi giờ khác.'], 422);
+                    }
+                }
+                $merged = StudentSchedule::normalize([...$existing, ...$newSlots]);
+                $student->fill($this->scheduleAttributes(['schedules' => $merged]));
+                $added = array_values(array_diff(array_column($merged, 'id'), array_column($existing, 'id')));
+                $scheduleIds = [...$scheduleIds, ...$added];
+                $slotIds = array_column($merged, 'id');
+            }
+            // Form chọn rõ "học song song" thì phải có ca riêng (gọi cũ không gửi mode: giữ cách cũ, dùng ca chung)
+            if (($validated['mode'] ?? null) === 'parallel' && $scheduleIds === [] && $slotIds !== []) {
+                return response()->json(['message' => 'Học song song cần ca học riêng: chọn ca có sẵn hoặc thêm ca mới cho khóa.'], 422);
+            }
+            $startDate = $validated['start_date'] ?? Carbon::today()->format('Y-m-d');
+        }
 
         $newCourse = [
-            'id' => count($list) + 1,
+            'id' => (int) collect($list)->max('id') + 1,
             'course_id' => (int) $course->id,
             'course_name' => $course->name,
             'total_sessions' => (int) $validated['total_sessions'],
             'attended_sessions' => 0,
             'remaining_sessions' => (int) $validated['total_sessions'],
-            'start_date' => $validated['start_date'] ?? Carbon::today()->format('Y-m-d'),
+            'start_date' => $startDate,
             'end_date' => $validated['end_date'] ?? null,
-            'schedule_info' => ! empty($validated['sessions_per_week']) ? "{$validated['sessions_per_week']} buổi/tuần" : '1 buổi/tuần',
-            'sessions_per_week' => $validated['sessions_per_week'] ?? '',
+            'schedule_info' => ! empty($validated['sessions_per_week']) ? "{$validated['sessions_per_week']} buổi/tuần" : ($previous['schedule_info'] ?? '1 buổi/tuần'),
+            'sessions_per_week' => $validated['sessions_per_week'] ?? ($previous['sessions_per_week'] ?? ''),
             'allowed_absences' => $course->allowed_absences ?? 3,
             'absences_used' => 0,
             'status' => 'active',
+            'schedule_ids' => $scheduleIds,
+            'mode' => $mode,
+            'continues' => $previous ? (int) $previous['id'] : null,
         ];
 
+        // Học tiếp: khóa trước chưa ghi ca riêng thì ghi rõ (hai khóa cùng sở hữu ca, điểm danh trừ khóa còn buổi trước)
+        if ($mode === 'continue') {
+            $list = array_map(fn ($i) => (int) $i['id'] === (int) $previous['id'] && empty($i['schedule_ids'])
+                ? [...$i, 'schedule_ids' => $scheduleIds] : $i, $list);
+        }
+        // Khóa đầu tiên chưa lưu danh sách ca riêng: ghi lại ca chung để khóa song song không giành ca của nó
+        if ($mode === 'parallel' && $scheduleIds !== []) {
+            $list = array_map(fn ($i) => empty($i['schedule_ids']) && ($i['status'] ?? 'active') !== 'completed'
+                ? [...$i, 'schedule_ids' => array_values(array_diff($slotIds, $scheduleIds))] : $i, $list);
+        }
         $list[] = $newCourse;
 
-        $overallTotal = array_sum(array_column($list, 'total_sessions'));
-        $overallRemaining = array_sum(array_column($list, 'remaining_sessions'));
-
         $student->registered_courses = $list;
-        $student->course_id = $course->id;
-        $student->total_sessions = $overallTotal;
-        $student->remaining_sessions = $overallRemaining;
-        if (! empty($validated['start_date'])) {
-            $student->join_date = $validated['start_date'];
+        // Học tiếp: khóa chính của học viên là khóa mới; học song song: giữ khóa chính
+        if ($mode === 'continue') {
+            $student->course_id = $course->id;
         }
-        if (! empty($validated['end_date'])) {
-            $student->end_date = $validated['end_date'];
-        }
-        if (! empty($validated['sessions_per_week'])) {
-            $student->schedule_info = "{$validated['sessions_per_week']} buổi/tuần";
+        $student->total_sessions = array_sum(array_column($list, 'total_sessions'));
+        $student->remaining_sessions = array_sum(array_column($list, 'remaining_sessions'));
+        if ($mode === 'continue') {
+            $student->retention_status = 'renewed';
         }
         $student->save();
+
+        // Phụ huynh đóng tiền luôn lúc đăng ký khóa: lập hóa đơn thanh toán cho khóa mới (không quá học phí)
+        $price = Tuition::coursePrice($course->id);
+        $paid = min((float) ($validated['paid_amount'] ?? 0), $price > 0 ? $price : (float) ($validated['paid_amount'] ?? 0));
+        if ($paid > 0) {
+            Invoice::create([
+                'invoice_code' => Invoice::nextInvoiceCodeForCenter($student->center),
+                'student_id' => $student->id,
+                'course_id' => $course->id,
+                'course_item_id' => $newCourse['id'],
+                'center' => $student->center,
+                'amount' => $paid,
+                'lines' => [[
+                    'type' => 'course', 'name' => $course->name, 'amount' => $paid, 'debt_before' => $price ?: $paid,
+                    'course_item_id' => $newCourse['id'], 'course_id' => $course->id, 'fee' => $price ?: $paid, 'discount' => 0,
+                    'total_sessions' => $newCourse['total_sessions'],
+                ]],
+                'sessions_added' => 0,
+                'payment_method' => $validated['payment_method'] ?? 'bank_transfer',
+                'status' => 'paid',
+                'paid_at' => Carbon::now(),
+                'note' => $mode === 'continue' ? 'Học phí khóa học tiếp' : 'Học phí khóa học thêm',
+                'recorded_by' => $request->user()?->name ?? 'Admin',
+            ]);
+        }
+
         $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
 
         return response()->json([
-            'message' => "Đã thêm khóa học {$course->name} cho học viên {$student->name} thành công!",
+            'message' => ($mode === 'continue' ? "Đã đăng ký học tiếp khóa {$course->name}" : "Đã thêm khóa học {$course->name}")
+                ." cho học viên {$student->name}".($startDate ? ', bắt đầu '.Carbon::parse($startDate)->format('d/m/Y') : '').'!',
             'student' => $student,
+            'course_item_id' => $newCourse['id'],
         ]);
     }
 
@@ -922,6 +1051,25 @@ class StudentApiController extends Controller
         ]);
     }
 
+    /**
+     * Được ghi nhận thu tiền / lập hóa đơn (không bị chặn trang "Hóa đơn & Thu phí" ở màn Nhân sự).
+     */
+    private static function canRecordPayment(Request $request): bool
+    {
+        return ! PagePermissions::isBlocked($request->user(), 'Hóa đơn & Thu phí');
+    }
+
+    /**
+     * Công nợ học phí / học cụ cho nút Học phí ở danh sách học viên (không gửi kèm cả danh sách phiếu thu).
+     */
+    private function attachTuition(Student $st): void
+    {
+        $summary = Tuition::summary($st, $st->invoices);
+        $st->setAttribute('tuition', ['debt' => $summary['debt'], 'paid' => $summary['paid'], 'fee' => $summary['fee'],
+            'courses' => array_map(fn ($c) => array_intersect_key($c, array_flip(['course_item_id', 'name', 'fee', 'discount', 'paid', 'debt', 'pending_invoice'])), $summary['courses'])]);
+        $st->makeHidden('invoices');
+    }
+
     public function tuitionInvoicePdf(Student $student): Response
     {
         $student->load('course');
@@ -934,7 +1082,8 @@ class StudentApiController extends Controller
             'student' => $student,
             'invoiceCode' => $invoiceCode,
             'issuedAt' => now()->format('d/m/Y'),
-            'amount' => $student->course?->price ?? 0,
+            // Còn nợ học phí / học cụ thì báo đúng số còn nợ; đã đóng đủ thì báo học phí khóa tiếp theo (giá khóa)
+            'amount' => Tuition::summary($student)['debt'] ?: ($student->course?->price ?? 0),
             'center' => $center,
             'brand' => BrandSettings::brand(),
         ])->setPaper('a4')->setOption('isFontSubsettingEnabled', true);

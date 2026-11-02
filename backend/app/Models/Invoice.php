@@ -31,6 +31,9 @@ class Invoice extends Model
         'sessions_added' => 'integer',
         'sessions_reverted' => 'integer',
         'paid_at' => 'datetime',
+        'due_date' => 'date:Y-m-d',
+        'lines' => 'array',
+        'course_item_id' => 'integer',
         'cancelled_at' => 'datetime',
     ];
 

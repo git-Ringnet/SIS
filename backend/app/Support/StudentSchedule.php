@@ -114,16 +114,20 @@ class StudentSchedule
         $firstItemId = $items[0]['id'] ?? null;
 
         return array_values(array_filter(self::slotsOn($student, Carbon::parse($date)->dayOfWeek), function ($slot) use ($items, $firstItemId, $date) {
-            foreach ($items as $item) {
-                if (in_array($slot['id'], $item['schedule_ids'] ?? [], true)) {
-                    // Khóa đầu tiên theo "Ngày bắt đầu học" (đã xét ở trên), khóa thêm theo ngày bắt đầu của khóa
-                    return ($item['id'] ?? null) === $firstItemId
-                        || empty($item['start_date'])
-                        || Carbon::parse($item['start_date'])->toDateString() <= $date;
+            // Ca có thể thuộc nhiều khóa (khóa học tiếp dùng lại ca của khóa trước): có học nếu một trong các khóa đó đã bắt đầu.
+            // Khóa đầu tiên theo "Ngày bắt đầu học" (đã xét ở trên), khóa thêm theo ngày bắt đầu của khóa
+            $owners = array_filter($items, fn ($item) => in_array($slot['id'], $item['schedule_ids'] ?? [], true));
+            if ($owners === []) {
+                return true;
+            }
+            foreach ($owners as $item) {
+                if (($item['id'] ?? null) === $firstItemId || empty($item['start_date'])
+                    || Carbon::parse($item['start_date'])->toDateString() <= $date) {
+                    return true;
                 }
             }
 
-            return true;
+            return false;
         }));
     }
 
@@ -345,15 +349,18 @@ class StudentSchedule
         }
 
         if ($slotId !== null) {
-            foreach ($items as $item) {
-                if (in_array($slotId, $item['schedule_ids'] ?? [], true)) {
-                    return $item;
-                }
+            // Ca thuộc nhiều khóa (khóa học tiếp dùng lại ca của khóa trước): khóa còn buổi đăng ký trước, hết thì khóa cuối
+            $owners = array_values(array_filter($items, fn ($i) => in_array($slotId, $i['schedule_ids'] ?? [], true)));
+            if ($owners !== []) {
+                $open = array_values(array_filter($owners, fn ($i) => ($i['status'] ?? 'active') !== 'completed' && ($i['remaining_sessions'] ?? 1) > 0));
+
+                return $open[0] ?? end($owners);
             }
         }
 
-        $general = array_values(array_filter($items, fn ($i) => empty($i['schedule_ids'])));
-        $active = array_values(array_filter($general, fn ($i) => ($i['remaining_sessions'] ?? 1) > 0)) ?: $general;
+        // Không rõ ca (buổi học lẻ / bản ghi cũ): khóa không chọn ca riêng, không có thì mọi khóa; ưu tiên khóa còn buổi
+        $general = array_values(array_filter($items, fn ($i) => empty($i['schedule_ids']))) ?: $items;
+        $active = array_values(array_filter($general, fn ($i) => ($i['status'] ?? 'active') !== 'completed' && ($i['remaining_sessions'] ?? 1) > 0)) ?: $general;
 
         return $active[0] ?? $items[0];
     }
@@ -584,7 +591,7 @@ class StudentSchedule
      * nghỉ không có điểm danh). Buổi đã học trước khi dùng hệ thống (đã trừ vào số buổi nhưng không có điểm danh) tính ở đầu.
      *
      * @return array{numbers: array<int, int>, unmarked: array<string, int>, last: array<string, int>}
-     *         số của từng bản ghi (id => n), của từng buổi chưa điểm danh (key => n) và số cuối của từng khóa
+     *                                                                                                 số của từng bản ghi (id => n), của từng buổi chưa điểm danh (key => n) và số cuối của từng khóa
      */
     public static function officialNumbers(Student $student, Collection $attendances): array
     {
@@ -797,6 +804,7 @@ class StudentSchedule
 
         $result = [];
         $seen = [];
+        $lastBySlot = []; // ngày dự kiến cuối cùng đã xếp của từng ca
         foreach ($student->registered_courses_list ?: [null] as $item) {
             if ($item && ($item['status'] ?? 'active') === 'completed') {
                 continue;
@@ -809,16 +817,82 @@ class StudentSchedule
             if ($slotIds === []) {
                 continue;
             }
-            foreach (self::upcomingSessions($student, $remaining, $slotIds, ($item['start_date'] ?? null) ?: null) as $session) {
-                $key = $session['date']->toDateString().'|'.$session['slot']['id'];
+            // Khóa học tiếp dùng lại ca của khóa trước: lịch nối sau buổi cuối dự kiến của khóa trước (khóa trước lùi vì
+            // tạm dừng / nghỉ / bù thì khóa sau lùi theo), không chồng lên nhau
+            $from = ($item['start_date'] ?? null) ?: null;
+            $after = collect($slotIds)->map(fn ($id) => $lastBySlot[$id] ?? null)->filter()->max();
+            if ($after && (! $from || $after >= $from)) {
+                $from = Carbon::parse($after)->addDay()->toDateString();
+            }
+            foreach (self::upcomingSessions($student, $remaining, $slotIds, $from) as $session) {
+                $date = $session['date']->toDateString();
+                $key = $date.'|'.$session['slot']['id'];
                 if (! isset($seen[$key])) {
                     $seen[$key] = true;
                     $result[] = [...$session, 'item' => $item];
+                    $lastBySlot[$session['slot']['id']] = max($lastBySlot[$session['slot']['id']] ?? $date, $date);
                 }
             }
         }
 
         return $result;
+    }
+
+    /**
+     * Mã các ca của một khóa (khóa không chọn ca riêng: các ca chung chưa thuộc khóa khác).
+     *
+     * @return list<string>
+     */
+    public static function courseSlotIds(Student $student, ?array $item): array
+    {
+        return array_values(array_column(self::courseSlots($student, $item), 'id'));
+    }
+
+    /**
+     * Ngày bắt đầu cho khóa học tiếp sau khóa $itemId (mặc định khóa đang học): buổi theo lịch kế tiếp sau buổi cuối dự kiến
+     * của khóa đó (đã tính tạm dừng, ngày nghỉ, buổi bù, nghỉ phép). Khóa đã hết buổi: buổi theo lịch gần nhất từ hôm nay.
+     */
+    public static function nextStartAfter(Student $student, ?int $itemId = null): ?Carbon
+    {
+        $items = collect($student->registered_courses_list);
+        $item = $items->firstWhere('id', $itemId)
+            ?? $items->filter(fn ($i) => ($i['status'] ?? 'active') !== 'completed')->last()
+            ?? $items->last();
+        $slotIds = self::courseSlotIds($student, $item);
+        if ($slotIds === []) {
+            return null;
+        }
+
+        $last = collect(self::plannedSessions($student))->filter(fn ($p) => ($p['item']['id'] ?? null) === ($item['id'] ?? null))->max('date');
+        $from = $last ? $last->copy()->addDay()->toDateString() : null;
+        $next = self::upcomingSessions($student, 1, $slotIds, $from)[0]['date'] ?? null;
+
+        return $next?->copy()->startOfDay();
+    }
+
+    /**
+     * Cảnh báo khóa học tiếp: khóa trước dự kiến kết thúc sau ngày bắt đầu đã nhập của khóa này (khóa trước bị lùi vì
+     * tạm dừng / nghỉ...). Ngày kết thúc dự kiến của khóa sau cố định theo ngày bắt đầu, nên giáo vụ nên cập nhật ngày bắt đầu.
+     *
+     * @return array<int, string> id khóa => cảnh báo
+     */
+    public static function continuationWarnings(Student $student): array
+    {
+        $items = collect($student->registered_courses_list);
+        if ($items->whereNotNull('continues')->isEmpty()) {
+            return [];
+        }
+        $planned = collect(self::plannedSessions($student));
+        $warnings = [];
+        foreach ($items->whereNotNull('continues') as $item) {
+            $prevLast = $planned->filter(fn ($p) => ($p['item']['id'] ?? null) === (int) $item['continues'])->max('date');
+            if ($prevLast && ! empty($item['start_date']) && $prevLast->toDateString() >= $item['start_date']) {
+                $warnings[(int) $item['id']] = 'Khóa trước dự kiến học tới '.$prevLast->format('d/m/Y')
+                    .', sau ngày bắt đầu khóa này ('.Carbon::parse($item['start_date'])->format('d/m/Y').'). Nên cập nhật ngày bắt đầu.';
+            }
+        }
+
+        return $warnings;
     }
 
     /**

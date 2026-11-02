@@ -43,7 +43,7 @@ class MessageTemplateDefaults
     {
         return [
             'tuition_reminder' => ['tuition_reminder', 'Nhắc học phí khóa tiếp theo',
-                "Dạ em chào anh/chị {ten_phu_huynh} ạ. Em là quản lý tại Trung tâm Đào tạo. Bé {ten_hoc_vien} hiện tại chỉ còn {so_buoi_con_lai} buổi học trong khóa {khoa_hoc}. Để không bị gián đoạn lịch học quen thuộc của bé cùng thầy/cô, trung tâm xin phép gửi thông tin học phí khóa tiếp theo ({so_tien}):\n- Số TK: {so_tai_khoan}\n- Ngân hàng: {ngan_hang}\n- Cú pháp: [Học phí {ten_hoc_vien} - SĐT {sdt_phu_huynh}]\nEm cảm ơn anh/chị nhiều ạ!"],
+                "Dạ em chào anh/chị {ten_phu_huynh} ạ. Em là quản lý tại Trung tâm Đào tạo. Bé {ten_hoc_vien} hiện tại chỉ còn {so_buoi_con_lai} buổi học trong khóa {khoa_hoc}. Để không bị gián đoạn lịch học quen thuộc của bé cùng thầy/cô, trung tâm xin phép gửi thông tin học phí khóa tiếp theo ({so_tien}):\n- {thong_tin_chuyen_khoan}\n- Cú pháp: [Học phí {ten_hoc_vien} - SĐT {sdt_phu_huynh}]\nEm cảm ơn anh/chị nhiều ạ!"],
             'absence_alert' => ['absence_alert', 'Cảnh báo học viên vắng học 2 buổi liên tiếp',
                 'Dạ chào anh/chị {ten_phu_huynh}, trung tâm nhận thấy bé {ten_hoc_vien} đã vắng 2 buổi liên tiếp gần đây. Không biết bé nhà mình có gặp vấn đề về sức khỏe hay bận lịch học ở trường không ạ? Nếu cần sắp xếp buổi học bù, anh/chị phản hồi sớm để trung tâm hỗ trợ xếp lịch cho bé nhé ạ!'],
             'payment_confirmation' => ['payment_confirmation', 'Xác nhận đã nhận học phí & Gia hạn thành công',

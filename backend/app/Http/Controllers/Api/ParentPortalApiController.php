@@ -10,6 +10,7 @@ use App\Support\BrandSettings;
 use App\Support\CenterStore;
 use App\Support\SingleLessons;
 use App\Support\StudentSchedule;
+use App\Support\Tuition;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -144,14 +145,43 @@ class ParentPortalApiController extends Controller
                 ] : null,
             ],
             // Ngày bắt đầu / kết thúc từng khóa (chưa nhập ngày kết thúc thì dự kiến theo lịch học và số buổi còn lại)
-            'courses' => collect($student->registered_courses_list)->map(fn ($item) => [
-                'course_item_id' => $item['id'],
-                'course_name' => $item['course_name'] ?? $student->course?->name ?? 'Khóa học',
-                'total_sessions' => (int) ($item['total_sessions'] ?? 0),
-                'remaining_sessions' => (int) ($item['remaining_sessions'] ?? 0),
-                'completed' => ($item['status'] ?? 'active') === 'completed',
-                ...$student->courseItemDates($item),
-            ])->values(),
+            // Từng khóa kèm số liệu riêng (học nhiều khóa / khóa học tiếp: Cổng PH chọn khóa để xem, khóa đã xong thu gọn)
+            'courses' => collect($student->registered_courses_list)->map(function ($item) use ($student, $attendances) {
+                $key = StudentSchedule::itemKey($student, (int) $item['id']);
+                $mine = $attendances->filter(fn ($a) => StudentSchedule::itemKey($student, $a->course_item_id) === $key);
+                $total = (int) ($item['total_sessions'] ?? 0);
+                $remaining = (int) ($item['remaining_sessions'] ?? 0);
+                $deducted = $mine->filter(fn ($a) => $a->status !== 'present' && $a->deductsSession())->count();
+                $allowed = (int) ($item['allowed_absences'] ?? $student->allowed_absences ?? 3);
+                $leaveUsed = (int) ($item['absences_used'] ?? 0);
+
+                return [
+                    'course_item_id' => $item['id'],
+                    'course_name' => $item['course_name'] ?? $student->course?->name ?? 'Khóa học',
+                    'total_sessions' => $total,
+                    'remaining_sessions' => $remaining,
+                    'completed' => ($item['status'] ?? 'active') === 'completed',
+                    ...$student->courseItemDates($item),
+                    'stats' => [
+                        'total_sessions' => $total,
+                        'remaining_sessions' => $remaining,
+                        'completed_sessions' => max($mine->where('status', 'present')->count(), max(0, $total - $remaining) - $deducted),
+                        'absent_with_leave' => $mine->where('status', 'absent_with_leave')->count(),
+                        'absent_without_leave' => $mine->where('status', 'absent_without_leave')->count(),
+                        'allowed_absences' => $allowed,
+                        'leave_used' => $leaveUsed,
+                        'leave_left' => max(0, $allowed - $leaveUsed),
+                    ],
+                ];
+            })->values(),
+            // Khóa đang học: khóa chưa xong bắt đầu sớm nhất (khóa cũ học xong mới tới khóa học tiếp); hết thì khóa cuối
+            'current_course_item_id' => (function () use ($student) {
+                $items = collect($student->registered_courses_list);
+                $active = $items->filter(fn ($i) => ($i['status'] ?? 'active') !== 'completed' && (int) ($i['remaining_sessions'] ?? 0) > 0)
+                    ->sortBy(fn ($i) => ($i['start_date'] ?? '') ?: '0000');
+
+                return ($active->first() ?? $items->last())['id'] ?? null;
+            })(),
             'stats' => [
                 'total_sessions' => $totalSessions,
                 'completed_sessions' => $completedSessions,
@@ -174,12 +204,31 @@ class ParentPortalApiController extends Controller
             'supplies' => $student->supplies ?? [],
             'invoices' => $student->invoices->where('status', '!=', 'cancelled')->values()->map(fn ($inv) => [
                 'id' => $inv->id,
-                'code' => $inv->code,
+                'code' => $inv->invoice_code,
                 'amount' => $inv->amount,
                 'status' => $inv->status,
                 'payment_method' => $inv->payment_method,
                 'created_at' => $inv->created_at?->format('d/m/Y'),
+                'paid_at' => $inv->paid_at?->format('d/m/Y'),
+                // Nội dung thanh toán của hóa đơn (khóa học / học cụ); phiếu cũ: tên khóa
+                'items' => ! empty($inv->lines) ? array_column($inv->lines, 'name') : [$inv->course?->name ?? 'Học phí'],
             ]),
+            // Học phí từng khóa / học cụ: đã thanh toán và còn phải đóng (cùng cách tính với trang Hóa đơn)
+            'tuition' => (function () use ($student) {
+                $summary = Tuition::summary($student, $student->invoices);
+
+                return [
+                    'debt' => $summary['debt'],
+                    'paid' => $summary['paid'],
+                    'fee' => $summary['fee'],
+                    'items' => [
+                        ...array_map(fn ($c) => ['type' => 'course', 'name' => $c['name'], 'fee' => $c['fee'] - $c['discount'],
+                            'paid' => $c['paid'], 'debt' => $c['debt']], $summary['courses']),
+                        ...array_map(fn ($s) => ['type' => 'supply', 'name' => $s['name'].' x'.$s['quantity'], 'fee' => $s['total'],
+                            'paid' => $s['paid'], 'debt' => $s['debt']], $summary['supplies']),
+                    ],
+                ];
+            })(),
             'brand' => [
                 'brand_name' => $brand['brand_name'] ?? 'EduCRM SIS',
                 'logo_url' => $brand['logo_url'] ?? null,
@@ -303,7 +352,7 @@ class ParentPortalApiController extends Controller
                 return ! $end || $session['date']->lte(Carbon::createFromFormat('d/m/Y', $end)->endOfDay());
             },
         ));
-        foreach ($planned as ['date' => $date, 'slot' => $slot]) {
+        foreach ($planned as ['date' => $date, 'slot' => $slot, 'item' => $plannedItem]) {
             $rows[] = $this->row([
                 'key' => 'plan-'.$date->toDateString().'-'.$slot['id'],
                 'status' => 'upcoming',
@@ -314,7 +363,8 @@ class ParentPortalApiController extends Controller
                 'slot_id' => $slot['id'],
                 'can_request_leave' => true,
                 'official' => true,
-                'course_item' => StudentSchedule::courseItemForSlot($student, $slot['id']),
+                // Khóa của buổi dự kiến (khóa học tiếp dùng chung ca với khóa trước: đúng khóa của buổi đó)
+                'course_item' => $plannedItem ?? StudentSchedule::courseItemForSlot($student, $slot['id']),
             ]);
         }
 

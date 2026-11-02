@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\MessageTemplate;
+use App\Support\CenterStore;
 use App\Support\MessageTemplateDefaults;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -28,6 +29,9 @@ class MessageTemplateApiController extends Controller
         return response()->json([
             'templates' => $templates,
             'categories' => MessageTemplateDefaults::categoryOptions($group),
+            // Thông tin chuyển khoản của từng trung tâm (màn Trung tâm) cho biến {thong_tin_chuyen_khoan}
+            'centers' => array_map(fn ($c) => ['name' => $c['name'] ?? '', 'is_main' => ! empty($c['is_main']),
+                'bank_info' => trim((string) ($c['bank_info'] ?? ''))], CenterStore::all()),
         ]);
     }
 

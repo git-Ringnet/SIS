@@ -74,33 +74,45 @@ class RemainingPagesTest extends TestCase
         $this->assertStringContainsString('Bé ốm', $csv);
     }
 
-    public function test_giving_supplies_deducts_stock_and_records_revenue(): void
+    public function test_giving_supplies_deducts_stock_and_is_receivable_until_paid_by_invoice(): void
     {
         $student = $this->student('An');
         $id = $this->postJson('/api/inventory', ['name' => 'Capo', 'unit' => 'Cái', 'center' => 'Cơ sở A', 'cost_price' => 50000, 'sell_price' => 95000, 'quantity' => 5])->json('item.id');
 
-        $this->postJson("/api/students/{$student->id}/supplies", [
+        $supply = $this->postJson("/api/students/{$student->id}/supplies", [
             'delivery_date' => '2026-10-20', 'center' => 'Cơ sở A',
             'items' => [['inventory_id' => $id, 'name' => 'Capo', 'quantity' => 2, 'price' => 95000]],
-        ])->assertOk();
+        ])->assertOk()->json('supplies.0');
 
+        // Giao học cụ: trừ kho, chưa phải doanh thu thực tế mà là khoản phải thu (doanh thu dự kiến)
         $this->assertSame(3, collect($this->getJson('/api/inventory')->json('items'))->firstWhere('id', $id)['quantity']);
-        $revenue = $this->getJson('/api/revenue?type=inventory')->assertOk();
+        $this->assertEquals(0, $this->getJson('/api/revenue?type=inventory')->json('metrics.inventory_total'));
+        $this->assertEquals(190000, $this->getJson("/api/invoices/payables/{$student->id}")->json('supplies.0.debt'));
+        $this->assertGreaterThanOrEqual(190000, $this->getJson('/api/revenue')->json('metrics.receivable_total'));
+
+        // Lập hóa đơn thu tiền học cụ → doanh thu học cụ thực tế; học cụ đã thanh toán không còn nợ
+        $this->postJson('/api/invoices', ['student_id' => $student->id, 'lines' => [['key' => "supply:{$supply['id']}", 'amount' => 190000]],
+            'payment_method' => 'cash', 'paid_at' => '2026-10-20'])->assertCreated();
+        $revenue = $this->getJson('/api/revenue?type=inventory&month=10&year=2026')->assertOk();
         $this->assertEquals(190000, $revenue->json('metrics.inventory_total'));
         $this->assertSame('An', $revenue->json('transactions.0.student_name'));
+        $this->assertEquals(0, $this->getJson("/api/invoices/payables/{$student->id}")->json('supplies.0.debt'));
 
-        // Bán lẻ từ kho cũng ghi doanh thu
+        // Thu hồi học cụ đã thu tiền: phải sửa hóa đơn trước
+        $this->postJson("/api/students/{$student->id}/supplies/{$supply['id']}/return")->assertUnprocessable();
+
+        // Bán lẻ từ kho (khách mua tại quầy) vẫn ghi doanh thu ngay
         $this->postJson("/api/inventory/{$id}/adjust", ['delta' => -1, 'reason' => 'Bán trực tiếp cho học viên'])->assertOk();
-        $this->assertEquals(285000, $this->getJson('/api/revenue?type=inventory')->json('metrics.inventory_total'));
+        $this->assertEquals(285000, $this->getJson('/api/revenue?type=inventory&month=10&year=2026')->json('metrics.inventory_total'));
     }
 
-    public function test_returning_wrongly_given_supplies_restocks_and_reduces_revenue(): void
+    public function test_returning_wrongly_given_supplies_restocks_and_reduces_amount_owed(): void
     {
         $student = $this->student('An');
         $capo = $this->postJson('/api/inventory', ['name' => 'Capo', 'unit' => 'Cái', 'center' => 'Cơ sở A', 'cost_price' => 50000, 'sell_price' => 95000, 'quantity' => 5])->json('item.id');
         $book = $this->postJson('/api/inventory', ['name' => 'Sách 1A', 'unit' => 'Cuốn', 'center' => 'Cơ sở A', 'cost_price' => 10000, 'sell_price' => 50000, 'quantity' => 5])->json('item.id');
 
-        // Giao 1 lần 2 món: Capo x3, Sách x1 → 335.000đ trên một dòng doanh thu
+        // Giao 1 lần 2 món: Capo x3, Sách x1 → học viên nợ 335.000đ học cụ
         $supplies = collect($this->postJson("/api/students/{$student->id}/supplies", [
             'delivery_date' => '2026-10-20', 'center' => 'Cơ sở A',
             'items' => [
@@ -109,18 +121,19 @@ class RemainingPagesTest extends TestCase
             ],
         ])->assertOk()->json('supplies'))->keyBy('name');
         $stock = fn ($id) => collect($this->getJson('/api/inventory')->json('items'))->firstWhere('id', $id)['quantity'];
-        $revenue = fn () => $this->getJson('/api/revenue?type=inventory')->json('metrics.inventory_total');
-        $this->assertEquals(335000, $revenue());
+        $owed = fn () => (int) collect($this->getJson("/api/invoices/payables/{$student->id}")->json('supplies'))->sum('debt');
+        $this->assertSame(335000, $owed());
 
-        // Thu hồi 1 Capo giao nhầm: còn 2, kho +1, doanh thu -95.000
+        // Thu hồi 1 Capo giao nhầm: còn 2, kho +1, bớt 95.000 tiền phải thu; không có doanh thu nào bị đụng
         $this->postJson("/api/students/{$student->id}/supplies/{$supplies['Capo']['id']}/return", ['quantity' => 1, 'reason' => 'Giao nhầm'])
             ->assertOk()->assertJsonPath('supplies.0.quantity', 2);
-        $this->assertSame([3, 240000], [$stock($capo), (int) $revenue()]);
+        $this->assertSame([3, 240000], [$stock($capo), $owed()]);
 
         // Thu hồi hết Sách: bỏ khỏi học viên (cổng phụ huynh không còn thấy), kho +1
         $this->postJson("/api/students/{$student->id}/supplies/{$supplies['Sách 1A']['id']}/return")->assertOk();
         $this->assertSame(['Capo'], collect($student->fresh()->supplies)->pluck('name')->all());
-        $this->assertSame([5, 190000], [$stock($book), (int) $revenue()]);
+        $this->assertSame([5, 190000], [$stock($book), $owed()]);
+        $this->assertEquals(0, $this->getJson('/api/revenue?type=inventory')->json('metrics.inventory_total'));
 
         // Thu hồi quá số đã giao / học cụ không có → báo lỗi
         $this->postJson("/api/students/{$student->id}/supplies/{$supplies['Capo']['id']}/return", ['quantity' => 3])->assertUnprocessable();
@@ -148,7 +161,7 @@ class RemainingPagesTest extends TestCase
     public function test_invoice_revenue_rows_are_edited_on_invoice_screen(): void
     {
         $student = $this->student('An');
-        $this->postJson('/api/invoices', ['student_id' => $student->id, 'amount' => 1000000, 'sessions_added' => 4, 'payment_method' => 'cash', 'paid_at' => '2026-10-20'])->assertCreated();
+        $this->postJson('/api/invoices', ['student_id' => $student->id, 'lines' => [['key' => 'course:1', 'amount' => 1]], 'payment_method' => 'cash', 'paid_at' => '2026-10-20'])->assertCreated();
 
         $id = $this->getJson('/api/revenue')->json('transactions.0.id');
         $this->deleteJson("/api/revenue/{$id}")->assertUnprocessable();
@@ -249,7 +262,7 @@ class RemainingPagesTest extends TestCase
         // Khóa không có trong danh sách đăng ký → ngày nhập học / kết thúc dự kiến của học viên
         $this->assertSame(['start' => '01/09/2026', 'start_estimated' => false, 'end' => '31/12/2026', 'end_estimated' => false], $student->courseDates(999));
 
-        $id = $this->postJson('/api/invoices', ['student_id' => $student->id, 'course_id' => $piano->id, 'amount' => 1000000, 'sessions_added' => 0, 'payment_method' => 'cash', 'paid_at' => '2026-10-20'])
+        $id = $this->postJson('/api/invoices', ['student_id' => $student->id, 'lines' => [['key' => 'course:2', 'amount' => 1]], 'payment_method' => 'cash', 'paid_at' => '2026-10-20'])
             ->assertCreated()->json('invoice.id');
         $this->get("/api/invoices/{$id}/pdf")->assertOk()->assertHeader('Content-Type', 'application/pdf');
         $this->get("/api/students/{$student->id}/tuition-invoice.pdf")->assertOk();

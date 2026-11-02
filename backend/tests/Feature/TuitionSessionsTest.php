@@ -12,8 +12,8 @@ use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 /**
- * Thu học phí cộng buổi vào đúng khóa đã đăng ký: trước đây chỉ cộng vào tổng của học viên
- * nên lần điểm danh sau (tổng tính lại từ các khóa) làm mất số buổi đã đóng tiền.
+ * Gia hạn cộng buổi vào đúng khóa đã đăng ký (trước đây chỉ cộng vào tổng của học viên nên lần điểm danh sau làm mất
+ * số buổi đã đóng tiền). Hóa đơn ở trang Hóa đơn chỉ ghi nhận thanh toán khoản còn nợ, không cộng buổi.
  */
 class TuitionSessionsTest extends TestCase
 {
@@ -73,7 +73,7 @@ class TuitionSessionsTest extends TestCase
         $this->assertEquals(3600000, $row['latest_paid_invoice']['amount']);
     }
 
-    public function test_new_student_without_payment_gets_pending_invoice_until_confirmed(): void
+    public function test_new_student_without_payment_owes_course_fee_until_an_invoice_is_made(): void
     {
         $id = $this->postJson('/api/students', [
             'name' => 'Bé Mới', 'gender' => 'Nam', 'parent_name' => 'PH', 'parent_phone' => '0900001111',
@@ -81,24 +81,21 @@ class TuitionSessionsTest extends TestCase
             'create_invoice' => true, 'invoice_amount' => 3600000, 'invoice_paid' => false,
         ])->assertCreated()->json('student.id');
 
-        // Cổng phụ huynh: chưa thanh toán; không tính doanh thu tháng; trang Hóa đơn có trong danh sách chờ thu
-        $portal = $this->postJson("/api/portal/students/{$id}/verify", ['phone_last4' => '1111'])->assertOk();
-        $this->assertSame('pending', $portal->json('invoices.0.status'));
-        $invoices = $this->getJson('/api/invoices?month=2026-10')->assertOk();
-        $this->assertEquals(0, $invoices->json('monthlyTotal'));
-        $pending = $invoices->json('pending_invoices.0');
-        $this->assertSame($id, $pending['student_id']);
+        // Chưa đóng: không lập phiếu nào, khóa là khoản còn nợ đúng giá khóa; không tính doanh thu
+        $this->assertSame([], $this->getJson('/api/invoices?month=2026-10')->json('invoices'));
+        $payables = $this->getJson("/api/invoices/payables/{$id}")->assertOk();
+        $this->assertEquals([3600000, 0, 3600000], [$payables->json('courses.0.fee'), $payables->json('courses.0.paid'), $payables->json('debt')]);
 
-        $row = collect($this->getJson('/api/students')->json('students'))->firstWhere('id', $id);
-        $this->assertNull($row['latest_paid_invoice']);
-        $this->assertSame($pending['id'], $row['pending_invoice']['id']);
-
-        // Xác nhận đã thu: thành đã thanh toán, tính doanh thu, không cộng thêm buổi
-        $this->postJson("/api/invoices/{$pending['id']}/mark-paid", ['payment_method' => 'cash', 'paid_at' => '2026-10-19'])->assertOk();
-        $this->assertSame('paid', $this->postJson("/api/portal/students/{$id}/verify", ['phone_last4' => '1111'])->json('invoices.0.status'));
+        // Lập hóa đơn thu một phần rồi phần còn lại: tính doanh thu, không cộng buổi, đóng đủ thì hết nợ
+        $pay = fn (int $amount) => $this->postJson('/api/invoices', ['student_id' => $id, 'lines' => [['key' => 'course:1', 'amount' => $amount]],
+            'payment_method' => 'cash', 'paid_at' => '2026-10-19']);
+        $pay(2000000)->assertCreated()->assertJsonPath('invoice.sessions_added', 0);
+        $this->assertEquals(1600000, $this->getJson("/api/invoices/payables/{$id}")->json('debt'));
+        $pay(2000000)->assertUnprocessable(); // vượt quá số còn nợ
+        $pay(1600000)->assertCreated();
+        $this->assertEquals(0, $this->getJson("/api/invoices/payables/{$id}")->json('debt'));
         $this->assertEquals(3600000, $this->getJson('/api/invoices?month=2026-10')->json('monthlyTotal'));
         $this->assertSame([12, 12], [Student::find($id)->total_sessions, Student::find($id)->remaining_sessions]);
-        $this->postJson("/api/invoices/{$pending['id']}/mark-paid", ['payment_method' => 'cash', 'paid_at' => '2026-10-19'])->assertUnprocessable();
     }
 
     public function test_wrong_renewal_can_be_cancelled_and_restored(): void
@@ -136,34 +133,42 @@ class TuitionSessionsTest extends TestCase
         $this->assertSame(20, $this->item($student)['total_sessions']);
     }
 
-    public function test_wrongly_marked_paid_goes_back_to_pending_keeping_sessions(): void
+    public function test_wrongly_marked_paid_goes_back_to_pending_and_owes_again(): void
     {
         $student = $this->studentWithCourse();
         $invoice = $this->postJson('/api/invoices', [
-            'student_id' => $student->id, 'course_id' => $this->course->id, 'amount' => 3600000, 'sessions_added' => 12,
+            'student_id' => $student->id, 'lines' => [['key' => 'course:1', 'amount' => 3600000]],
             'payment_method' => 'cash', 'paid_at' => '2026-10-19',
         ])->assertCreated()->json('invoice');
+        $this->assertEquals(0, $this->getJson("/api/invoices/payables/{$student->id}")->json('debt'));
 
         $this->postJson("/api/invoices/{$invoice['id']}/mark-unpaid")->assertOk();
         $data = $this->getJson('/api/invoices?month=2026-10')->json();
         $this->assertEquals(0, $data['monthlyTotal']);
         $this->assertSame($invoice['id'], $data['pending_invoices'][0]['id']);
-        $this->assertSame(24, $this->item($student)['total_sessions']); // giữ buổi đã cấp
+        $this->assertEquals(3600000, $this->getJson("/api/invoices/payables/{$student->id}")->json('debt'));
+        $this->assertSame(12, $this->item($student)['total_sessions']); // hóa đơn không đụng số buổi
         $this->postJson("/api/invoices/{$invoice['id']}/mark-unpaid")->assertUnprocessable();
     }
 
-    public function test_invoice_create_and_delete_adjust_the_course_sessions(): void
+    public function test_invoice_records_payment_without_touching_sessions(): void
     {
         $student = $this->studentWithCourse();
 
         $invoice = $this->postJson('/api/invoices', [
-            'student_id' => $student->id, 'course_id' => $this->course->id, 'amount' => 3600000, 'sessions_added' => 12,
+            'student_id' => $student->id, 'lines' => [['key' => 'course:1', 'amount' => 3000000, 'discount' => 600000]],
             'payment_method' => 'cash', 'paid_at' => '2026-10-19',
         ])->assertCreated()->json('invoice');
-        $this->assertSame(24, $this->item($student)['total_sessions']);
-
-        $this->deleteJson("/api/invoices/{$invoice['id']}")->assertOk();
+        // Học phí 3.600.000, giảm 600.000, thu 3.000.000 → đóng đủ; số buổi giữ nguyên
+        $this->assertEquals(0, $this->getJson("/api/invoices/payables/{$student->id}")->json('debt'));
         $this->assertSame(12, $this->item($student)['total_sessions']);
-        $this->assertSame(12, $student->fresh()->remaining_sessions);
+
+        // Sửa số tiền trên hóa đơn → còn nợ phần chênh lệch; xóa hóa đơn → nợ lại cả khóa, số buổi vẫn giữ
+        $this->putJson("/api/invoices/{$invoice['id']}", ['lines' => [['key' => 'course:1', 'amount' => 1000000, 'discount' => 600000]],
+            'payment_method' => 'cash', 'paid_at' => '2026-10-19'])->assertOk();
+        $this->assertEquals(2000000, $this->getJson("/api/invoices/payables/{$student->id}")->json('debt'));
+        $this->deleteJson("/api/invoices/{$invoice['id']}")->assertOk();
+        $this->assertEquals(3600000, $this->getJson("/api/invoices/payables/{$student->id}")->json('debt'));
+        $this->assertSame([12, 12], [$this->item($student)['total_sessions'], $student->fresh()->remaining_sessions]);
     }
 }

@@ -49,13 +49,17 @@ import {
   Check,
 } from 'lucide-vue-next';
 import MoneyInput from '../components/MoneyInput.vue';
-import { tuitionState, TUITION_BUTTON } from '../services/tuition';
+import { tuitionState, tuitionLabel, TUITION_BUTTON, canRecordPayment } from '../services/tuition';
+import { useAuth } from '../services/useAuth';
 import ReturnSupplyModal from '../components/ReturnSupplyModal.vue';
 import StudentContactFields from '../components/StudentContactFields.vue';
 
 const route = useRoute();
 
 const students = ref([]);
+// Không có quyền trang Hóa đơn (giáo vụ): ẩn ô đã thu học phí, khóa mới / học viên mới hiện "còn nợ"
+const { user: authUser } = useAuth();
+const canPay = computed(() => canRecordPayment(authUser.value));
 const courses = ref([]);
 const search = ref('');
 const phoneSearch = ref('');
@@ -291,22 +295,97 @@ const getAddCourseForm = (studentId) => {
   if (!addCourseForms.value[studentId]) {
     const today = new Date().toISOString().split('T')[0];
     addCourseForms.value[studentId] = {
+      // "continue": học tiếp khóa đang học (dùng lại ca, bắt đầu sau buổi cuối khóa cũ); "parallel": học song song môn khác (ca riêng)
+      mode: 'continue',
+      continue_from: null,
+      schedule_ids: [],
+      // Ca mới cho khóa học song song (cùng ô nhập với form sửa học viên): { schedules: [{ day, start, end, teacher, room }] }
+      newSlots: { schedules: [] },
       course_id: courses.value[0]?.id || '',
       total_sessions: 12,
       start_date: today,
       sessions_per_week: '',
       end_date: '',
       end_touched: false,
+      paid_amount: null,
+      payment_method: 'bank_transfer',
     };
   }
   return addCourseForms.value[studentId];
+};
+
+// Chọn khóa khác: số buổi lấy theo số buổi mặc định của khóa
+const onAddCourseChange = (student) => {
+  const form = getAddCourseForm(student.id);
+  const course = courses.value.find((c) => c.id === form.course_id);
+  if (course?.default_sessions) form.total_sessions = course.default_sessions;
+  recomputeAddCourseEnd(student);
+};
+
+// Khóa đang học (chưa xong) để chọn "học tiếp"
+const openCourses = (student) => getStudentCourses(student).filter((c) => c.status !== 'completed');
+// Ca đang thuộc một khóa khác đang học (học song song không được chọn trùng)
+const slotOwner = (student, slotId) => openCourses(student).find((c) => (c.schedule_ids || []).includes(slotId));
+// Ca của khóa mới: học tiếp = ca của khóa đang học; song song = ca đã chọn
+const addCourseSlots = (student) => {
+  const form = getAddCourseForm(student.id);
+  if (form.mode === 'continue') {
+    return courseSlots(student, getStudentCourses(student).find((c) => c.id === form.continue_from));
+  }
+  const fresh = (form.newSlots?.schedules || []).filter((x) => x.day !== '' && x.day !== null && x.start);
+  return [...(student.schedule_slots || []).filter((x) => form.schedule_ids.includes(x.id)), ...fresh];
+};
+
+// Học tiếp: khóa / số buổi như khóa đang học, ngày bắt đầu gợi ý = buổi kế tiếp sau buổi cuối dự kiến của khóa đó
+const prepareContinue = async (student) => {
+  const form = getAddCourseForm(student.id);
+  const prev = getStudentCourses(student).find((c) => c.id === form.continue_from);
+  if (prev) {
+    form.course_id = prev.course_id || form.course_id;
+    form.total_sessions = prev.total_sessions || form.total_sessions;
+  }
+  try {
+    const res = await studentApi.suggestCourseStart(student.id, form.continue_from);
+    if (res.data.start_date) form.start_date = res.data.start_date;
+  } catch {
+    // giữ ngày đang có
+  }
+  recomputeAddCourseEnd(student);
+};
+
+const setAddCourseMode = (student, mode) => {
+  const form = getAddCourseForm(student.id);
+  form.mode = mode;
+  if (mode === 'continue') {
+    prepareContinue(student);
+  } else {
+    form.start_date = new Date().toISOString().split('T')[0];
+    recomputeAddCourseEnd(student);
+  }
+};
+
+// Sửa ca mới trong form thêm khóa: tính lại ngày kết thúc dự kiến theo các ca của khóa mới
+watch(
+  () => JSON.stringify(Object.entries(addCourseForms.value).map(([id, f]) => [id, f.newSlots?.schedules])),
+  () => {
+    for (const id of Object.keys(addCourseForms.value)) {
+      const st = students.value.find((x) => String(x.id) === String(id));
+      if (st && showAddCourseForm.value[id] && addCourseForms.value[id].mode === 'parallel') recomputeAddCourseEnd(st);
+    }
+  },
+);
+
+const toggleAddSlot = (student, slotId) => {
+  const form = getAddCourseForm(student.id);
+  form.schedule_ids = form.schedule_ids.includes(slotId) ? form.schedule_ids.filter((x) => x !== slotId) : [...form.schedule_ids, slotId];
+  recomputeAddCourseEnd(student);
 };
 
 // Tự tính ngày kết thúc dự kiến khi đổi ngày bắt đầu / tổng buổi / buổi/tuần (trừ khi đã sửa tay).
 const recomputeAddCourseEnd = (student) => {
   const form = getAddCourseForm(student.id);
   if (form.end_touched) return;
-  const slots = student.schedule_slots || [];
+  const slots = addCourseSlots(student).length ? addCourseSlots(student) : (student.schedule_slots || []);
   form.end_date = computeCourseEndDate(
     form.start_date,
     Number(form.total_sessions),
@@ -318,7 +397,16 @@ const recomputeAddCourseEnd = (student) => {
 const toggleAddCourseForm = (student) => {
   showAddCourseForm.value[student.id] = !showAddCourseForm.value[student.id];
   if (showAddCourseForm.value[student.id]) {
-    recomputeAddCourseEnd(student);
+    const form = getAddCourseForm(student.id);
+    const open = openCourses(student);
+    // Đang học một khóa: mặc định "học tiếp" khóa đó; chưa có khóa nào đang học: thêm khóa mới (song song)
+    form.continue_from = open[open.length - 1]?.id ?? getStudentCourses(student).slice(-1)[0]?.id ?? null;
+    form.mode = form.continue_from ? 'continue' : 'parallel';
+    form.schedule_ids = [];
+    form.newSlots = { schedules: [] };
+    form.paid_amount = null;
+    if (form.mode === 'continue') prepareContinue(student);
+    else recomputeAddCourseEnd(student);
   }
 };
 
@@ -335,7 +423,19 @@ const submitAddCourse = async (student) => {
 
   try {
     isSubmittingCourse.value[student.id] = true;
+    const newSlots = (form.newSlots?.schedules || []).filter((x) => x.day !== '' && x.day !== null && x.start)
+      .map(({ day, start, end, teacher, room }) => ({ day: Number(day), start, end: end || null, teacher: teacher || null, room: room || null }));
+    if (form.mode === 'parallel' && (student.schedule_slots || []).length && !form.schedule_ids.length && !newSlots.length) {
+      notify.error('Học song song: chọn ca có sẵn hoặc thêm ca mới (thứ, giờ, giáo viên) cho khóa mới.');
+      return;
+    }
     const res = await studentApi.addCourse(student.id, {
+      mode: form.mode,
+      continue_from: form.mode === 'continue' ? form.continue_from : null,
+      schedule_ids: form.mode === 'parallel' ? form.schedule_ids : [],
+      new_slots: form.mode === 'parallel' ? newSlots : [],
+      paid_amount: canPay.value ? Number(form.paid_amount) || 0 : 0,
+      payment_method: form.payment_method,
       course_id: form.course_id,
       total_sessions: Number(form.total_sessions),
       start_date: form.start_date || null,
@@ -1484,11 +1584,11 @@ const getAttendanceSummaryTooltip = (student) => {
                       <button
                         type="button"
                         @click="openRenew(student)"
-                        :title="{ pending: 'Phụ huynh chưa đóng học phí, bấm để xác nhận đã thu', paid: 'Học viên đã đóng học phí, chỉ thu tiếp khi gia hạn', due: 'Thu học phí / gia hạn' }[tuitionState(student)]"
+                        :title="{ pending: 'Học viên còn nợ học phí / học cụ, bấm để lập hóa đơn thu', paid: 'Học viên đã đóng học phí, chỉ thu tiếp khi gia hạn', due: 'Thu học phí / gia hạn' }[tuitionState(student)]"
                         :class="['inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 font-semibold shadow-2xs active:scale-95 transition-all', TUITION_BUTTON[tuitionState(student)].class]"
                       >
                         <CreditCard class="h-3.5 w-3.5" :class="TUITION_BUTTON[tuitionState(student)].icon" />
-                        <span>{{ TUITION_BUTTON[tuitionState(student)].label }}</span>
+                        <span>{{ tuitionLabel(student) }}</span>
                       </button>
 
                       <button
@@ -1535,19 +1635,63 @@ const getAttendanceSummaryTooltip = (student) => {
                     v-if="showAddCourseForm[student.id]"
                     class="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-2xs space-y-4 animate-in fade-in duration-200"
                   >
+                    <!-- Cách thêm khóa: học tiếp (gia hạn) hay học song song môn khác -->
+                    <div class="space-y-2">
+                      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                        <button type="button" @click="setAddCourseMode(student, 'continue')" :disabled="!getStudentCourses(student).length"
+                          class="rounded-xl border px-3 py-2 text-left transition-colors disabled:opacity-40"
+                          :class="getAddCourseForm(student.id).mode === 'continue' ? 'border-red-400 bg-red-50 text-red-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50'">
+                          <span class="block font-bold">Học tiếp sau khóa hiện tại (gia hạn)</span>
+                          <span class="block text-[11px] opacity-80">Dùng lại ca học cũ, bắt đầu sau buổi cuối của khóa đang học. Khóa mới đếm lại từ Buổi 1.</span>
+                        </button>
+                        <button type="button" @click="setAddCourseMode(student, 'parallel')"
+                          class="rounded-xl border px-3 py-2 text-left transition-colors"
+                          :class="getAddCourseForm(student.id).mode === 'parallel' ? 'border-red-400 bg-red-50 text-red-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50'">
+                          <span class="block font-bold">Học song song (môn / khóa khác)</span>
+                          <span class="block text-[11px] opacity-80">Học cùng lúc với khóa hiện tại, chọn ca học riêng cho khóa mới.</span>
+                        </button>
+                      </div>
+                      <div v-if="getAddCourseForm(student.id).mode === 'continue'" class="flex flex-wrap items-center gap-2 text-xs">
+                        <span class="font-bold text-slate-700">Học tiếp sau khóa:</span>
+                        <select v-model="getAddCourseForm(student.id).continue_from" @change="prepareContinue(student)"
+                          class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 font-semibold text-slate-800">
+                          <option v-for="c in getStudentCourses(student)" :key="c.id" :value="c.id">
+                            {{ c.course_name }} ({{ c.status === 'completed' ? 'đã xong' : `còn ${c.remaining_sessions} buổi` }})
+                          </option>
+                        </select>
+                        <span class="text-slate-500">Ca: {{ addCourseSlots(student).map(slotLabel).join(', ') || 'các ca của học viên' }}</span>
+                      </div>
+                      <div v-else class="text-xs space-y-2">
+                        <span class="font-bold text-slate-700">Ca học có sẵn của học viên (chọn nếu khóa mới học ca này):</span>
+                        <div class="mt-1 flex flex-wrap gap-1.5">
+                          <button v-for="slot in (student.schedule_slots || [])" :key="slot.id" type="button"
+                            :disabled="!!slotOwner(student, slot.id)"
+                            @click="toggleAddSlot(student, slot.id)"
+                            class="rounded-lg border px-2.5 py-1 font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                            :class="getAddCourseForm(student.id).schedule_ids.includes(slot.id) ? 'border-red-500 bg-red-600 text-white' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'"
+                            :title="slotOwner(student, slot.id) ? `Đang thuộc khóa ${slotOwner(student, slot.id).course_name}` : ''">
+                            {{ slotLabel(slot) }}<template v-if="slotOwner(student, slot.id)"> · {{ slotOwner(student, slot.id).course_name }}</template>
+                          </button>
+                        </div>
+                        <p v-if="!(student.schedule_slots || []).length" class="text-[11px] text-slate-400">Học viên chưa có ca nào.</p>
+                        <!-- Ca mới cho khóa này: thứ, giờ, giáo viên, phòng (thêm vào lịch học của học viên) -->
+                        <div class="rounded-xl border border-dashed border-slate-300 p-3">
+                          <ScheduleFields v-model="getAddCourseForm(student.id).newSlots" :center="student.center" title="Thêm ca mới cho khóa này (thứ, giờ, giáo viên, phòng)" />
+                        </div>
+                      </div>
+                    </div>
+
                     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
                       <!-- 1. Khóa học -->
                       <div>
                         <label class="block text-xs font-bold text-slate-700 mb-1.5">Khóa học</label>
-                        <select
+                        <!-- Nhiều khóa học: ô chọn có tìm kiếm (cùng danh sách với form thêm học viên) -->
+                        <SearchableSelect
                           v-model="getAddCourseForm(student.id).course_id"
-                          class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-red-500 focus:ring-1 focus:ring-red-500 focus:outline-none transition-all"
-                        >
-                          <option value="" disabled>Chọn khóa học</option>
-                          <option v-for="c in courses" :key="c.id" :value="c.id">
-                            {{ c.name }}
-                          </option>
-                        </select>
+                          :options="courseOptions"
+                          placeholder="Tìm và chọn khóa học..."
+                          @change="onAddCourseChange(student)"
+                        />
                       </div>
 
                       <!-- 2. Tổng số buổi -->
@@ -1596,6 +1740,25 @@ const getAttendanceSummaryTooltip = (student) => {
                           class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-red-500 focus:ring-1 focus:ring-red-500 focus:outline-none transition-all"
                         />
                       </div>
+                    </div>
+
+                    <!-- Phụ huynh đóng tiền luôn: lập hóa đơn cho khóa mới (không nhập = khóa mới là khoản còn nợ) -->
+                    <div v-if="canPay" class="flex flex-wrap items-end gap-3 text-xs">
+                      <label class="w-48">
+                        <span class="block font-bold text-slate-700 mb-1">Đã thu học phí (tuỳ chọn)</span>
+                        <MoneyInput v-model="getAddCourseForm(student.id).paid_amount" placeholder="Để trống nếu chưa thu"
+                          class="w-full rounded-xl border border-slate-200 px-3 py-2 font-semibold text-emerald-700" />
+                      </label>
+                      <label v-if="Number(getAddCourseForm(student.id).paid_amount) > 0">
+                        <span class="block font-bold text-slate-700 mb-1">Hình thức</span>
+                        <select v-model="getAddCourseForm(student.id).payment_method" class="rounded-xl border border-slate-200 px-3 py-2">
+                          <option value="bank_transfer">Chuyển khoản</option>
+                          <option value="cash">Tiền mặt</option>
+                          <option value="pos">Quẹt POS</option>
+                          <option value="momo">MoMo / QR</option>
+                        </select>
+                      </label>
+                      <p class="flex-1 min-w-[200px] text-[11px] text-slate-400">Học phí khóa mới tính theo giá khóa. Chưa thu thì khóa hiện "còn nợ", thu sau ở trang Hóa đơn.</p>
                     </div>
 
                     <!-- Nút Thêm (đỏ nổi bật góc phải như ảnh 3) -->
@@ -1651,6 +1814,10 @@ const getAttendanceSummaryTooltip = (student) => {
                             <template v-if="cItem.schedule_ids?.length"> &bull; Ca: {{ courseSlots(student, cItem).map(slotLabel).join(', ') }}</template>
                           </span>
                         </div>
+                        <!-- Khóa học tiếp: khóa trước bị lùi qua ngày bắt đầu khóa này -->
+                        <span v-if="student.course_warnings?.[cItem.id]" class="basis-full rounded-lg bg-amber-50 border border-amber-200 px-2 py-1 text-[11px] font-semibold text-amber-800">
+                          ⚠️ {{ student.course_warnings[cItem.id] }}
+                        </span>
                         <button
                           type="button"
                           @click="openCourseDates(student, cItem)"
@@ -1976,7 +2143,7 @@ const getAttendanceSummaryTooltip = (student) => {
                 :default-today="true"
               />
             </div>
-            <div>
+            <div v-if="canPay">
               <label class="block text-xs font-bold text-slate-700 mb-1">Học phí thu (VNĐ)</label>
               <MoneyInput
                 v-model="newStudentForm.invoice_amount" placeholder="3.600.000"
@@ -1986,13 +2153,13 @@ const getAttendanceSummaryTooltip = (student) => {
           </div>
 
           <!-- Tình trạng học phí lúc đăng ký: chưa đóng thì phiếu chờ thu (công nợ), không tính doanh thu -->
-          <div>
+          <div v-if="canPay">
             <label class="block text-xs font-bold text-slate-700 mb-1">Tình trạng học phí</label>
             <div class="grid grid-cols-2 gap-2 text-xs sm:text-sm">
               <label class="flex items-center gap-2 rounded-xl border px-3 py-2 cursor-pointer"
                 :class="!newStudentForm.invoice_paid ? 'border-amber-300 bg-amber-50 text-amber-900 font-semibold' : 'border-slate-200 text-slate-600'">
                 <input v-model="newStudentForm.invoice_paid" type="radio" :value="false" class="accent-amber-600" />
-                Chưa đóng (chờ thu)
+                Chưa đóng (còn nợ)
               </label>
               <label class="flex items-center gap-2 rounded-xl border px-3 py-2 cursor-pointer"
                 :class="newStudentForm.invoice_paid ? 'border-emerald-300 bg-emerald-50 text-emerald-800 font-semibold' : 'border-slate-200 text-slate-600'">
@@ -2000,7 +2167,7 @@ const getAttendanceSummaryTooltip = (student) => {
                 Đã đóng học phí
               </label>
             </div>
-            <p class="text-[11px] text-slate-400 mt-1">Chưa đóng: cổng phụ huynh hiện "Chưa thanh toán", khi phụ huynh đóng tiền bấm nút "Chưa đóng HP" hoặc vào Hóa đơn để xác nhận đã thu.</p>
+            <p class="text-[11px] text-slate-400 mt-1">Chưa đóng: khóa học là khoản còn nợ (cổng phụ huynh hiện số tiền cần thanh toán). Khi phụ huynh đóng tiền, bấm nút "Còn nợ" của học viên hoặc vào Hóa đơn để lập hóa đơn thu (thu thiếu được).</p>
           </div>
 
           <div>
@@ -2125,7 +2292,8 @@ const getAttendanceSummaryTooltip = (student) => {
               </select>
             </div>
             <div>
-              <label class="block text-xs font-bold text-slate-700 mb-1">Ngày bắt đầu học</label>
+              <!-- Học nhiều khóa: ngày này chỉ là ngày bắt đầu của khóa đầu tiên; khóa thêm sửa ngày trên thẻ của khóa đó -->
+              <label class="block text-xs font-bold text-slate-700 mb-1">Ngày bắt đầu học<template v-if="getStudentCourses(editingStudent).length > 1"> (khóa đầu tiên)</template></label>
               <DatePickerVN v-model="editingStudent.join_date" :default-today="false" />
             </div>
           </div>
@@ -2232,12 +2400,9 @@ const getAttendanceSummaryTooltip = (student) => {
         </div>
         <label class="block text-xs font-semibold text-slate-700">
           Khóa học thay thế
-          <select
-            v-model="changeCourseState.courseId"
-            class="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-rose-500 focus:outline-none"
-          >
-            <option v-for="c in courses" :key="c.id" :value="c.id">{{ c.name }}</option>
-          </select>
+          <div class="mt-1.5">
+            <SearchableSelect v-model="changeCourseState.courseId" :options="courseOptions" placeholder="Tìm và chọn khóa học..." />
+          </div>
         </label>
         <p class="text-[11px] text-slate-500">Số buổi đã học, tổng buổi và thời gian của thẻ khóa này được giữ nguyên.</p>
         <div class="flex justify-end gap-2">

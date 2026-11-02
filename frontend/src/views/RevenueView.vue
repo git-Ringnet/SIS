@@ -47,6 +47,7 @@ const metrics = ref({
   revenue_month_total: 0,
   course_total: 0,
   inventory_total: 0,
+  receivable_total: 0,
   shown_transactions_count: 0,
   total_transactions_count: 0,
 });
@@ -461,8 +462,8 @@ const submitExpense = async () => {
 
     <!-- TAB 1: DOANH THU -->
     <div v-if="activeTab === 'revenue'" class="space-y-5">
-      <!-- 3 Metrics Cards (Khớp chính xác hình tham khảo) -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <!-- Metrics Cards -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <!-- Card 1: DOANH THU THÁNG NÀY -->
         <div class="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-2xs space-y-1">
           <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">
@@ -494,6 +495,19 @@ const submitExpense = async () => {
           </div>
           <div class="text-2xl sm:text-3xl font-extrabold text-slate-900">
             {{ metrics.total_transactions_count || 0 }}
+          </div>
+        </div>
+
+        <!-- Card 4: CÔNG NỢ (doanh thu dự kiến): học phí khóa + học cụ đã giao chưa thanh toán -->
+        <div class="rounded-2xl border border-amber-200 bg-amber-50/40 p-5 shadow-2xs space-y-1">
+          <div class="text-[11px] font-bold uppercase tracking-wider text-amber-700">
+            CÔNG NỢ / DỰ KIẾN THU
+          </div>
+          <div class="text-2xl sm:text-3xl font-extrabold text-amber-800">
+            {{ formatCurrency(metrics.receivable_total) }}
+          </div>
+          <div class="text-xs text-amber-700/80 pt-1">
+            Học phí khóa + học cụ đã giao, chưa thanh toán (hiện tại)
           </div>
         </div>
       </div>

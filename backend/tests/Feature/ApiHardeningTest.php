@@ -128,8 +128,7 @@ class ApiHardeningTest extends TestCase
         $student = $this->makeStudent();
         $payload = [
             'student_id' => $student->id,
-            'amount' => 1000000,
-            'sessions_added' => 4,
+            'lines' => [['key' => 'course:1', 'amount' => 1000000]],
             'payment_method' => 'cash',
             'paid_at' => now()->toDateString(),
         ];

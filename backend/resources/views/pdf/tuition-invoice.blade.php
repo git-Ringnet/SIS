@@ -31,7 +31,9 @@
 </head>
 <body>
 @php
-    $logoUrl = ! empty($center['logo_url']) ? $center['logo_url'] : ($brand['logo_url'] ?? '');
+    // Logo / QR tải lên là đường dẫn /storage/... mà DomPDF không mở được: nhúng thẳng ảnh vào PDF
+    $logoUrl = \App\Support\PdfImage::src(! empty($center['logo_url']) ? $center['logo_url'] : ($brand['logo_url'] ?? ''));
+    $qrUrl = \App\Support\PdfImage::src($center['qr_url'] ?? '');
     $centerName = ! empty($center['name']) ? $center['name'] : ($brand['brand_name'] ?? 'Trung tâm');
     $centerAddress = ! empty($center['address']) ? $center['address'] : ($brand['address'] ?? '');
     $centerPhone = ! empty($center['phone']) ? $center['phone'] : ($brand['phone'] ?? '');
@@ -110,7 +112,7 @@
         </tfoot>
     </table>
 
-    @if (! empty($center['bank_info']) || ! empty($center['qr_url']))
+    @if (! empty($center['bank_info']) || ! empty($qrUrl))
     <div class="bank">
         <h4>Thông tin chuyển khoản học phí</h4>
         <table>
@@ -123,9 +125,9 @@
                         Cú pháp: <span class="code">HP {{ $student->name }} {{ $student->parent_phone }}</span>
                     </div>
                 </td>
-                @if (! empty($center['qr_url']))
+                @if (! empty($qrUrl))
                     <td class="right" style="width: 100px; vertical-align: top; text-align: right;">
-                        <img src="{{ $center['qr_url'] }}" alt="QR" style="max-height: 90px; max-width: 90px; border: 1px solid #cbd5e1; border-radius: 6px; padding: 2px; background: #fff;" />
+                        <img src="{{ $qrUrl }}" alt="QR" style="max-height: 90px; max-width: 90px; border: 1px solid #cbd5e1; border-radius: 6px; padding: 2px; background: #fff;" />
                         <div class="light" style="font-size: 8px; text-align: center; margin-top: 2px;">Quét QR</div>
                     </td>
                 @endif

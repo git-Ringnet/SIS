@@ -89,6 +89,7 @@ export const studentApi = {
     headers: { 'Content-Type': 'multipart/form-data' },
   }),
   addCourse: (id, data) => api.post(`/students/${id}/courses`, data),
+  suggestCourseStart: (id, continueFrom) => api.get(`/students/${id}/courses/suggest-start`, { params: { continue_from: continueFrom } }),
   updateCourseItem: (id, courseIndex, data) => api.put(`/students/${id}/courses/${courseIndex}`, data),
   deleteCourseItem: (id, courseIndex) => api.delete(`/students/${id}/courses/${courseIndex}`),
 };
@@ -141,6 +142,8 @@ export const invoiceApi = {
   cancel: (id, data) => api.post(`/invoices/${id}/cancel`, data),
   restore: (id) => api.post(`/invoices/${id}/restore`),
   downloadPdf: (inv) => downloadFile(`/invoices/${inv.id}/pdf`, {}, `${inv.invoice_code}.pdf`),
+  // Các khoản còn nợ của học viên (khóa học / học cụ) cho form lập hóa đơn
+  payables: (studentId, params = {}) => api.get(`/invoices/payables/${studentId}`, { params }),
 };
 
 export const reportApi = {

@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Models\Concerns\LogsActivity;
+use App\Support\Tuition;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -17,6 +18,13 @@ class Course extends Model
     public const CLASS_TYPES = ['group', 'individual'];
 
     protected $guarded = [];
+
+    protected static function booted(): void
+    {
+        // Giá khóa được nhớ tạm để tính công nợ học phí: thêm / sửa / xóa khóa thì tính lại
+        static::saved(fn () => Tuition::flush());
+        static::deleted(fn () => Tuition::flush());
+    }
 
     protected $casts = [
         'price' => 'decimal:0',

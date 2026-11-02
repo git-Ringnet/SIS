@@ -84,6 +84,21 @@ const sessions = computed(() => {
   return { total, attended, remaining: Math.max(0, total - attended), percent: total ? Math.min(100, (attended / total) * 100) : 0 };
 });
 
+// Thẻ từng khóa; dữ liệu cũ chưa có danh sách khóa thì một thẻ theo khóa chính
+const courseCards = computed(() => {
+  const s = student.value;
+  const list = s?.registered_courses_list || [];
+  if (!list.length) {
+    return [{ key: 'main', name: s?.course?.name || 'Chưa có khóa học', completed: false, ...sessions.value }];
+  }
+  return list.map((c) => {
+    const total = Number(c.total_sessions) || 0;
+    const attended = Math.max(0, total - (Number(c.remaining_sessions) || 0));
+    return { key: c.id, name: c.course_name || 'Khóa học', completed: c.status === 'completed', total, attended,
+      percent: total ? Math.min(100, (attended / total) * 100) : 0 };
+  });
+});
+
 const initials = computed(() =>
   (student.value?.name || '')
     .split(/\s+/)
@@ -147,13 +162,17 @@ const initials = computed(() =>
           <p class="text-xs text-slate-500">
             Khóa học · Đã mua: {{ sessions.total }} · Đã điểm danh: {{ sessions.attended }} · Còn lại: {{ sessions.remaining }}
           </p>
-          <div class="mt-1.5 rounded-xl border border-slate-200 p-3.5">
+          <!-- Từng khóa đã đăng ký (học nhiều khóa: mỗi khóa số buổi riêng) -->
+          <div v-for="c in courseCards" :key="c.key" class="mt-1.5 rounded-xl border border-slate-200 p-3.5">
             <div class="flex items-center justify-between gap-3 text-sm">
-              <span class="font-semibold text-slate-900">{{ student.course?.name || 'Chưa có khóa học' }}</span>
-              <span class="text-slate-600">{{ sessions.attended }} đã điểm danh · {{ sessions.total }} đã mua</span>
+              <span class="font-semibold text-slate-900">
+                {{ c.name }}
+                <span v-if="c.completed" class="ml-1 rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">Hoàn thành</span>
+              </span>
+              <span class="text-slate-600 shrink-0">{{ c.attended }} đã điểm danh · {{ c.total }} đã mua</span>
             </div>
             <div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-rose-100">
-              <div class="h-full rounded-full bg-sky-500" :style="{ width: `${sessions.percent}%` }"></div>
+              <div class="h-full rounded-full bg-sky-500" :style="{ width: `${c.percent}%` }"></div>
             </div>
           </div>
         </div>

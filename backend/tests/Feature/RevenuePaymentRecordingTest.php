@@ -28,8 +28,7 @@ class RevenuePaymentRecordingTest extends TestCase
         $response = $this->post('/api/invoices', [
             'student_id' => $student->id,
             'course_id' => $course->id,
-            'amount' => 3000000,
-            'sessions_added' => 12,
+            'lines' => [['key' => 'course:1', 'amount' => 3000000]],
             'payment_method' => 'cash',
             'paid_at' => now()->toDateString(),
             'invoice_pdf' => UploadedFile::fake()->create('hoa-don.pdf', 40, 'application/pdf'),

@@ -10,6 +10,7 @@ use App\Support\BrandSettings;
 use App\Support\CenterStore;
 use App\Support\PagePermissions;
 use App\Support\TeacherPayroll;
+use App\Support\Tuition;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -95,6 +96,11 @@ class RevenueApiController extends Controller
                 default => 'Tài khoản trung tâm',
             };
 
+            // Hóa đơn thanh toán cả học phí và học cụ: tách số tiền theo loại
+            $split = Tuition::split($inv);
+            $supplyNames = collect($inv->lines ?? [])->where('type', 'supply')->pluck('name')->implode(', ');
+            $hasCourse = $split['tuition'] > 0 || ! collect($inv->lines ?? [])->contains('type', 'supply');
+
             $transactions[] = [
                 'id' => 'inv_'.$inv->id,
                 'invoice_id' => $inv->id,
@@ -106,15 +112,15 @@ class RevenueApiController extends Controller
                 'month' => (int) $paidDate->format('n'),
                 'year' => (int) $paidDate->format('Y'),
                 'student_name' => $studentName,
-                'course_name' => $courseName,
-                'inventory_name' => '-',
+                'course_name' => $hasCourse ? $courseName : '-',
+                'inventory_name' => $supplyNames ?: '-',
                 'payment_method' => $methodName,
                 'account_name' => $accountName,
-                'tuition_fee' => (float) $inv->amount,
-                'inventory_fee' => 0,
+                'tuition_fee' => $split['tuition'],
+                'inventory_fee' => $split['supply'],
                 'total_amount' => (float) $inv->amount,
                 'center' => $invCenter,
-                'type' => 'course',
+                'type' => $hasCourse ? 'course' : 'inventory',
                 'note' => $inv->note ?: '',
             ];
         }
@@ -265,6 +271,8 @@ class RevenueApiController extends Controller
                 'inventory_total' => $monthInventoryTotal,
                 'shown_transactions_count' => count($filteredTransactions),
                 'total_transactions_count' => $totalTransactionsCount,
+                // Doanh thu dự kiến còn phải thu: học phí khóa + học cụ đã giao chưa thanh toán (công nợ hiện tại)
+                'receivable_total' => Tuition::receivable($center),
             ],
             'chart' => array_values($chartDays),
             'transactions' => $pageTransactions,
@@ -496,11 +504,11 @@ class RevenueApiController extends Controller
                 'month' => (string) $paidDate->month,
                 'student_name' => $inv->student ? $inv->student->name : 'Khách vãng lai',
                 'course_name' => $inv->course ? $inv->course->name : ($inv->student && $inv->student->course ? $inv->student->course->name : '-'),
-                'inventory_name' => '-',
+                'inventory_name' => collect($inv->lines ?? [])->where('type', 'supply')->pluck('name')->implode(', ') ?: '-',
                 'payment_method' => $inv->payment_method === 'cash' ? 'Tiền mặt' : 'Chuyển khoản',
                 'account_name' => 'Tài khoản trung tâm',
-                'tuition_fee' => (float) $inv->amount,
-                'inventory_fee' => 0,
+                'tuition_fee' => Tuition::split($inv)['tuition'],
+                'inventory_fee' => Tuition::split($inv)['supply'],
                 'total_amount' => (float) $inv->amount,
                 'center' => $inv->student?->center ?: CenterStore::defaultName(),
             ];

@@ -70,8 +70,7 @@ const availableVariables = [
   { tag: '{so_buoi_con_lai}', label: 'Số buổi còn lại', desc: 'Số buổi học chưa điểm danh', example: '0' },
   { tag: '{khoa_hoc}', label: 'Tên khóa học', desc: 'Tên khóa học hiện tại của học viên', example: 'Guitar Acoustic' },
   { tag: '{so_tien}', label: 'Học phí', desc: 'Mức học phí khóa học', example: '3.600.000đ' },
-  { tag: '{so_tai_khoan}', label: 'Số tài khoản', desc: 'STK ngân hàng nhận thanh toán', example: '1029384756 (HO VIET DUNG)' },
-  { tag: '{ngan_hang}', label: 'Tên ngân hàng', desc: 'Ngân hàng thụ hưởng', example: 'Vietcombank' },
+  { tag: '{thong_tin_chuyen_khoan}', label: 'Thông tin chuyển khoản', desc: 'Ô "Thông tin chuyển khoản" của trung tâm học viên đang học (màn Trung tâm)', example: 'TPBANK: 46294103684' },
   { tag: '{nhan_xet}', label: 'Nhận xét / báo bài', desc: 'Nhận xét giáo viên ghi cho buổi học (giữ xuống dòng). Dùng ở trang Điểm danh', example: 'Bài cũ: thuộc\nBTVN: tập 10p' },
   { tag: '{ngay_hoc}', label: 'Ngày học', desc: 'Ngày của buổi học đang điểm danh', example: '21/10/2026' },
   { tag: '{so_buoi_con_duoc_nghi}', label: 'Số buổi còn được nghỉ', desc: 'Số buổi còn được nghỉ có phép của khóa', example: '2/3' },
@@ -79,6 +78,14 @@ const availableVariables = [
 
 // Loại mẫu của trang (backend trả về theo nhóm), dùng cho bộ lọc và ô chọn khi thêm mẫu
 const categoryOptions = ref([]);
+// Thông tin chuyển khoản của các trung tâm (màn Trung tâm)
+const centers = ref([]);
+// Trung tâm của học viên đang chọn; không rõ thì trung tâm chính / đầu tiên
+const bankInfo = computed(() => {
+  const list = centers.value;
+  const center = list.find((c) => c.name && c.name === props.student?.center) || list.find((c) => c.is_main) || list[0];
+  return center?.bank_info || '(Chưa nhập thông tin chuyển khoản ở màn Trung tâm)';
+});
 const categories = computed(() => [{ id: 'all', label: 'Tất cả mẫu' }, ...categoryOptions.value]);
 const categoryLabel = (id) => categoryOptions.value.find((c) => c.id === id)?.label || id;
 
@@ -106,8 +113,9 @@ const renderTemplate = (content) => {
       .replace(/{so_buoi_con_lai}/g, '0')
       .replace(/{khoa_hoc}/g, 'Guitar Acoustic & Fingerstyle')
       .replace(/{so_tien}/g, '3.600.000đ')
-      .replace(/{so_tai_khoan}/g, '1029384756 (HO VIET DUNG)')
-      .replace(/{ngan_hang}/g, 'Vietcombank')
+      // {so_tai_khoan} / {ngan_hang}: biến cũ, nay gộp chung vào thông tin chuyển khoản của trung tâm
+      .replace(/{thong_tin_chuyen_khoan}|{so_tai_khoan}/g, bankInfo.value)
+      .replace(/{ngan_hang}/g, '')
       .replace(/{sdt_phu_huynh}/g, '0934567890')
       .replace(/{nhan_xet}/g, 'Bài cũ: con đã thuộc bài\nBài mới: ABC trang 10\nBTVN: tập 10 phút mỗi ngày')
       .replace(/{ngay_hoc}/g, '21/10/2026')
@@ -123,8 +131,8 @@ const renderTemplate = (content) => {
     .replace(/{so_buoi_con_lai}/g, props.student.remaining_sessions ?? 0)
     .replace(/{khoa_hoc}/g, courseName)
     .replace(/{so_tien}/g, price)
-    .replace(/{so_tai_khoan}/g, '1029384756 (HO VIET DUNG)')
-    .replace(/{ngan_hang}/g, 'Vietcombank')
+    .replace(/{thong_tin_chuyen_khoan}|{so_tai_khoan}/g, bankInfo.value)
+    .replace(/{ngan_hang}/g, '')
     .replace(/{sdt_phu_huynh}/g, props.student.parent_phone || '')
     // Báo bài: nhận xét giáo viên tự ghi (giữ nguyên xuống dòng), chưa báo bài thì nhắc giáo viên
     .replace(/{nhan_xet}/g, props.student.has_report ? props.student.checkin_note : '(Giáo viên chưa ghi nhận xét buổi học)')
@@ -210,6 +218,7 @@ watch(() => props.show, async (isOpen) => {
     const res = await messageTemplateApi.getAll({ group: props.group });
     localTemplates.value = res.data?.templates || [];
     categoryOptions.value = res.data?.categories || [];
+    centers.value = res.data?.centers || [];
     if (selectedCategory.value !== 'all' && !categoryOptions.value.some((c) => c.id === selectedCategory.value)) {
       selectedCategory.value = 'all';
     }

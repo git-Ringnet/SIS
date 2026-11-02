@@ -197,7 +197,7 @@ class MultiSlotScheduleTest extends TestCase
         $this->assertSame(['15/01/2027', false], array_values(array_slice($student->fresh()->courseDates($this->piano->id), 2)));
 
         // PDF hiện chữ "(dự kiến)" khi ngày kết thúc là ngày tự tính
-        $id = $this->postJson('/api/invoices', ['student_id' => $student->id, 'course_id' => $this->guitar->id, 'amount' => 1, 'sessions_added' => 0, 'payment_method' => 'cash', 'paid_at' => self::MONDAY])
+        $id = $this->postJson('/api/invoices', ['student_id' => $student->id, 'lines' => [['key' => 'course:1', 'amount' => 1]], 'payment_method' => 'cash', 'paid_at' => self::MONDAY])
             ->assertCreated()->json('invoice.id');
         $html = view('pdf.payment-receipt', ['invoice' => Invoice::find($id), 'brand' => BrandSettings::brand()])->render();
         $this->assertMatchesRegularExpression('/Ngày kết thúc: <strong>29\/11\/2026<\/strong> <span[^>]*>\(dự kiến\)/u', $html);
