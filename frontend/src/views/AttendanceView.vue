@@ -952,7 +952,8 @@ const openMessageModal = (student) => {
     <!-- MODAL 2: GHI NHẬN XÉT BÀI HỌC -->
     <div v-if="showNoteModal && selectedStudent"
       class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
-      <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4">
+      <!-- Nhận xét / báo bài thường dài: modal rộng, ô nhập cao (kéo giãn được) -->
+      <div class="w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white p-5 sm:p-6 shadow-xl space-y-4">
         <div class="flex items-center justify-between border-b border-slate-100 pb-3">
           <h3 class="text-base font-bold text-slate-900">Nhận xét buổi học: {{ selectedStudent.name }}</h3>
           <button type="button" @click="showNoteModal = false"
@@ -964,9 +965,9 @@ const openMessageModal = (student) => {
         <form @submit.prevent="submitNote" class="space-y-3.5 text-xs sm:text-sm">
           <div>
             <label class="block font-medium text-slate-700 mb-1">Nội dung nhận xét & dặn dò</label>
-            <textarea v-model="noteForm.content" rows="3"
+            <textarea v-model="noteForm.content" rows="12"
               placeholder="VD: Bé giữ nhịp rất tốt, ngón tay thả lỏng hơn. Về nhà tập thêm trang 15 sách Alfred..."
-              class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none"></textarea>
+              class="w-full min-h-[200px] max-h-[65vh] resize-y rounded-xl border border-slate-200 px-3 py-2 leading-relaxed text-slate-900 focus:border-rose-500 focus:outline-none"></textarea>
           </div>
 
           <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
