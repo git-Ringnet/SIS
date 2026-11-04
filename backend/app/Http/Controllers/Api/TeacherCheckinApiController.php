@@ -108,24 +108,30 @@ class TeacherCheckinApiController extends Controller
                     : ($st->center ?: CenterStore::defaultName());
                 $isMerged = ! empty($lesson['is_merged']) || ! empty($lesson['merged_slot_id']);
 
-                // Học ghép vào ca nhóm đang có của giáo viên cùng giờ: gộp chung vào ca đó, không tính thêm ca riêng
-                if ($isMerged) {
-                    $existing = collect($entries)->first(fn ($e) => empty($e['is_single'])
-                        && TeacherName::same($e['slot']['teacher'], $teacher)
-                        && $e['slot']['start'] === $start);
-                    if ($existing) {
-                        $teacher = $existing['slot']['teacher'];
-                        $room = $existing['slot']['room'];
-                        $center = $existing['center'];
-                        $end ??= $existing['slot']['end'];
-                    }
-                }
-
                 $item = ! empty($lesson['course_id'])
                     ? (collect($st->registered_courses_list)->first(fn ($i) => (int) ($i['course_id'] ?? 0) === (int) $lesson['course_id'] || (int) ($i['id'] ?? 0) === (int) $lesson['course_id'])
                         ?? StudentSchedule::courseItemForSlot($st, $lesson['id'] ?? null))
                     : StudentSchedule::courseItemForSlot($st, $lesson['id'] ?? null);
                 $courseId = $lesson['course_id'] ?? $item['course_id'] ?? $st->course_id;
+
+                // Ca nhóm đang có của giáo viên cùng giờ, cùng cơ sở (không phải ca 1:1 riêng của từng học viên)
+                // ("học ghép" chọn tay: như trước, theo giáo viên + giờ; tự gộp buổi bù: thêm điều kiện cùng cơ sở)
+                $groupEntry = collect($entries)->first(fn ($e) => empty($e['is_single'])
+                    && ($e['class_type'] ?? null) !== 'individual'
+                    && TeacherName::same($e['slot']['teacher'], $teacher)
+                    && $e['slot']['start'] === $start
+                    && ($isMerged || $e['center'] === $center));
+                // Gộp vào ca nhóm đó (một ca, một đầu lương) khi: chọn "học ghép", hoặc buổi bù / học lẻ của khóa nhóm
+                // trùng giờ lớp nhóm (vd hết khóa, giáo vụ đặt bù đúng giờ học nhóm cũ: giáo viên vẫn dạy chung một lớp)
+                if (! $isMerged && $groupEntry && ($classTypes[$courseId] ?? null) !== 'individual') {
+                    $isMerged = true;
+                }
+                if ($isMerged && $groupEntry) {
+                    $teacher = $groupEntry['slot']['teacher'];
+                    $room = $groupEntry['slot']['room'];
+                    $center = $groupEntry['center'];
+                    $end ??= $groupEntry['slot']['end'];
+                }
 
                 $entries[] = [
                     'student' => $st,
