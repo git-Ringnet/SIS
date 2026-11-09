@@ -42,6 +42,18 @@ export const tuitionPaid = (student) => (student?.tuition
   ? tuitionDebt(student) <= 0 && Number(student?.remaining_sessions ?? 0) > RENEW_THRESHOLD
   : !!latestPaidInvoice(student) && Number(student?.remaining_sessions ?? 0) > RENEW_THRESHOLD);
 
+// Tình trạng thanh toán của một khóa (dòng trong student.tuition.courses)
+export const courseTuitionStatus = (row) => {
+  if (Number(row.debt) > 0) {
+    return Number(row.paid) > 0
+      ? { label: 'Đóng một phần', class: 'border-amber-200 bg-amber-50 text-amber-800' }
+      : { label: 'Chưa đóng', class: 'border-rose-200 bg-rose-50 text-rose-700' };
+  }
+  return Number(row.fee) - Number(row.discount) > 0
+    ? { label: 'Đã đóng đủ', class: 'border-emerald-200 bg-emerald-50 text-emerald-700' }
+    : { label: 'Không thu', class: 'border-slate-200 bg-slate-50 text-slate-600' };
+};
+
 // Được thu học phí / lập hóa đơn: không bị chặn trang "Hóa đơn & Thu phí" ở màn Nhân sự (giáo vụ mặc định bị chặn).
 // Không có quyền thì ẩn ô "Đã thu học phí" và nút "Lập hóa đơn"; khóa mới hiện "còn nợ" để chủ trung tâm / quản lý lập hóa đơn.
 export const canRecordPayment = (user) => !(user?.blocked_pages || []).includes('Hóa đơn & Thu phí');

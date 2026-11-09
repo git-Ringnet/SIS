@@ -6,13 +6,15 @@ use App\Models\Course;
 use App\Models\Invoice;
 use App\Models\Student;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Công nợ học phí / học cụ của học viên (dùng chung cho Hóa đơn, trang Học viên, Cổng phụ huynh, Doanh thu).
  *
  * Mỗi khóa học viên đăng ký là một khoản phải thu:
- *  - Học phí = giá khóa ở màn Khóa học. Phiếu thu kiểu cũ (nhập học tự động khi thêm học viên, gia hạn cộng buổi;
- *    không có "lines") vừa là học phí đã báo vừa là tiền đã thu: khóa có phiếu cũ thì học phí = tổng các phiếu cũ đó.
+ *  - Học phí = số đã chỉnh riêng cho khóa của học viên này (tuition_fee trong registered_courses), chưa chỉnh thì theo giá khóa
+ *    ở màn Khóa học. Phiếu thu kiểu cũ (nhập học tự động khi thêm học viên, gia hạn cộng buổi; không có "lines") vừa là học phí
+ *    đã báo vừa là tiền đã thu: khóa có phiếu cũ mà chưa chỉnh riêng thì học phí = tổng các phiếu cũ đó.
  *  - Đã thu = phiếu cũ đã thanh toán + các dòng thanh toán trên hóa đơn mới (đã thanh toán, chưa hủy).
  *  - Còn nợ = học phí - giảm giá - đã thu.
  * Học cụ đã giao cho học viên: phải thu = giá x số lượng; học cụ giao trước đây đã ghi doanh thu ngay (revenue_id) coi như đã thu.
@@ -60,6 +62,71 @@ class Tuition
         return $invoices->where('status', '!=', 'cancelled')->values();
     }
 
+    private static function legacyInvoices(Student $student, Collection $invoices, int $itemId): Collection
+    {
+        return $invoices->filter(fn ($inv) => empty($inv->lines) && self::legacyItemId($student, $inv) === $itemId);
+    }
+
+    /** Học phí của khóa khi chưa chỉnh riêng: tổng phiếu cũ, không có thì giá khóa. */
+    private static function standardFee(array $item, Collection $legacy): float
+    {
+        return $legacy->isNotEmpty() ? (float) $legacy->sum('amount') : self::coursePrice($item['course_id'] ?? null);
+    }
+
+    /**
+     * Sắp đổi giá khóa: khóa học viên đã đóng tiền (hoặc đã được giảm giá) đang tính theo giá khóa thì chốt lại giá cũ,
+     * để khóa đã đóng đủ không tự phát sinh nợ. Học viên chưa đóng đồng nào theo giá mới.
+     */
+    public static function keepPaidFees(int $courseId, float $oldPrice): void
+    {
+        DB::transaction(function () use ($courseId, $oldPrice): void {
+            foreach (Student::with('invoices')->get() as $student) {
+                $list = $student->registered_courses_list;
+                $invoices = self::invoicesOf($student, $student->invoices);
+                $rows = collect(self::courses($student, $invoices))->keyBy('course_item_id');
+                $changed = false;
+
+                foreach ($list as $key => $item) {
+                    $itemId = (int) $item['id'];
+                    $followsPrice = (int) ($item['course_id'] ?? 0) === $courseId && ! isset($item['tuition_fee'])
+                        && self::legacyInvoices($student, $invoices, $itemId)->isEmpty();
+
+                    if ($followsPrice && $rows[$itemId]['paid'] + $rows[$itemId]['discount'] > 0) {
+                        $list[$key]['tuition_fee'] = $oldPrice;
+                        $changed = true;
+                    }
+                }
+
+                if ($changed) {
+                    $student->registered_courses = $list;
+                    $student->save();
+                }
+            }
+        });
+    }
+
+    /**
+     * Lý do không đổi được học phí của khóa ($fee = null: bỏ số đã chỉnh, về học phí mặc định), hợp lệ thì null.
+     */
+    public static function feeChangeError(Student $student, array $item, ?float $fee): ?string
+    {
+        $itemId = (int) $item['id'];
+        $row = collect(self::courses($student))->firstWhere('course_item_id', $itemId);
+
+        if ($row['pending_invoice']) {
+            return "Khóa {$row['name']} đang có phiếu chờ thu {$row['pending_invoice']['invoice_code']}: hãy sửa số tiền của phiếu đó ở trang Hóa đơn.";
+        }
+
+        $newFee = $fee ?? self::standardFee($item, self::legacyInvoices($student, self::invoicesOf($student, null), $itemId));
+        $settled = $row['paid'] + $row['discount'];
+        if ($newFee < $settled - 0.5) {
+            return "Khóa {$row['name']} đã thu".($row['discount'] > 0 ? ' và giảm giá' : '').' '.number_format($settled, 0, ',', '.')
+                .'đ nên học phí không thể thấp hơn số này. Nếu số đã thu bị sai, hãy sửa hóa đơn trước.';
+        }
+
+        return null;
+    }
+
     /**
      * Các khoản học phí theo khóa của học viên.
      *
@@ -73,8 +140,8 @@ class Tuition
 
         foreach ($student->registered_courses_list as $item) {
             $itemId = (int) $item['id'];
-            $legacy = $invoices->filter(fn ($inv) => empty($inv->lines) && self::legacyItemId($student, $inv) === $itemId);
-            $fee = $legacy->isNotEmpty() ? (float) $legacy->sum('amount') : self::coursePrice($item['course_id'] ?? null);
+            $legacy = self::legacyInvoices($student, $invoices, $itemId);
+            $fee = isset($item['tuition_fee']) ? (float) $item['tuition_fee'] : self::standardFee($item, $legacy);
             $paid = (float) $legacy->where('status', 'paid')->sum('amount');
             $discount = 0.0;
 

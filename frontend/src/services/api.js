@@ -270,6 +270,7 @@ export const teacherCheckinApi = {
 export const dailyAttendanceApi = {
   getAttendance: (params) => api.get('/attendance', { params }),
   getAvailableGroupSlots: (params) => api.get('/attendance/available-group-slots', { params }),
+  markLeaveRequestsSeen: (ids) => api.post('/attendance/leave-requests/seen', { ids }),
   mark: (studentId, data) => api.post(`/attendance/${studentId}/mark`, data),
   saveNote: (studentId, data) => api.post(`/attendance/${studentId}/note`, data),
   scheduleSingleLesson: (data) => api.post('/attendance/single-lesson', data),

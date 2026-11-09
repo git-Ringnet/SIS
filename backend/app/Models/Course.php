@@ -24,6 +24,13 @@ class Course extends Model
         // Giá khóa được nhớ tạm để tính công nợ học phí: thêm / sửa / xóa khóa thì tính lại
         static::saved(fn () => Tuition::flush());
         static::deleted(fn () => Tuition::flush());
+
+        // Đổi giá khóa không được làm sai học phí của học viên đã đóng tiền
+        static::updating(function (Course $course): void {
+            if ($course->isDirty('price')) {
+                Tuition::keepPaidFees($course->id, (float) $course->getOriginal('price'));
+            }
+        });
     }
 
     protected $casts = [

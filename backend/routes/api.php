@@ -250,6 +250,7 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
     Route::prefix('attendance')->group(function () {
         Route::get('/', [AttendanceApiController::class, 'index']);
         Route::get('/available-group-slots', [AttendanceApiController::class, 'availableGroupSlots']);
+        Route::post('/leave-requests/seen', [AttendanceApiController::class, 'markLeaveRequestsSeen']);
         Route::post('/single-lesson', [AttendanceApiController::class, 'scheduleSingleLesson']);
         Route::delete('/single-lesson/{id}', [AttendanceApiController::class, 'destroySingleLesson']);
         Route::post('/{student}/mark', [AttendanceApiController::class, 'markAttendance']);

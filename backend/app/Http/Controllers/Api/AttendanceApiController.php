@@ -17,6 +17,7 @@ use App\Support\TeacherName;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class AttendanceApiController extends Controller
 {
@@ -256,19 +257,25 @@ class AttendanceApiController extends Controller
         $rooms = array_values(array_unique([...CenterStore::roomNames($center), ...$roomOptions]));
         $teachers = array_values(array_unique([...TeacherName::all(), ...$teacherOptions]));
 
-        // Danh sách đơn xin nghỉ phép gần đây từ Cổng phụ huynh
+        // Đơn xin nghỉ phép từ Cổng phụ huynh của đúng ngày đang xem
         $parentLeaveRequests = Attendance::with(['student.course'])
             ->where('status', 'absent_with_leave')
             ->where(function ($q) {
                 $q->where('marked_by', AttendanceMarker::PARENT_PORTAL)
                     ->orWhere('note', 'like', '%Cổng phụ huynh%');
             })
-            ->whereDate('attended_at', '>=', Carbon::today()->subDays(7))
-            ->orderBy('attended_at', 'desc')
-            ->limit(20)
-            ->get()
+            ->whereDate('attended_at', $dateStr)
+            ->orderBy('created_at', 'desc')
+            ->get();
+        $seenLeaveIds = DB::table('attendance_leave_views')
+            ->where('user_id', $request->user()->id)
+            ->whereIn('attendance_id', $parentLeaveRequests->pluck('id'))
+            ->pluck('attendance_id')
+            ->all();
+        $parentLeaveRequests = $parentLeaveRequests
             ->map(fn ($att) => [
                 'id' => $att->id,
+                'seen' => in_array($att->id, $seenLeaveIds),
                 'student_id' => $att->student_id,
                 'student_name' => $att->student?->name,
                 'student_code' => $att->student?->code,
@@ -321,6 +328,24 @@ class AttendanceApiController extends Controller
         return PagePermissions::canMarkAttendance($request->user())
             ? null
             : response()->json(['message' => 'Giáo viên không điểm danh được, giáo vụ / quản lý sẽ điểm danh. Giáo viên chỉ ghi báo bài.'], 403);
+    }
+
+    /**
+     * Tài khoản đang đăng nhập đã mở xem các đơn xin nghỉ này (nhớ theo tài khoản, dùng nhiều máy vẫn giống nhau).
+     */
+    public function markLeaveRequestsSeen(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|max:500',
+            'ids.*' => 'integer|exists:attendances,id',
+        ]);
+
+        DB::table('attendance_leave_views')->insertOrIgnore(array_map(
+            fn ($id) => ['user_id' => $request->user()->id, 'attendance_id' => $id],
+            array_values(array_unique($validated['ids'])),
+        ));
+
+        return response()->json(['message' => 'Đã đánh dấu đã xem.']);
     }
 
     public function markAttendance(Request $request, Student $student): JsonResponse

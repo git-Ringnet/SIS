@@ -933,15 +933,28 @@ class StudentApiController extends Controller
             // Các ca của khoá này trên trang Điểm danh (rỗng = dùng chung mọi ca)
             'schedule_ids' => 'nullable|array',
             'schedule_ids.*' => 'string|max:40',
+            // Học phí thực tế của khóa này với riêng học viên này (rỗng = theo giá khóa)
+            'tuition_fee' => 'nullable|numeric|min:0',
         ], [
             'end_date.after_or_equal' => 'Ngày kết thúc phải sau hoặc bằng ngày bắt đầu',
         ]);
+
+        // Sửa học phí ảnh hưởng công nợ: cùng quyền với thu tiền / lập hóa đơn (giáo vụ bị chặn trang này)
+        if ($request->has('tuition_fee') && ! self::canRecordPayment($request)) {
+            return response()->json(['message' => 'Bạn không có quyền sửa học phí của học viên.'], 403);
+        }
 
         $list = $student->registered_courses_list;
         $found = false;
 
         foreach ($list as $key => $item) {
             if ($item['id'] == $courseIndex || $key == $courseIndex) {
+                if ($request->has('tuition_fee')) {
+                    $fee = isset($validated['tuition_fee']) ? (float) $validated['tuition_fee'] : null;
+                    if ($error = Tuition::feeChangeError($student, $item, $fee)) {
+                        return response()->json(['message' => $error], 422);
+                    }
+                }
                 if (isset($validated['total_sessions'])) {
                     $list[$key]['total_sessions'] = (int) $validated['total_sessions'];
                 }
@@ -966,8 +979,19 @@ class StudentApiController extends Controller
                     if ((int) $student->course_id === (int) ($list[$key]['course_id'] ?? 0)) {
                         $student->course_id = $newCourse->id;
                     }
+                    // Học phí đã chỉnh là của khóa cũ: đổi sang khóa khác thì tính lại theo giá khóa mới
+                    if ((int) ($list[$key]['course_id'] ?? 0) !== (int) $newCourse->id) {
+                        unset($list[$key]['tuition_fee']);
+                    }
                     $list[$key]['course_id'] = (int) $newCourse->id;
                     $list[$key]['course_name'] = $newCourse->name;
+                }
+                if ($request->has('tuition_fee')) {
+                    if ($fee === null) {
+                        unset($list[$key]['tuition_fee']);
+                    } else {
+                        $list[$key]['tuition_fee'] = $fee;
+                    }
                 }
                 if ($request->has('start_date')) {
                     $list[$key]['start_date'] = $validated['start_date'] ?? null;
@@ -997,7 +1021,8 @@ class StudentApiController extends Controller
         $student->total_sessions = array_sum(array_column($list, 'total_sessions'));
         $student->remaining_sessions = array_sum(array_column($list, 'remaining_sessions'));
         $student->save();
-        $student->load(['course', 'latestAttendance', 'latestRetentionLog']);
+        $student->load(['course', 'latestAttendance', 'latestRetentionLog', 'invoices']);
+        $this->attachTuition($student);
         $student->setAttribute('course_dates', collect($student->registered_courses_list)
             ->mapWithKeys(fn ($item) => [$item['id'] => $student->courseItemDates($item)]));
 

@@ -1,7 +1,7 @@
 <script setup>
 import { toLocalDateString } from '../services/date';
 import { notify, errorMessage } from '../services/notify';
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import { dailyAttendanceApi, studentApi } from '../services/api';
 import SearchableSelect from '../components/SearchableSelect.vue';
 import MessageTemplateModal from '../components/MessageTemplateModal.vue';
@@ -60,6 +60,24 @@ const parentLeaveRequests = ref([]);
 // Giáo viên chỉ xem + ghi báo bài; giáo vụ / quản lý / chủ trung tâm mới điểm danh
 const canMark = ref(true);
 const showLeaveRequests = ref(false);
+
+// Đơn xin nghỉ đã mở xem (nhớ theo tài khoản ở server): còn đơn chưa xem thì chấm tròn mới nhấp nháy
+const hasUnseenLeave = computed(() => parentLeaveRequests.value.some((req) => !req.seen));
+
+// Đang mở khung đơn thì mọi đơn đang hiện đều tính là đã xem (kể cả đơn của ngày vừa chuyển sang)
+watch([showLeaveRequests, parentLeaveRequests], async () => {
+  if (!showLeaveRequests.value) return;
+  const unseen = parentLeaveRequests.value.filter((req) => !req.seen);
+  if (!unseen.length) return;
+  unseen.forEach((req) => { req.seen = true; });
+  try {
+    await dailyAttendanceApi.markLeaveRequestsSeen(unseen.map((req) => req.id));
+  } catch (err) {
+    // Không lưu được: để chấm sáng lại, lần mở sau gửi lại
+    unseen.forEach((req) => { req.seen = false; });
+    console.error('Lỗi lưu trạng thái đã xem đơn nghỉ:', err);
+  }
+});
 
 // Modals
 const showSingleLessonModal = ref(false);
@@ -141,13 +159,6 @@ const listOutdated = () => {
     return true;
   }
   return false;
-};
-
-const jumpToDate = (rawDate) => {
-  if (rawDate) {
-    selectedDate.value = rawDate;
-    fetchData();
-  }
 };
 
 const getStudentCourses = (st) => {
@@ -563,18 +574,18 @@ const openMessageModal = (student) => {
         </div>
       </div>
 
-      <!-- 6. Banner Đơn xin nghỉ phép gần đây từ Cổng phụ huynh -->
+      <!-- 6. Banner Đơn xin nghỉ phép của ngày đang xem từ Cổng phụ huynh -->
       <div v-if="parentLeaveRequests && parentLeaveRequests.length > 0"
         class="rounded-2xl border border-amber-200 bg-amber-50/50 p-4 space-y-3">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
-            <span class="flex h-2.5 w-2.5 relative">
+            <span v-if="hasUnseenLeave" class="flex h-2.5 w-2.5 relative">
               <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
               <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
             </span>
             <h3 class="text-xs sm:text-sm font-bold text-amber-950 flex items-center gap-1.5">
               <Mail class="h-4 w-4 text-amber-600" />
-              <span>Đơn xin nghỉ phép gần đây từ Cổng phụ huynh ({{ parentLeaveRequests.length }} đơn)</span>
+              <span>Đơn xin nghỉ phép ngày {{ parentLeaveRequests[0].leave_date }} từ Cổng phụ huynh ({{ parentLeaveRequests.length }} đơn)</span>
             </h3>
           </div>
           <button type="button" @click="showLeaveRequests = !showLeaveRequests"
@@ -591,14 +602,6 @@ const openMessageModal = (student) => {
               <div class="flex items-center gap-2 flex-wrap">
                 <strong class="text-slate-900 font-bold uppercase">{{ req.student_name }}</strong>
                 <span class="text-slate-400 font-mono text-[11px]">({{ req.student_code }})</span>
-                <span
-                  class="bg-amber-100 text-amber-900 px-2 py-0.5 rounded-md font-bold text-[11px] border border-amber-200">
-                  Nghỉ ngày: {{ req.leave_date }}
-                </span>
-                <span v-if="req.leave_date_raw === selectedDate"
-                  class="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md font-bold text-[10px]">
-                  Hôm nay
-                </span>
               </div>
               <p v-if="req.reason" class="text-slate-700 italic">
                 Lý do: "{{ req.reason }}"
@@ -608,11 +611,6 @@ const openMessageModal = (student) => {
                 lúc: {{ req.created_at }}
               </p>
             </div>
-            <button type="button" @click="jumpToDate(req.leave_date_raw)"
-              class="shrink-0 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs transition-colors flex items-center gap-1 shadow-xs cursor-pointer">
-              <Calendar class="h-3.5 w-3.5" />
-              <span>Xem ngày điểm danh</span>
-            </button>
           </div>
         </div>
       </div>

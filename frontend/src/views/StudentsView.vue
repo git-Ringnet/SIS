@@ -49,7 +49,7 @@ import {
   Check,
 } from 'lucide-vue-next';
 import MoneyInput from '../components/MoneyInput.vue';
-import { tuitionState, tuitionLabel, TUITION_BUTTON, canRecordPayment } from '../services/tuition';
+import { tuitionState, tuitionLabel, TUITION_BUTTON, canRecordPayment, courseTuitionStatus } from '../services/tuition';
 import { useAuth } from '../services/useAuth';
 import ReturnSupplyModal from '../components/ReturnSupplyModal.vue';
 import StudentContactFields from '../components/StudentContactFields.vue';
@@ -542,6 +542,40 @@ const saveCourseAllowedAbsences = async (student, courseItem) => {
     fetchData();
   } catch (err) {
     notify.apiError(err, 'Lỗi khi lưu giới hạn vắng phép');
+  }
+};
+
+// ---- Học phí của từng khóa: số phải đóng (sửa được), đã đóng, còn nợ ----
+const courseTuition = (student, courseItem) => student.tuition?.courses?.find((c) => c.course_item_id === courseItem.id) || null;
+
+const courseFeeEdit = ref({ key: null, fee: null });
+const savingCourseFee = ref(false);
+const courseFeeKey = (student, courseItem) => `${student.id}_${courseItem.id}`;
+
+const openCourseFeeEdit = (student, courseItem) => {
+  const key = courseFeeKey(student, courseItem);
+  courseFeeEdit.value = courseFeeEdit.value.key === key
+    ? { key: null, fee: null }
+    : { key, fee: courseTuition(student, courseItem)?.fee ?? null };
+};
+
+const saveCourseFee = async (student, courseItem) => {
+  const { fee } = courseFeeEdit.value;
+  if (fee === (courseTuition(student, courseItem)?.fee ?? null)) {
+    courseFeeEdit.value.key = null;
+    return;
+  }
+  try {
+    savingCourseFee.value = true;
+    const res = await studentApi.updateCourseItem(student.id, courseItem.id, { tuition_fee: fee });
+    notify.success('Đã lưu học phí của khóa!');
+    if (res.data.student) Object.assign(student, res.data.student);
+    courseFeeEdit.value.key = null;
+    fetchData();
+  } catch (err) {
+    notify.apiError(err, 'Không lưu được học phí');
+  } finally {
+    savingCourseFee.value = false;
   }
 };
 
@@ -1835,6 +1869,64 @@ const getAttendanceSummaryTooltip = (student) => {
                           class="h-full bg-sky-500 rounded-full transition-all duration-500"
                           :style="{ width: `${getCourseProgress(cItem)}%` }"
                         ></div>
+                      </div>
+
+                      <!-- Học phí của khóa: chỉ xem, bấm "Sửa học phí" mới hiện ô nhập -->
+                      <div v-if="courseTuition(student, cItem)" class="rounded-xl bg-slate-50 px-4 py-3 space-y-3">
+                        <div class="flex flex-wrap items-center gap-x-8 gap-y-2">
+                          <dl class="flex flex-wrap gap-x-8 gap-y-2">
+                            <div>
+                              <dt class="text-[11px] text-slate-500">Học phí<template v-if="cItem.tuition_fee != null"> (giá riêng)</template></dt>
+                              <dd class="text-sm font-bold tabular-nums text-slate-900">{{ formatVND(courseTuition(student, cItem).fee) }}</dd>
+                            </div>
+                            <div v-if="courseTuition(student, cItem).discount > 0">
+                              <dt class="text-[11px] text-slate-500">Giảm giá</dt>
+                              <dd class="text-sm font-bold tabular-nums text-slate-700">{{ formatVND(courseTuition(student, cItem).discount) }}</dd>
+                            </div>
+                            <div>
+                              <dt class="text-[11px] text-slate-500">Đã đóng</dt>
+                              <dd class="text-sm font-bold tabular-nums text-emerald-700">{{ formatVND(courseTuition(student, cItem).paid) }}</dd>
+                            </div>
+                            <div>
+                              <dt class="text-[11px] text-slate-500">Còn nợ</dt>
+                              <dd class="text-sm font-bold tabular-nums" :class="courseTuition(student, cItem).debt > 0 ? 'text-rose-700' : 'text-slate-400'">{{ formatVND(courseTuition(student, cItem).debt) }}</dd>
+                            </div>
+                          </dl>
+                          <span class="rounded-md border px-2 py-0.5 text-[11px] font-bold" :class="courseTuitionStatus(courseTuition(student, cItem)).class">
+                            {{ courseTuitionStatus(courseTuition(student, cItem)).label }}
+                          </span>
+                          <button
+                            v-if="canPay"
+                            type="button"
+                            @click="openCourseFeeEdit(student, cItem)"
+                            class="ml-auto inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-800"
+                          >
+                            <Edit3 class="h-3 w-3" />
+                            <span>Sửa học phí</span>
+                          </button>
+                        </div>
+
+                        <div v-if="courseFeeEdit.key === courseFeeKey(student, cItem)" class="flex flex-wrap items-end gap-2 border-t border-slate-200 pt-3">
+                          <label class="block">
+                            <span class="mb-1 block text-[11px] font-semibold text-slate-600">Học phí thực tế của khóa (đ)</span>
+                            <MoneyInput
+                              v-model="courseFeeEdit.fee"
+                              class="w-40 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-right text-sm font-bold tabular-nums text-slate-900 focus:border-sky-500 focus:outline-none"
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            :disabled="savingCourseFee"
+                            @click="saveCourseFee(student, cItem)"
+                            class="rounded-lg bg-sky-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-600 disabled:opacity-50 transition-colors shadow-2xs"
+                          >
+                            Lưu
+                          </button>
+                          <button type="button" @click="courseFeeEdit.key = null" class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                            Huỷ
+                          </button>
+                          <p class="basis-full text-[11px] text-slate-400">Để trống rồi Lưu để quay về học phí mặc định.</p>
+                        </div>
                       </div>
 
                       <!-- Inline Editors: [ Attended ] [ Lưu ] | [ Total ] [ Lưu ] | [ 📅 ] | [ 🗑️ ] -->

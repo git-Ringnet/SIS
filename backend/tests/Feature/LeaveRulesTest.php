@@ -261,6 +261,43 @@ class LeaveRulesTest extends TestCase
         $this->assertSame('Bé đi khám răng', $this->getJson('/api/attendance?date='.self::THURSDAY)->json('parent_leave_requests.0.reason'));
     }
 
+    public function test_parent_leave_requests_only_show_on_the_day_of_the_leave(): void
+    {
+        $student = $this->createStudent();
+        foreach ([[self::MONDAY, 1, 'Nghỉ thứ hai'], [self::THURSDAY, 4, 'Nghỉ thứ năm']] as [$date, $day, $reason]) {
+            $this->postJson("/api/portal/students/{$student->id}/leave-request", ['phone_last4' => '1234', 'date' => $date,
+                'slot_id' => collect($student->schedules)->firstWhere('day', $day)['id'], 'reason' => $reason])->assertOk();
+        }
+        $reasons = fn (string $date) => collect($this->getJson("/api/attendance?date={$date}")->json('parent_leave_requests'))->pluck('reason')->all();
+
+        $this->assertSame(['Nghỉ thứ hai'], $reasons(self::MONDAY));
+        $this->assertSame(['Nghỉ thứ năm'], $reasons(self::THURSDAY));
+        $this->assertSame([], $reasons('2026-10-20'));
+    }
+
+    public function test_parent_leave_request_seen_state_belongs_to_the_account(): void
+    {
+        $student = $this->createStudent();
+        $this->postJson("/api/portal/students/{$student->id}/leave-request", ['phone_last4' => '1234', 'date' => self::THURSDAY,
+            'slot_id' => collect($student->schedules)->firstWhere('day', 4)['id'], 'reason' => 'Bé đi khám răng'])->assertOk();
+        $request = fn () => $this->getJson('/api/attendance?date='.self::THURSDAY)->json('parent_leave_requests.0');
+        $viewer = auth()->user();
+        $this->assertFalse($request()['seen']);
+
+        // Bấm xem hai lần (hai máy cùng tài khoản) không lỗi, tải lại vẫn là đã xem
+        foreach (range(1, 2) as $ignored) {
+            $this->postJson('/api/attendance/leave-requests/seen', ['ids' => [$request()['id']]])->assertOk();
+        }
+        $this->assertTrue($request()['seen']);
+
+        // Tài khoản khác chưa xem
+        Sanctum::actingAs(User::factory()->create());
+        $this->assertFalse($request()['seen']);
+
+        Sanctum::actingAs($viewer);
+        $this->postJson('/api/attendance/leave-requests/seen', ['ids' => [999999]])->assertUnprocessable();
+    }
+
     public function test_slot_of_another_weekday_is_refused_and_old_duplicate_is_removed_with_refund(): void
     {
         $student = $this->createStudent(); // T2 17:00 (ca a) + T5 17:00 (ca b), 8 buổi
