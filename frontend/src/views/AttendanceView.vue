@@ -3,6 +3,8 @@ import { toLocalDateString } from '../services/date';
 import { notify, errorMessage } from '../services/notify';
 import { ref, onMounted, computed, watch } from 'vue';
 import { dailyAttendanceApi, studentApi } from '../services/api';
+import { useAuth } from '../services/useAuth';
+import { isPathBlocked } from '../services/permissions';
 import SearchableSelect from '../components/SearchableSelect.vue';
 import MessageTemplateModal from '../components/MessageTemplateModal.vue';
 import Pagination from '../components/Pagination.vue';
@@ -28,6 +30,10 @@ import {
 } from 'lucide-vue-next';
 
 // Bộ lọc
+// Bấm tên học viên: mở hồ sơ; tài khoản bị chặn trang Học viên (giáo viên) mở thẳng trang Ngày đã học (giống Cổng phụ huynh)
+const { user } = useAuth();
+const studentLink = (id) => (isPathBlocked(user.value, '/students') ? `/student-portal/${id}` : `/students/${id}`);
+
 const selectedDate = ref(toLocalDateString());
 const selectedCenter = ref('all');
 const selectedClass = ref('all');
@@ -627,7 +633,7 @@ const openMessageModal = (student) => {
             <!-- Tên học viên, Khóa học, Phòng học, Ca học -->
             <div class="space-y-1">
               <div class="flex items-center gap-2 flex-wrap">
-                <router-link :to="`/students/${st.id}`"
+                <router-link :to="studentLink(st.id)"
                   class="font-bold text-slate-900 hover:text-blue-600 text-sm sm:text-base uppercase dark:text-white dark:hover:text-blue-400">
                   {{ st.name }}
                 </router-link>

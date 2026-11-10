@@ -43,6 +43,8 @@ const routes = [
   { path: '/retention', name: 'retention', component: RetentionView, meta: { title: 'Tái đăng ký & Giữ chân' } },
   { path: '/students', name: 'students', component: StudentsView, meta: { title: 'Học viên & Điểm danh' } },
   { path: '/students/:id', name: 'student-detail', component: StudentDetailView, props: true, meta: { standalone: true, title: 'Hồ sơ học viên' } },
+  // Trung tâm / giáo viên xem trang Cổng phụ huynh của học viên (đã đăng nhập, không cần nhập 4 số cuối SĐT)
+  { path: '/student-portal/:id', name: 'student-portal', component: ParentPortalView, props: true, meta: { standalone: true, staffView: true, title: 'Ngày đã học' } },
   { path: '/attendance', name: 'attendance', component: AttendanceView, meta: { title: 'Điểm danh' } },
   { path: '/teacher-checkin', name: 'teacher-checkin', component: TeacherCheckinView, meta: { title: 'Check-in ca dạy' } },
   { path: '/teacher-checkin/qr', name: 'teacher-checkin-qr', component: TeacherCheckinQrView, meta: { title: 'QR check-in ca dạy', managerOnly: true } },

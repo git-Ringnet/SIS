@@ -78,6 +78,8 @@ export const studentApi = {
   undoAttendance: (id) => api.post(`/students/${id}/attendance/undo`),
   recordAbsence: (id, data) => api.post(`/students/${id}/absence`, data),
   tuitionInvoicePdf: (id) => api.get(`/students/${id}/tuition-invoice.pdf`, { responseType: 'blob', timeout: 30000 }),
+  // Trang giống Cổng phụ huynh cho trung tâm / giáo viên (không cần nhập 4 số cuối SĐT)
+  portalView: (id) => api.get(`/students/${id}/portal`),
   addSupplies: (id, data) => api.post(`/students/${id}/supplies`, data),
   returnSupply: (id, supplyId, data) => api.post(`/students/${id}/supplies/${supplyId}/return`, data),
   updateProgress: (id, data) => api.put(`/students/${id}/progress`, data),

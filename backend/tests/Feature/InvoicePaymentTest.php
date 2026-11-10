@@ -128,10 +128,73 @@ class InvoicePaymentTest extends TestCase
         $this->putJson("/api/students/{$student->id}/courses/1", ['tuition_fee' => 1200000])->assertOk();
     }
 
-    public function test_course_fee_is_refused_while_a_legacy_pending_invoice_is_open(): void
+    public function test_course_fee_updates_the_legacy_pending_invoice(): void
     {
         Sanctum::actingAs(User::factory()->create());
         $student = $this->studentOnCourse();
+        $pending = $this->legacyInvoice($student, 1500000, 'pending');
+
+        // Phiếu chờ thu tự tạo lúc thêm học viên chỉ là số còn phải thu: sửa học phí thì sửa luôn số tiền phiếu
+        $this->putJson("/api/students/{$student->id}/courses/1", ['tuition_fee' => 1800000])->assertOk()
+            ->assertJsonPath('student.tuition.courses.0.fee', 1800000)->assertJsonPath('student.tuition.courses.0.debt', 1800000);
+        $this->assertEquals([1800000, 'pending'], [$pending->fresh()->amount, $pending->fresh()->status]);
+
+        // Để trống: về giá khóa
+        $this->putJson("/api/students/{$student->id}/courses/1", ['tuition_fee' => null])->assertOk()
+            ->assertJsonPath('student.tuition.courses.0.fee', 2000000);
+        $this->assertEquals(2000000, $pending->fresh()->amount);
+    }
+
+    public function test_switching_course_moves_the_legacy_pending_invoice_to_the_new_price(): void
+    {
+        Sanctum::actingAs(User::factory()->create());
+        // Ca của khách: phiếu chờ thu 3.600.000 lập lúc khóa còn giá cũ, khóa đúng giá 3.000.000
+        $student = $this->studentOnCourse(3600000);
+        $pending = $this->legacyInvoice($student, 3600000, 'pending');
+        $right = Course::create(['code' => 'P3', 'name' => 'Piano 3 tháng', 'price' => 3000000, 'default_sessions' => 12]);
+
+        $this->putJson("/api/students/{$student->id}/courses/1", ['course_id' => $right->id])->assertOk()
+            ->assertJsonPath('student.tuition.courses.0.fee', 3000000)->assertJsonPath('student.tuition.courses.0.debt', 3000000);
+        $this->assertEquals([3000000, $right->id], [$pending->fresh()->amount, $pending->fresh()->course_id]);
+    }
+
+    public function test_course_price_change_moves_matching_pending_invoice_of_unpaid_student(): void
+    {
+        Sanctum::actingAs(User::factory()->create());
+        $student = $this->studentOnCourse(3600000);
+        $pending = $this->legacyInvoice($student, 3600000, 'pending');
+
+        $this->changeCoursePrice(Course::find($student->course_id), 3000000);
+
+        $this->assertEquals(3000000, $pending->fresh()->amount);
+        $this->assertEquals([3000000, 0, 3000000], $this->courseFigures($student));
+    }
+
+    public function test_invoices_can_be_searched_across_months(): void
+    {
+        Sanctum::actingAs(User::factory()->create());
+        $student = $this->studentOnCourse();
+        $this->legacyInvoice($student, 1000000, 'paid'); // tháng 10/2026
+        $this->legacyInvoice($student, 3600000, 'pending');
+        Student::create(['code' => 'HV-2', 'name' => 'Bé Khác', 'gender' => 'Nam', 'parent_name' => 'PH', 'parent_phone' => '0911112222',
+            'course_id' => $student->course_id, 'total_sessions' => 8, 'remaining_sessions' => 8, 'status' => 'active']);
+
+        // Có từ khóa: tìm trên mọi tháng (theo tên, mã phiếu, SĐT phụ huynh), lọc luôn phiếu chờ thu
+        $res = $this->getJson('/api/invoices?month=2025-01&search=bé an')->assertOk();
+        $this->assertCount(2, $res->json('invoices'));
+        $this->assertCount(1, $res->json('pending_invoices'));
+        $this->assertSame(['PT-pending'], array_column($this->getJson('/api/invoices?search=PT-pend')->json('invoices'), 'invoice_code'));
+        $this->assertCount(2, $this->getJson('/api/invoices?search=0900001234')->json('invoices'));
+
+        $res = $this->getJson('/api/invoices?search=0911112222')->assertOk();
+        $this->assertSame([[], []], [$res->json('invoices'), $res->json('pending_invoices')]);
+    }
+
+    public function test_course_fee_is_refused_when_pending_invoice_is_mixed_with_paid_legacy_invoices(): void
+    {
+        Sanctum::actingAs(User::factory()->create());
+        $student = $this->studentOnCourse();
+        $this->legacyInvoice($student, 1000000, 'paid');
         $this->legacyInvoice($student, 1500000, 'pending');
 
         $this->putJson("/api/students/{$student->id}/courses/1", ['tuition_fee' => 1800000])

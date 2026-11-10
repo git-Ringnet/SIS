@@ -75,11 +75,12 @@ class Tuition
 
     /**
      * Sắp đổi giá khóa: khóa học viên đã đóng tiền (hoặc đã được giảm giá) đang tính theo giá khóa thì chốt lại giá cũ,
-     * để khóa đã đóng đủ không tự phát sinh nợ. Học viên chưa đóng đồng nào theo giá mới.
+     * để khóa đã đóng đủ không tự phát sinh nợ. Học viên chưa đóng đồng nào theo giá mới, kể cả phiếu chờ thu cũ
+     * đang ghi đúng giá cũ (phiếu tự tạo lúc thêm học viên).
      */
-    public static function keepPaidFees(int $courseId, float $oldPrice): void
+    public static function keepPaidFees(int $courseId, float $oldPrice, float $newPrice): void
     {
-        DB::transaction(function () use ($courseId, $oldPrice): void {
+        DB::transaction(function () use ($courseId, $oldPrice, $newPrice): void {
             foreach (Student::with('invoices')->get() as $student) {
                 $list = $student->registered_courses_list;
                 $invoices = self::invoicesOf($student, $student->invoices);
@@ -95,6 +96,13 @@ class Tuition
                         $list[$key]['tuition_fee'] = $oldPrice;
                         $changed = true;
                     }
+
+                    $pending = (int) ($item['course_id'] ?? 0) === $courseId && ! isset($item['tuition_fee'])
+                        ? self::soloPendingInvoice($student, $itemId, $invoices) : null;
+                    if ($pending && abs((float) $pending->amount - $oldPrice) < 0.5
+                        && $rows[$itemId]['paid'] + $rows[$itemId]['discount'] == 0) {
+                        $pending->update(['amount' => $newPrice]);
+                    }
                 }
 
                 if ($changed) {
@@ -106,18 +114,58 @@ class Tuition
     }
 
     /**
+     * Phiếu chờ thu kiểu cũ (tự tạo lúc thêm học viên / gia hạn, chưa thu) khi đó là phiếu cũ duy nhất của khóa:
+     * phiếu chỉ ghi số còn phải thu nên đổi khóa / sửa học phí thì sửa luôn số tiền phiếu. Trường hợp khác: null.
+     */
+    public static function soloPendingInvoice(Student $student, int $itemId, ?Collection $invoices = null): ?Invoice
+    {
+        $legacy = self::legacyInvoices($student, self::invoicesOf($student, $invoices), $itemId);
+
+        return $legacy->count() === 1 && $legacy->first()->status === 'pending' ? $legacy->first() : null;
+    }
+
+    /**
+     * Đặt học phí $fee cho khóa đang có phiếu chờ thu kiểu cũ: phiếu = phần còn phải thu, hết nợ thì hủy phiếu.
+     * Gọi trước khi đổi course_id của khóa. Trả về mục khóa đã cập nhật học phí.
+     */
+    public static function applyFeeToPending(Student $student, array $item, Invoice $pending, float $fee, ?int $courseId = null): array
+    {
+        $row = collect(self::courses($student))->firstWhere('course_item_id', (int) $item['id']);
+        $settled = $row['paid'] + $row['discount'];
+        $due = max(0, $fee - $settled);
+
+        $pending->update([
+            'amount' => $due,
+            'status' => $due > 0 ? 'pending' : 'cancelled',
+            'course_id' => $courseId ?? $pending->course_id,
+            'course_item_id' => (int) $item['id'],
+        ]);
+
+        // Chưa thu đồng nào: học phí = số trên phiếu, không cần ghi riêng; đã thu một phần / hết nợ thì ghi học phí riêng
+        if ($settled == 0 && $due > 0) {
+            unset($item['tuition_fee']);
+        } else {
+            $item['tuition_fee'] = $fee;
+        }
+
+        return $item;
+    }
+
+    /**
      * Lý do không đổi được học phí của khóa ($fee = null: bỏ số đã chỉnh, về học phí mặc định), hợp lệ thì null.
      */
     public static function feeChangeError(Student $student, array $item, ?float $fee): ?string
     {
         $itemId = (int) $item['id'];
         $row = collect(self::courses($student))->firstWhere('course_item_id', $itemId);
+        $solo = self::soloPendingInvoice($student, $itemId);
 
-        if ($row['pending_invoice']) {
+        if ($row['pending_invoice'] && ! $solo) {
             return "Khóa {$row['name']} đang có phiếu chờ thu {$row['pending_invoice']['invoice_code']}: hãy sửa số tiền của phiếu đó ở trang Hóa đơn.";
         }
 
-        $newFee = $fee ?? self::standardFee($item, self::legacyInvoices($student, self::invoicesOf($student, null), $itemId));
+        $newFee = $fee ?? ($solo ? self::coursePrice($item['course_id'] ?? null)
+            : self::standardFee($item, self::legacyInvoices($student, self::invoicesOf($student, null), $itemId)));
         $settled = $row['paid'] + $row['discount'];
         if ($newFee < $settled - 0.5) {
             return "Khóa {$row['name']} đã thu".($row['discount'] > 0 ? ' và giảm giá' : '').' '.number_format($settled, 0, ',', '.')

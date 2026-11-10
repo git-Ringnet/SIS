@@ -1627,7 +1627,7 @@ const getAttendanceSummaryTooltip = (student) => {
 
                       <button
                         type="button"
-                        @click="openStudentDetail(student.id)"
+                        @click="$router.push(`/student-portal/${student.id}`)"
                         class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3 py-1.5 font-semibold text-slate-700 shadow-2xs active:scale-95 transition-all"
                       >
                         <Calendar class="h-3.5 w-3.5 text-slate-500" />

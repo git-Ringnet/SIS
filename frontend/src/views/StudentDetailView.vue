@@ -334,8 +334,9 @@ const openParentPortalInNewTab = () => {
             <span>{{ tuitionLabel(student) }}</span>
           </button>
 
-          <!-- [ Ngày đã học ] -->
+          <!-- [ Ngày đã học ] trang giống Cổng phụ huynh, không cần nhập 4 số cuối SĐT -->
           <button
+            @click="router.push(`/student-portal/${studentId}`)"
             class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 px-3 py-1.5 font-semibold text-slate-700 transition-colors shrink-0 shadow-2xs"
           >
             <Calendar class="h-3.5 w-3.5 text-slate-500" />

@@ -955,6 +955,8 @@ class StudentApiController extends Controller
                         return response()->json(['message' => $error], 422);
                     }
                 }
+                // Khóa chỉ có phiếu chờ thu kiểu cũ (tự tạo lúc thêm học viên): sửa học phí / đổi khóa thì sửa luôn số tiền phiếu
+                $pending = Tuition::soloPendingInvoice($student, (int) $item['id']);
                 if (isset($validated['total_sessions'])) {
                     $list[$key]['total_sessions'] = (int) $validated['total_sessions'];
                 }
@@ -982,11 +984,17 @@ class StudentApiController extends Controller
                     // Học phí đã chỉnh là của khóa cũ: đổi sang khóa khác thì tính lại theo giá khóa mới
                     if ((int) ($list[$key]['course_id'] ?? 0) !== (int) $newCourse->id) {
                         unset($list[$key]['tuition_fee']);
+                        if ($pending && ! $request->has('tuition_fee')) {
+                            $list[$key] = Tuition::applyFeeToPending($student, $list[$key], $pending, Tuition::coursePrice($newCourse->id), $newCourse->id);
+                        }
                     }
                     $list[$key]['course_id'] = (int) $newCourse->id;
                     $list[$key]['course_name'] = $newCourse->name;
                 }
-                if ($request->has('tuition_fee')) {
+                if ($request->has('tuition_fee') && $pending) {
+                    $list[$key] = Tuition::applyFeeToPending($student, $list[$key], $pending,
+                        $fee ?? Tuition::coursePrice($list[$key]['course_id'] ?? null), $list[$key]['course_id'] ?? null);
+                } elseif ($request->has('tuition_fee')) {
                     if ($fee === null) {
                         unset($list[$key]['tuition_fee']);
                     } else {

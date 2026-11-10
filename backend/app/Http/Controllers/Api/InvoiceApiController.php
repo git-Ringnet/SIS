@@ -24,8 +24,16 @@ class InvoiceApiController extends Controller
         $status = $request->input('status', 'all');
         $month = $request->input('month', Carbon::now()->format('Y-m'));
 
+        // Tìm theo mã phiếu, tên / mã học viên, tên / SĐT phụ huynh: tìm trên mọi tháng
+        $search = trim((string) $request->input('search', ''));
+        $matches = function ($q) use ($search): void {
+            $like = "%{$search}%";
+            $q->where('invoice_code', 'like', $like)->orWhereHas('student', fn ($s) => $s->where('name', 'like', $like)
+                ->orWhere('code', 'like', $like)->orWhere('parent_name', 'like', $like)->orWhere('parent_phone', 'like', $like));
+        };
+
         $query = Invoice::with(['student.course', 'course'])
-            ->where('paid_at', 'like', "{$month}%");
+            ->when($search === '', fn ($q) => $q->where('paid_at', 'like', "{$month}%"), fn ($q) => $q->where($matches));
 
         if ($status !== 'all') {
             $query->where('status', $status);
@@ -51,7 +59,8 @@ class InvoiceApiController extends Controller
         $courses = Course::where('is_active', true)->get();
 
         // Phiếu chờ thu (công nợ) không thuộc tháng nào: luôn hiện để xác nhận khi phụ huynh đóng tiền
-        $pendingInvoices = Invoice::with(['student.course', 'course'])->where('status', 'pending')->orderBy('created_at')->get();
+        $pendingInvoices = Invoice::with(['student.course', 'course'])->where('status', 'pending')
+            ->when($search !== '', fn ($q) => $q->where($matches))->orderBy('created_at')->get();
 
         return response()->json([
             'invoices' => $invoices,

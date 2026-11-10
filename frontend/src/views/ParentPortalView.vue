@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, nextTick } from 'vue';
-import { useRoute } from 'vue-router';
-import { parentPortalApi } from '../services/api';
+import { useRoute, useRouter } from 'vue-router';
+import { parentPortalApi, studentApi } from '../services/api';
 import ExpandableText from '../components/ExpandableText.vue';
 import { richLines } from '../services/richLines';
 import { notify } from '../services/notify';
@@ -32,10 +32,15 @@ import {
   Info,
   CalendarOff,
   RefreshCw,
+  ArrowLeft,
 } from 'lucide-vue-next';
 
 const route = useRoute();
+const router = useRouter();
 const studentId = computed(() => route.params.id);
+// Trung tâm / giáo viên đã đăng nhập xem trang này (nút "Ngày đã học"): không nhập 4 số cuối SĐT, không xin nghỉ thay phụ huynh
+const staffView = computed(() => route.meta.staffView === true);
+const goBack = () => (window.history.length > 1 ? router.back() : router.push('/attendance'));
 
 // Trạng thái chung
 const isLoading = ref(true);
@@ -67,6 +72,13 @@ const fetchPublicInfo = async () => {
   try {
     isLoading.value = true;
     loadError.value = null;
+    if (staffView.value) {
+      const res = await studentApi.portalView(studentId.value);
+      portalData.value = res.data;
+      publicInfo.value = { brand: res.data.brand };
+      isVerified.value = true;
+      return;
+    }
     const res = await parentPortalApi.getInfo(studentId.value);
     publicInfo.value = res.data;
 
@@ -369,7 +381,7 @@ onMounted(() => {
             </h1>
             <p class="text-[11px] text-slate-500 font-medium flex items-center gap-1.5">
               <span class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-              Cổng Thông Tin Học Viên & Phụ Huynh
+              {{ staffView ? 'Trung tâm xem như Cổng phụ huynh' : 'Cổng Thông Tin Học Viên & Phụ Huynh' }}
             </p>
           </div>
         </div>
@@ -385,9 +397,19 @@ onMounted(() => {
             <span>Hotline: {{ publicInfo.brand.phone }}</span>
           </a>
 
+          <!-- Trung tâm xem: quay lại trang trước -->
+          <button
+            v-if="staffView"
+            @click="goBack"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs font-semibold transition-colors"
+          >
+            <ArrowLeft class="h-3.5 w-3.5" />
+            <span>Quay lại</span>
+          </button>
+
           <!-- Nút khóa lại khi đã xác thực -->
           <button
-            v-if="isVerified"
+            v-else-if="isVerified"
             @click="lockPortal"
             class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-rose-50 hover:text-rose-600 text-slate-600 text-xs font-semibold transition-colors"
             title="Khóa lại để bảo mật"
@@ -602,7 +624,7 @@ onMounted(() => {
             </div>
 
             <!-- Action: Nút Xin nghỉ phép -->
-            <div class="w-full sm:w-auto shrink-0 flex flex-col gap-2">
+            <div v-if="!staffView" class="w-full sm:w-auto shrink-0 flex flex-col gap-2">
               <button
                 type="button"
                 @click="openLeaveModal()"
@@ -898,7 +920,7 @@ onMounted(() => {
 
                     <!-- Xin nghỉ buổi sắp tới -->
                     <button
-                      v-if="s.can_request_leave"
+                      v-if="s.can_request_leave && !staffView"
                       type="button"
                       @click="openLeaveModal(s)"
                       class="self-start shrink-0 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold flex items-center gap-1.5"

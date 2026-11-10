@@ -71,6 +71,22 @@ class ParentPortalApiController extends Controller
             ], 422);
         }
 
+        return response()->json($this->portalData($student));
+    }
+
+    /**
+     * Trung tâm / giáo viên đã đăng nhập xem đúng trang Cổng phụ huynh của học viên, không cần nhập 4 số cuối SĐT.
+     */
+    public function staffView(Student $student): JsonResponse
+    {
+        return response()->json($this->portalData($student));
+    }
+
+    /**
+     * Toàn bộ dữ liệu học tập hiển thị ở Cổng phụ huynh.
+     */
+    private function portalData(Student $student): array
+    {
         // Tải chi tiết học viên, điểm danh, khóa học và học phí
         $student->load([
             'course',
@@ -115,7 +131,7 @@ class ParentPortalApiController extends Controller
             ? substr($cleanParentPhone, 0, 3).'••••'.substr($cleanParentPhone, -3)
             : $cleanParentPhone;
 
-        return response()->json([
+        return [
             'verified' => true,
             'student' => [
                 'id' => $student->id,
@@ -237,7 +253,7 @@ class ParentPortalApiController extends Controller
                 // Quy định nghỉ học do trung tâm soạn ở Cài đặt (mỗi dòng một ý)
                 'leave_rules' => BrandSettings::portalLeaveRules(),
             ],
-        ]);
+        ];
     }
 
     /**

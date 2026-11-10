@@ -9,7 +9,7 @@ import Modal from '../components/Modal.vue';
 import SearchableSelect from '../components/SearchableSelect.vue';
 import DatePickerVN from '../components/DatePickerVN.vue';
 import Pagination from '../components/Pagination.vue';
-import { Receipt, Plus, X, Edit3, Trash2, FileDown, Loader2, Ban, Undo2, Hourglass } from 'lucide-vue-next';
+import { Receipt, Plus, X, Edit3, Trash2, FileDown, Loader2, Ban, Undo2, Hourglass, Search } from 'lucide-vue-next';
 import MoneyInput from '../components/MoneyInput.vue';
 import InvoicePaymentModal from '../components/InvoicePaymentModal.vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -68,7 +68,7 @@ const paymentMethodLabels = {
 
 const fetchData = async () => {
   try {
-    const res = await invoiceApi.getAll({ month: currentMonth.value, page: page.value, per_page: perPage.value });
+    const res = await invoiceApi.getAll({ month: currentMonth.value, page: page.value, per_page: perPage.value, search: search.value.trim() || undefined });
     pagination.value = res.data.pagination || null;
     invoices.value = res.data.invoices;
     monthlyTotal.value = res.data.monthlyTotal;
@@ -92,6 +92,14 @@ const studentOptions = computed(() => {
 const applyFilters = () => {
   page.value = 1;
   fetchData();
+};
+
+// Tìm phiếu (mã phiếu, học viên, phụ huynh / SĐT): tìm trên mọi tháng, gõ xong 0,4 giây mới tải
+const search = ref('');
+let searchTimer = null;
+const onSearch = () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(applyFilters, 400);
 };
 
 const changePage = (p) => {
@@ -266,9 +274,21 @@ const formatDate = (val) => {
         </p>
       </div>
 
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="relative">
+          <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            v-model="search"
+            @input="onSearch"
+            type="search"
+            placeholder="Tìm mã phiếu, học viên, SĐT..."
+            class="w-64 rounded-xl border border-slate-200 bg-white dark:bg-slate-800 dark:border-slate-700 dark:text-white pl-9 pr-3.5 py-2.5 text-sm text-slate-700 shadow-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+          />
+        </div>
         <input
           type="month"
+          :disabled="!!search.trim()"
+          :title="search.trim() ? 'Đang tìm trên mọi tháng' : ''"
           v-model="currentMonth"
           @change="applyFilters"
           class="rounded-xl border border-slate-200 bg-white dark:bg-slate-800 dark:border-slate-700 dark:text-white px-3.5 py-2.5 text-sm font-semibold text-slate-700 shadow-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"

@@ -72,6 +72,8 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::delete('/{student}/courses/{courseIndex}', [StudentApiController::class, 'deleteCourseItem']);
         Route::post('/{student}/avatar', [StudentApiController::class, 'uploadAvatar']);
         Route::get('/{student}/tuition-invoice.pdf', [StudentApiController::class, 'tuitionInvoicePdf']);
+        // Trang giống Cổng phụ huynh cho trung tâm / giáo viên (không cần nhập 4 số cuối SĐT)
+        Route::get('/{student}/portal', [ParentPortalApiController::class, 'staffView']);
     });
 
     // Retention System
