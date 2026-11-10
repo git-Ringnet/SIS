@@ -37,7 +37,6 @@ class ParentPortalApiController extends Controller
             'phone_hint' => $phoneHint,
             'brand' => [
                 'brand_name' => $brand['brand_name'] ?? 'EduCRM SIS',
-                'logo_url' => $brand['logo_url'] ?? null,
                 'phone' => $brand['phone'] ?? null,
                 'address' => $brand['address'] ?? null,
             ],
@@ -247,7 +246,6 @@ class ParentPortalApiController extends Controller
             })(),
             'brand' => [
                 'brand_name' => $brand['brand_name'] ?? 'EduCRM SIS',
-                'logo_url' => $brand['logo_url'] ?? null,
                 'phone' => $brand['phone'] ?? null,
                 'address' => $brand['address'] ?? null,
                 // Quy định nghỉ học do trung tâm soạn ở Cài đặt (mỗi dòng một ý)

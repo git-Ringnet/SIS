@@ -156,4 +156,18 @@ class ScheduleCenterBrandTest extends TestCase
         $this->getJson('/api/brand')->assertOk()->assertJsonPath('brand_name', 'Art Gallery');
         $this->assertSame('ART GALLERY', BrandSettings::brand()['bank_holder']);
     }
+
+    public function test_uploaded_logo_is_served_as_cached_image_instead_of_base64_in_json(): void
+    {
+        $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==');
+        $this->putJson('/api/settings/brand', ['brand_name' => 'Khoa Anh', 'logo_url' => 'data:image/png;base64,'.base64_encode($png)])->assertOk();
+
+        $this->app['auth']->forgetGuards();
+        $url = $this->getJson('/api/brand')->assertOk()->json('logo_url');
+        $this->assertStringStartsWith('/api/brand/logo?v=', $url);
+
+        $res = $this->get($url)->assertOk()->assertHeader('Content-Type', 'image/png');
+        $this->assertSame($png, $res->getContent());
+        $this->assertStringContainsString('max-age=31536000', $res->headers->get('Cache-Control'));
+    }
 }

@@ -63,11 +63,34 @@ class BrandSettings
     public static function publicBrand(): array
     {
         $brand = self::brand();
+        $logo = (string) ($brand['logo_url'] ?? '');
+
+        // Logo tải lên ở Cài đặt lưu dạng base64 (có thể hơn 1MB): trả đường dẫn ảnh để trình duyệt tải một lần rồi cache,
+        // thay vì gửi cả chuỗi base64 mỗi lần mở app. ?v= đổi khi đổi logo.
+        if (self::logoImage($logo)) {
+            $logo = '/api/brand/logo?v='.substr(md5($logo), 0, 12);
+        }
 
         return [
             'brand_name' => $brand['brand_name'],
-            'logo_url' => $brand['logo_url'],
+            'logo_url' => $logo,
         ];
+    }
+
+    /**
+     * Ảnh logo dạng data URI: [mime, nội dung nhị phân]; logo là đường dẫn thường hoặc trống thì null.
+     *
+     * @return array{0: string, 1: string}|null
+     */
+    public static function logoImage(?string $logo = null): ?array
+    {
+        $logo ??= (string) (self::brand()['logo_url'] ?? '');
+        if (! preg_match('#^data:(image/[a-z0-9.+-]+);base64,(.+)$#is', $logo, $m)) {
+            return null;
+        }
+        $binary = base64_decode($m[2], true);
+
+        return $binary === false ? null : [$m[1], $binary];
     }
 
     /**

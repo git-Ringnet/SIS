@@ -8,6 +8,7 @@ use App\Support\BrandSettings;
 use App\Support\OwnerGuard;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 
@@ -29,6 +30,20 @@ class SettingsApiController extends Controller
     public function publicBrand(): JsonResponse
     {
         return response()->json(BrandSettings::publicBrand());
+    }
+
+    /**
+     * Ảnh logo thương hiệu (logo lưu dạng base64 ở Cài đặt), cache lâu vì đường dẫn đổi theo nội dung (?v=).
+     */
+    public function brandLogo(): Response
+    {
+        $image = BrandSettings::logoImage();
+        abort_if($image === null, 404);
+
+        return response($image[1], 200, [
+            'Content-Type' => $image[0],
+            'Cache-Control' => 'public, max-age=31536000, immutable',
+        ]);
     }
 
     public function index(Request $request): JsonResponse

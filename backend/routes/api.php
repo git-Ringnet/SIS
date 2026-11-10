@@ -37,6 +37,7 @@ Route::prefix('auth')->group(function () {
 
 // Tên + logo thương hiệu cho màn đăng nhập (công khai)
 Route::get('/brand', [SettingsApiController::class, 'publicBrand']);
+Route::get('/brand/logo', [SettingsApiController::class, 'brandLogo']);
 
 // Cổng thông tin phụ huynh (Công khai - Xác thực bằng 4 số cuối số điện thoại)
 Route::prefix('portal')->group(function () {
