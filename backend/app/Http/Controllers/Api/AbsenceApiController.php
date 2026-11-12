@@ -178,7 +178,7 @@ class AbsenceApiController extends Controller
     {
         $validated = $request->validate([
             'date' => 'required|date',
-            'time' => 'required|string',
+            'time' => ['required', 'string', fn ($attr, $value, $fail) => SingleLessons::validTime((string) $value) ? null : $fail('Giờ học không hợp lệ, nhập dạng 18:00 hoặc 18:00 - 19:00.')],
             'room' => 'nullable|string',
             'teacher' => 'nullable|string',
             'note' => 'nullable|string',

@@ -62,7 +62,20 @@ class SingleLessons
      */
     public static function startTime(array $lesson): ?string
     {
-        return isset($lesson['time']) && preg_match('/\d{1,2}:\d{2}/', $lesson['time'], $m) ? $m[0] : null;
+        return isset($lesson['time']) && preg_match(self::CLOCK, (string) $lesson['time'], $m) ? $m[0] : null;
+    }
+
+    /** Một mốc giờ hợp lệ 0:00 - 23:59, không dính số khác ("128:00" không khớp "28:00"). */
+    private const CLOCK = '/(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?!\d)/';
+
+    /**
+     * Giờ nhập cho buổi học lẻ / học bù hợp lệ: "18:00" hoặc "18:00 - 19:00" (giờ 0-23, phút 0-59).
+     */
+    public static function validTime(string $time): bool
+    {
+        $parts = preg_split('/\s*-\s*/', trim($time));
+
+        return count($parts) <= 2 && collect($parts)->every(fn ($p) => preg_match('/^([01]?\d|2[0-3]):[0-5]\d$/', $p) === 1);
     }
 
     /**
@@ -72,7 +85,7 @@ class SingleLessons
      */
     public static function timeRange(array $lesson): array
     {
-        if (! isset($lesson['time']) || ! preg_match_all('/(\d{1,2}):(\d{2})/', (string) $lesson['time'], $m, PREG_SET_ORDER)) {
+        if (! isset($lesson['time']) || ! preg_match_all(self::CLOCK, (string) $lesson['time'], $m, PREG_SET_ORDER)) {
             return [null, null];
         }
 

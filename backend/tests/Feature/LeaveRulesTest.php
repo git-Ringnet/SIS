@@ -7,6 +7,7 @@ use App\Models\Course;
 use App\Models\Student;
 use App\Models\User;
 use App\Support\PagePermissions;
+use App\Support\SingleLessons;
 use App\Support\StudentSchedule;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -242,6 +243,22 @@ class LeaveRulesTest extends TestCase
 
         $times = collect($this->getJson('/api/attendance?date='.self::MONDAY)->json('students'))->pluck('shift_time')->all();
         $this->assertSame(['9:00 - 10:00', '17:00 - 18:00', '20:30 - 21:30'], $times);
+    }
+
+    public function test_invalid_lesson_time_is_refused_and_old_bad_data_does_not_break_attendance(): void
+    {
+        $student = $this->createStudent();
+
+        // Gõ nhầm giờ (khách gặp "128:00") thì báo lỗi, không lưu
+        $this->postJson('/api/attendance/single-lesson', ['student_id' => $student->id, 'date' => self::MONDAY, 'time' => '128:00'])
+            ->assertUnprocessable()->assertJsonValidationErrors('time');
+        $this->postJson('/api/attendance/single-lesson', ['student_id' => $student->id, 'date' => self::MONDAY, 'time' => '17:00 - 25:00'])
+            ->assertUnprocessable();
+
+        // Dữ liệu sai đã lưu từ trước: trang Điểm danh vẫn tải được, ca thường không bị thay
+        SingleLessons::add(['id' => 'lesson_bad', 'student_id' => $student->id, 'date' => self::MONDAY, 'time' => '128:00', 'is_makeup' => true]);
+        $this->assertSame([], StudentSchedule::replacedSlotIds($student, self::MONDAY));
+        $this->getJson('/api/attendance?date='.self::MONDAY)->assertOk();
     }
 
     public function test_staff_changing_status_keeps_parent_leave_reason(): void

@@ -491,7 +491,7 @@ class AttendanceApiController extends Controller
             'course_id' => 'nullable',
             'room' => 'nullable|string',
             'teacher' => 'nullable|string',
-            'time' => 'nullable|string',
+            'time' => ['nullable', 'string', fn ($attr, $value, $fail) => SingleLessons::validTime((string) $value) ? null : $fail('Giờ học không hợp lệ, nhập dạng 18:00 hoặc 18:00 - 19:00.')],
             'merged_slot_id' => 'nullable|string',
             'merged_class_id' => 'nullable',
             'note' => 'nullable|string',
