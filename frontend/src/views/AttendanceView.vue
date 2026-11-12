@@ -4,6 +4,7 @@ import { notify, errorMessage } from '../services/notify';
 import { ref, onMounted, computed, watch } from 'vue';
 import { dailyAttendanceApi, studentApi } from '../services/api';
 import { useAuth } from '../services/useAuth';
+import { plusOneHour, lessonTimeLabel, syncEndTime } from '../services/lessonTime';
 import { isPathBlocked } from '../services/permissions';
 import SearchableSelect from '../components/SearchableSelect.vue';
 import MessageTemplateModal from '../components/MessageTemplateModal.vue';
@@ -13,7 +14,6 @@ import {
   Calendar,
   CheckCircle2,
   XCircle,
-  Clock,
   RotateCcw,
   Search,
   Plus,
@@ -104,7 +104,8 @@ const singleLessonForm = ref({
   date: toLocalDateString(),
   room: '',
   teacher: '',
-  time: '18:00',
+  time_start: '18:00',
+  time_end: '19:00',
   merged_slot_id: '',
   merged_class_id: null,
   note: '',
@@ -247,7 +248,8 @@ const onMergedSlotChange = () => {
   if (slot) {
     singleLessonForm.value.merged_class_id = slot.class_id;
     if (slot.start) {
-      singleLessonForm.value.time = slot.start + (slot.end ? ` - ${slot.end}` : '');
+      singleLessonForm.value.time_start = slot.start;
+      singleLessonForm.value.time_end = slot.end || plusOneHour(slot.start);
     }
     if (slot.teacher) {
       singleLessonForm.value.teacher = slot.teacher;
@@ -335,7 +337,8 @@ const openSingleLessonModal = () => {
     date: selectedDate.value || toLocalDateString(),
     room: defaultRoom,
     teacher: defaultTeacher,
-    time: '18:00',
+    time_start: '18:00',
+    time_end: '19:00',
     merged_slot_id: '',
     merged_class_id: null,
     note: '',
@@ -357,7 +360,7 @@ const submitSingleLesson = async () => {
     center: singleLessonForm.value.center,
     date: singleLessonForm.value.date,
     room: singleLessonForm.value.room,
-    time: singleLessonForm.value.time,
+    time: lessonTimeLabel(singleLessonForm.value.time_start, singleLessonForm.value.time_end),
     teacher: singleLessonForm.value.teacher,
     merged_slot_id: singleLessonForm.value.merged_slot_id || null,
     merged_class_id: singleLessonForm.value.merged_class_id || null,
@@ -854,10 +857,13 @@ const openMessageModal = (student) => {
             </div>
             <div>
               <label class="block font-medium text-slate-700 mb-1">Giờ (VN)</label>
-              <div class="relative">
-                <input v-model="singleLessonForm.time" type="text" placeholder="VD: 18:00 - 19:00" required
-                  class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-800 focus:border-rose-500 focus:outline-none pr-8" />
-                <Clock class="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+              <!-- Chọn giờ thay vì gõ tay: chọn giờ bắt đầu thì giờ kết thúc tự +1 tiếng -->
+              <div class="flex items-center gap-1.5">
+                <input v-model="singleLessonForm.time_start" type="time" required @change="syncEndTime(singleLessonForm)" aria-label="Giờ bắt đầu"
+                  class="w-full min-w-0 rounded-xl border border-slate-200 bg-white px-2 py-2 text-slate-800 focus:border-rose-500 focus:outline-none" />
+                <span class="text-slate-400">–</span>
+                <input v-model="singleLessonForm.time_end" type="time" :min="singleLessonForm.time_start || undefined" aria-label="Giờ kết thúc"
+                  class="w-full min-w-0 rounded-xl border border-slate-200 bg-white px-2 py-2 text-slate-800 focus:border-rose-500 focus:outline-none" />
               </div>
             </div>
           </div>

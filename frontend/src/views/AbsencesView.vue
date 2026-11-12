@@ -4,6 +4,7 @@ import { confirmDialog } from '../services/useConfirm';
 import { notify } from '../services/notify';
 import { ref, computed, onMounted } from 'vue';
 import { absenceApi } from '../services/api';
+import { lessonTimeLabel, syncEndTime } from '../services/lessonTime';
 import MessageTemplateModal from '../components/MessageTemplateModal.vue';
 import SearchableSelect from '../components/SearchableSelect.vue';
 import {
@@ -56,7 +57,8 @@ const careForm = ref({
 // Form Học bù
 const makeupForm = ref({
   date: '',
-  time: '18:00',
+  time_start: '18:00',
+  time_end: '19:00',
   room: '',
   teacher: '',
   note: '',
@@ -118,7 +120,8 @@ const openMakeupModal = (st) => {
   const dateStr = toLocalDateString(addDays(1));
   makeupForm.value = {
     date: dateStr,
-    time: '18:00',
+    time_start: '18:00',
+    time_end: '19:00',
     room: st.room || (rooms.value[0] || ''),
     teacher: st.teacher || (teachers.value[0] || ''),
     note: '',
@@ -129,7 +132,10 @@ const openMakeupModal = (st) => {
 const submitMakeup = async () => {
   if (!makeupForm.value.date || !selectedStudent.value) return;
   try {
-    const res = await absenceApi.scheduleMakeup(selectedStudent.value.id, makeupForm.value);
+    const res = await absenceApi.scheduleMakeup(selectedStudent.value.id, {
+      ...makeupForm.value,
+      time: lessonTimeLabel(makeupForm.value.time_start, makeupForm.value.time_end),
+    });
     showMakeupModal.value = false;
     // Trùng giờ ca học cố định: buổi bù thay cho ca đó, báo rõ cho giáo vụ
     if (res.data.replaces_regular) notify.warning(res.data.message);
@@ -460,8 +466,14 @@ const openMessageModal = (st) => {
             </div>
             <div>
               <label class="block font-medium text-slate-700 mb-1">Khung giờ (*)</label>
-              <input v-model="makeupForm.time" type="text" required placeholder="VD: 18:00 - 19:00"
-                class="w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-rose-500 focus:outline-none" />
+              <!-- Chọn giờ thay vì gõ tay: chọn giờ bắt đầu thì giờ kết thúc tự +1 tiếng -->
+              <div class="flex items-center gap-1.5">
+                <input v-model="makeupForm.time_start" type="time" required @change="syncEndTime(makeupForm)" aria-label="Giờ bắt đầu"
+                  class="w-full min-w-0 rounded-xl border border-slate-200 px-2 py-2 text-slate-900 focus:border-rose-500 focus:outline-none" />
+                <span class="text-slate-400">–</span>
+                <input v-model="makeupForm.time_end" type="time" :min="makeupForm.time_start || undefined" aria-label="Giờ kết thúc"
+                  class="w-full min-w-0 rounded-xl border border-slate-200 px-2 py-2 text-slate-900 focus:border-rose-500 focus:outline-none" />
+              </div>
             </div>
           </div>
 
