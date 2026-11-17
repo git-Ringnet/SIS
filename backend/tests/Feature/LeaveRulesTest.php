@@ -202,6 +202,38 @@ class LeaveRulesTest extends TestCase
         $this->assertSame(['present', 1], [$makeups[0]['status'], $makeups[0]['session_number']]);
     }
 
+    public function test_changed_schedule_does_not_create_unmarked_sessions_in_past_weeks(): void
+    {
+        // Ca của khách: đang học T2 + T5, đã điểm danh vài buổi, đổi ca T5 sang CN
+        $student = $this->createStudent();
+        [$monday, $thursday] = [collect($student->schedules)->firstWhere('day', 1)['id'], collect($student->schedules)->firstWhere('day', 4)['id']];
+        $this->mark($student, self::MONDAY, 'present')->assertOk();
+        Carbon::setTestNow('2026-10-27 08:00:00'); // T3
+        $this->mark($student, self::THURSDAY, 'present')->assertOk();
+        $this->mark($student, '2026-10-26', 'present')->assertOk();
+
+        $this->putJson("/api/students/{$student->id}", [
+            ...$student->fresh()->only(['name', 'gender', 'parent_name', 'parent_phone', 'course_id', 'total_sessions', 'remaining_sessions', 'status']),
+            'retention_status' => 'normal',
+            'schedules' => [
+                ['id' => $monday, 'day' => 1, 'start' => '17:00', 'end' => '18:00', 'teacher' => 'Cô Mai'],
+                ['id' => $thursday, 'day' => 0, 'start' => '15:00', 'end' => '16:00', 'teacher' => 'Thầy Khoa'],
+            ],
+        ])->assertOk();
+        $slots = collect($student->fresh()->schedules)->keyBy('id');
+        $this->assertArrayNotHasKey('since', $slots[$monday]); // ca giữ nguyên thứ: không đổi
+        $this->assertSame('2026-10-27', $slots[$thursday]['since']);
+
+        // CN 25/10 (trước khi đổi lịch) không thành buổi "chưa điểm danh"; trang Điểm danh ngày đó cũng không có HV
+        $statuses = collect($this->portal($student)['sessions'])->pluck('status', 'date');
+        $this->assertArrayNotHasKey('25/10/2026', $statuses->all());
+        $this->assertSame([], $this->getJson('/api/attendance?date=2026-10-25')->json('students'));
+
+        // Từ ngày đổi lịch trở đi CN là buổi học
+        $this->assertSame('upcoming', $statuses['01/11/2026']);
+        $this->assertCount(1, $this->getJson('/api/attendance?date=2026-11-01')->json('students'));
+    }
+
     public function test_editing_schedule_day_keeps_past_attendance_on_its_own_weekday(): void
     {
         // Lịch T2 17:00 (ca a) + T5 17:00 (ca b); đã điểm danh T5 22/10 vào ca b, PH xin nghỉ T5 29/10

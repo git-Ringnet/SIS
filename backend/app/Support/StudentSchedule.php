@@ -43,12 +43,36 @@ class StudentSchedule
                 'end' => ! empty($slot['end']) ? substr((string) $slot['end'], 0, 5) : null,
                 'teacher' => trim((string) ($slot['teacher'] ?? '')) ?: null,
                 'room' => trim((string) ($slot['room'] ?? '')) ?: null,
+                // Ngày bắt đầu áp dụng ca (đổi lịch giữa khóa): trước ngày này ca không có buổi
+                ...(! empty($slot['since']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $slot['since']) ? ['since' => $slot['since']] : []),
             ];
         }
 
         usort($result, fn ($a, $b) => [self::dayOrder($a['day']), $a['start']] <=> [self::dayOrder($b['day']), $b['start']]);
 
         return $result;
+    }
+
+    /**
+     * Đổi lịch học viên đang học (đã có điểm danh): ca mới hoặc ca đổi sang thứ khác chỉ có buổi từ $today,
+     * để không hiện ngược các buổi "chưa điểm danh" theo lịch mới ở những tuần trước (đổi CN → T5 mà hiện T5 tuần trước).
+     * Ca giữ nguyên thứ thì giữ ngày áp dụng cũ.
+     */
+    public static function stampSince(array $slots, array $before, string $today): array
+    {
+        $old = collect($before)->keyBy('id');
+
+        return array_map(function ($slot) use ($old, $today) {
+            $prev = $old->get($slot['id']);
+            unset($slot['since']);
+            if (! $prev || (int) $prev['day'] !== (int) $slot['day']) {
+                $slot['since'] = $today;
+            } elseif (! empty($prev['since'])) {
+                $slot['since'] = $prev['since'];
+            }
+
+            return $slot;
+        }, $slots);
     }
 
     private static function dayOrder(int $day): int
@@ -114,6 +138,10 @@ class StudentSchedule
         $firstItemId = $items[0]['id'] ?? null;
 
         return array_values(array_filter(self::slotsOn($student, Carbon::parse($date)->dayOfWeek), function ($slot) use ($items, $firstItemId, $date) {
+            // Ca mới đổi lịch: chưa có buổi trước ngày bắt đầu áp dụng
+            if (! empty($slot['since']) && $slot['since'] > $date) {
+                return false;
+            }
             // Ca có thể thuộc nhiều khóa (khóa học tiếp dùng lại ca của khóa trước): có học nếu một trong các khóa đó đã bắt đầu.
             // Khóa đầu tiên theo "Ngày bắt đầu học" (đã xét ở trên), khóa thêm theo ngày bắt đầu của khóa
             $owners = array_filter($items, fn ($item) => in_array($slot['id'], $item['schedule_ids'] ?? [], true));
