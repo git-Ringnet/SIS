@@ -391,9 +391,12 @@ class StudentApiController extends Controller
 
         $slotsBefore = StudentSchedule::slots($student);
         $scheduleAttributes = $this->scheduleAttributes($validated);
-        // Học viên đang học đổi lịch: ca mới / đổi thứ chỉ áp dụng từ hôm nay (không sinh buổi "chưa điểm danh" ở các tuần trước)
-        if (! empty($scheduleAttributes['schedules']) && $student->attendances()->exists()) {
-            $scheduleAttributes['schedules'] = StudentSchedule::stampSince($scheduleAttributes['schedules'], $slotsBefore, Carbon::today()->toDateString());
+        // Học viên đang học đổi lịch: ca mới / đổi thứ chỉ áp dụng từ sau buổi điểm danh gần nhất (không sinh buổi
+        // "chưa điểm danh" ở những tuần đã học theo lịch cũ; các buổi từ đó tới nay vẫn hiện để điểm danh bù)
+        $lastAttended = $student->attendances()->reorder()->max('attended_at');
+        if (! empty($scheduleAttributes['schedules']) && $lastAttended) {
+            $since = Carbon::parse($lastAttended)->addDay()->min(Carbon::today())->toDateString();
+            $scheduleAttributes['schedules'] = StudentSchedule::stampSince($scheduleAttributes['schedules'], $slotsBefore, $since);
         }
         $student->update([...$validated, ...$scheduleAttributes]);
         // Sửa thứ của một ca đã có điểm danh: buổi đã điểm danh vẫn thuộc ca của đúng thứ ngày đó

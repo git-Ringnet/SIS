@@ -126,8 +126,9 @@ class StudentSchedule
      * Các ca thật sự có học vào ngày $date: theo thứ trong tuần, nhưng không có ca nào trước "Ngày bắt đầu học"
      * của học viên, và ca gán cho khóa đăng ký thêm chỉ bắt đầu từ ngày bắt đầu của khóa đó.
      * Dùng cho trang Điểm danh và sinh ca dạy giáo viên (tránh hiện / tính tiền buổi chưa bắt đầu học).
+     * $keepSlotIds: ca đã có điểm danh ngày này, luôn hiện kể cả trước ngày áp dụng của ca (đổi lịch giữa khóa).
      */
-    public static function slotsOnDate(Student $student, string $date): array
+    public static function slotsOnDate(Student $student, string $date, array $keepSlotIds = []): array
     {
         $date = Carbon::parse($date)->toDateString();
         if ($student->join_date && Carbon::parse($student->join_date)->toDateString() > $date) {
@@ -137,9 +138,9 @@ class StudentSchedule
         $items = $student->registered_courses_list;
         $firstItemId = $items[0]['id'] ?? null;
 
-        return array_values(array_filter(self::slotsOn($student, Carbon::parse($date)->dayOfWeek), function ($slot) use ($items, $firstItemId, $date) {
-            // Ca mới đổi lịch: chưa có buổi trước ngày bắt đầu áp dụng
-            if (! empty($slot['since']) && $slot['since'] > $date) {
+        return array_values(array_filter(self::slotsOn($student, Carbon::parse($date)->dayOfWeek), function ($slot) use ($items, $firstItemId, $date, $keepSlotIds) {
+            // Ca mới đổi lịch: chưa có buổi trước ngày bắt đầu áp dụng (trừ ca đã có điểm danh ngày đó: $keepSlotIds)
+            if (! empty($slot['since']) && $slot['since'] > $date && ! in_array($slot['id'], $keepSlotIds, true)) {
                 return false;
             }
             // Ca có thể thuộc nhiều khóa (khóa học tiếp dùng lại ca của khóa trước): có học nếu một trong các khóa đó đã bắt đầu.

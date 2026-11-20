@@ -258,5 +258,6 @@ Route::middleware(['auth:sanctum', EnsurePageAccess::class])->group(function () 
         Route::delete('/single-lesson/{id}', [AttendanceApiController::class, 'destroySingleLesson']);
         Route::post('/{student}/mark', [AttendanceApiController::class, 'markAttendance']);
         Route::post('/{student}/note', [AttendanceApiController::class, 'saveNote']);
+        Route::get('/{student}/previous-note', [AttendanceApiController::class, 'previousNote']);
     });
 });

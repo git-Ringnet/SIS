@@ -275,6 +275,8 @@ export const dailyAttendanceApi = {
   markLeaveRequestsSeen: (ids) => api.post('/attendance/leave-requests/seen', { ids }),
   mark: (studentId, data) => api.post(`/attendance/${studentId}/mark`, data),
   saveNote: (studentId, data) => api.post(`/attendance/${studentId}/note`, data),
+  // Nhận xét / báo bài gần nhất trước ngày date (xem lại buổi trước khi viết báo bài)
+  previousNote: (studentId, date) => api.get(`/attendance/${studentId}/previous-note`, { params: { date } }),
   scheduleSingleLesson: (data) => api.post('/attendance/single-lesson', data),
   deleteSingleLesson: (id) => api.delete(`/attendance/single-lesson/${id}`),
 };

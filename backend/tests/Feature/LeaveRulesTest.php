@@ -234,6 +234,26 @@ class LeaveRulesTest extends TestCase
         $this->assertCount(1, $this->getJson('/api/attendance?date=2026-11-01')->json('students'));
     }
 
+    public function test_rewritten_schedule_applies_from_day_after_last_attendance_and_keeps_marked_rows(): void
+    {
+        // Ca của khách (Yến Ngọc): đã điểm danh T2 19/10, T2 26/10 chưa điểm danh; ngày 29/10 nhập lại lịch (dòng T2 mới)
+        $student = $this->createStudent();
+        $this->mark($student, self::MONDAY, 'present')->assertOk();
+        Carbon::setTestNow('2026-10-29 08:00:00');
+
+        $this->putJson("/api/students/{$student->id}", [
+            ...$student->fresh()->only(['name', 'gender', 'parent_name', 'parent_phone', 'course_id', 'total_sessions', 'remaining_sessions', 'status']),
+            'retention_status' => 'normal',
+            'schedules' => [['day' => 1, 'start' => '10:00', 'end' => '11:00', 'teacher' => 'Thầy Khoa']],
+        ])->assertOk();
+
+        // Áp dụng từ sau buổi điểm danh gần nhất (20/10), không phải từ ngày sửa (29/10): T2 26/10 vẫn hiện để điểm danh bù
+        $this->assertSame('2026-10-20', $student->fresh()->schedules[0]['since']);
+        $this->assertCount(1, $this->getJson('/api/attendance?date=2026-10-26')->json('students'));
+        // Buổi đã điểm danh 19/10 (trước ngày áp dụng) vẫn hiện ở trang Điểm danh
+        $this->assertSame('present', $this->getJson('/api/attendance?date='.self::MONDAY)->json('students.0.status'));
+    }
+
     public function test_editing_schedule_day_keeps_past_attendance_on_its_own_weekday(): void
     {
         // Lịch T2 17:00 (ca a) + T5 17:00 (ca b); đã điểm danh T5 22/10 vào ca b, PH xin nghỉ T5 29/10
@@ -275,6 +295,22 @@ class LeaveRulesTest extends TestCase
 
         $times = collect($this->getJson('/api/attendance?date='.self::MONDAY)->json('students'))->pluck('shift_time')->all();
         $this->assertSame(['9:00 - 10:00', '17:00 - 18:00', '20:30 - 21:30'], $times);
+    }
+
+    public function test_previous_lesson_report_is_shown_when_writing_a_new_one(): void
+    {
+        $student = $this->createStudent();
+        $this->postJson("/api/attendance/{$student->id}/mark", ['date' => self::MONDAY, 'status' => 'present', 'note' => 'Bài cũ: Minuet. Về nhà tập trang 12'])->assertOk();
+        $this->postJson("/api/attendance/{$student->id}/mark", ['date' => self::THURSDAY, 'status' => 'present'])->assertOk(); // chưa báo bài
+        $this->postJson("/api/portal/students/{$student->id}/leave-request", ['phone_last4' => '1234', 'date' => '2026-10-26', 'reason' => 'Ốm'])->assertOk();
+
+        // Viết báo bài buổi 29/10: bỏ qua buổi chưa báo bài và đơn xin nghỉ, lấy báo bài gần nhất (19/10)
+        $this->getJson("/api/attendance/{$student->id}/previous-note?date=2026-10-29")->assertOk()
+            ->assertJsonPath('previous.date', '19/10/2026')->assertJsonPath('previous.weekday', 'T2')
+            ->assertJsonPath('previous.note', 'Bài cũ: Minuet. Về nhà tập trang 12')->assertJsonPath('previous.course_name', 'Piano 1 tháng');
+
+        // Không có buổi nào trước đó
+        $this->getJson("/api/attendance/{$student->id}/previous-note?date=".self::MONDAY)->assertOk()->assertJsonPath('previous', null);
     }
 
     public function test_invalid_lesson_time_is_refused_and_old_bad_data_does_not_break_attendance(): void

@@ -102,7 +102,7 @@ class AttendanceApiController extends Controller
         // Toàn bộ điểm danh của các học viên trong ngày, để đánh số buổi chính thức giống Cổng phụ huynh
         $allAttendances = Attendance::whereIn('student_id', $students->pluck('id'))->get()->groupBy('student_id');
         $pausedHidden = 0; // học viên đang bảo lưu có lịch ngày này (không hiện trong danh sách, chỉ đếm ở thẻ "Đang tạm dừng")
-        $studentsFormatted = $students->flatMap(function ($st) use ($dayAttendances, $todayLessons, $dateStr, $periods, $allAttendances, &$pausedHidden) {
+        $studentsFormatted = $students->flatMap(function ($st) use ($dayAttendances, $todayLessons, $dateStr, $dayOfWeek, $periods, $allAttendances, &$pausedHidden) {
             $records = $dayAttendances->get($st->id, collect());
             $official = StudentSchedule::officialNumbers($st, $allAttendances->get($st->id, collect()))['numbers'];
             $rows = [];
@@ -110,7 +110,13 @@ class AttendanceApiController extends Controller
             // Chỉ các ca đã bắt đầu học (không hiện buổi trước "Ngày bắt đầu học" / trước ngày bắt đầu của khóa thêm)
             // Ca bị buổi học lẻ / học bù trùng giờ thay thế thì chỉ hiện buổi bù (trừ khi ca đó đã được điểm danh trước)
             $replaced = StudentSchedule::replacedSlotIds($st, $dateStr, collect($todayLessons->get($st->id, []))->all());
-            foreach (StudentSchedule::slotsOnDate($st, $dateStr) as $i => $slot) {
+            // Ca đã có điểm danh ngày này luôn hiện (kể cả trước ngày áp dụng của ca khi đổi lịch giữa khóa);
+            // bản ghi không gắn ca được tính cho ca đầu tiên trong ngày
+            $keepSlotIds = $records->pluck('slot_id')->filter()->all();
+            if ($records->contains(fn ($r) => $r->slot_id === null) && ($firstOfDay = StudentSchedule::slotsOn($st, $dayOfWeek)[0]['id'] ?? null)) {
+                $keepSlotIds[] = $firstOfDay;
+            }
+            foreach (StudentSchedule::slotsOnDate($st, $dateStr, $keepSlotIds) as $i => $slot) {
                 if (in_array($slot['id'], $replaced, true) && ! $records->firstWhere('slot_id', $slot['id'])) {
                     continue;
                 }
@@ -404,6 +410,33 @@ class AttendanceApiController extends Controller
         $attendance->update(['note' => $validated['note']]);
 
         return response()->json(['message' => "Đã lưu báo bài cho {$student->name}.", 'attendance' => $attendance]);
+    }
+
+    /**
+     * Nhận xét / báo bài gần nhất trước ngày $date (giáo viên xem lại buổi trước khi viết báo bài buổi mới).
+     * Không tính ghi chú tự điền và lý do xin nghỉ của phụ huynh.
+     */
+    public function previousNote(Request $request, Student $student): JsonResponse
+    {
+        $date = $request->validate(['date' => 'required|date'])['date'];
+
+        $previous = Attendance::where('student_id', $student->id)
+            ->whereDate('attended_at', '<', $date)
+            ->whereNotNull('note')->where('note', '!=', '')
+            ->reorder()->orderByDesc('attended_at')
+            ->limit(30)->get()
+            ->first(fn (Attendance $a) => $a->hasLessonReport() && $a->parentLeaveReason() === null);
+
+        return response()->json(['previous' => $previous ? [
+            'date' => $previous->attended_at->format('d/m/Y'),
+            'weekday' => StudentSchedule::DAY_LABELS[$previous->attended_at->dayOfWeek],
+            'session_number' => $previous->session_number,
+            // Học nhiều khóa: biết báo bài này thuộc khóa nào (bản ghi cũ không gắn khóa thì lấy khóa đầu tiên)
+            'course_name' => (StudentSchedule::courseItem($student, $previous->course_item_id)
+                ?? ($student->registered_courses_list[0] ?? null))['course_name'] ?? $student->course?->name,
+            'status' => $previous->status,
+            'note' => $previous->note,
+        ] : null]);
     }
 
     public function availableGroupSlots(Request $request): JsonResponse

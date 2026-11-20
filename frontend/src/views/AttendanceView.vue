@@ -398,6 +398,19 @@ const openNoteModal = (student) => {
   // Chưa báo bài thì để trống (không hiện ghi chú tự điền như "Điểm danh buổi #3")
   noteForm.value.content = student.has_report ? student.checkin_note : '';
   showNoteModal.value = true;
+  loadPreviousNote(student);
+};
+
+// Báo bài buổi học gần nhất trước đó (hiện bên trái modal) để giáo viên nắm bài cũ khi báo bài mới
+const previousNote = ref({ loading: false, data: null });
+const loadPreviousNote = async (student) => {
+  previousNote.value = { loading: true, data: null };
+  try {
+    const res = await dailyAttendanceApi.previousNote(student.id, loadedDate.value || selectedDate.value);
+    if (selectedStudent.value?.id === student.id) previousNote.value = { loading: false, data: res.data.previous };
+  } catch {
+    previousNote.value = { loading: false, data: null };
+  }
 };
 
 const submitNote = async () => {
@@ -963,7 +976,7 @@ const openMessageModal = (student) => {
     <div v-if="showNoteModal && selectedStudent"
       class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
       <!-- Nhận xét / báo bài thường dài: modal rộng, ô nhập cao (kéo giãn được) -->
-      <div class="w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white p-5 sm:p-6 shadow-xl space-y-4">
+      <div class="w-full max-w-5xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white p-5 sm:p-6 shadow-xl space-y-4">
         <div class="flex items-center justify-between border-b border-slate-100 pb-3">
           <h3 class="text-base font-bold text-slate-900">Nhận xét buổi học: {{ selectedStudent.name }}</h3>
           <button type="button" @click="showNoteModal = false"
@@ -973,11 +986,31 @@ const openMessageModal = (student) => {
         </div>
 
         <form @submit.prevent="submitNote" class="space-y-3.5 text-xs sm:text-sm">
-          <div>
-            <label class="block font-medium text-slate-700 mb-1">Nội dung nhận xét & dặn dò</label>
-            <textarea v-model="noteForm.content" rows="12"
-              placeholder="VD: Bé giữ nhịp rất tốt, ngón tay thả lỏng hơn. Về nhà tập thêm trang 15 sách Alfred..."
-              class="w-full min-h-[200px] max-h-[65vh] resize-y rounded-xl border border-slate-200 px-3 py-2 leading-relaxed text-slate-900 focus:border-rose-500 focus:outline-none"></textarea>
+          <!-- Trái: báo bài buổi trước (chỉ xem); phải: báo bài buổi này. Điện thoại: xếp chồng -->
+          <div class="grid gap-4 md:grid-cols-2">
+            <div class="flex flex-col">
+              <label class="block font-medium text-slate-700 mb-1">
+                Nhận xét buổi trước<template v-if="previousNote.data">
+                  <span class="font-normal text-slate-500"> ({{ previousNote.data.weekday }}, {{ previousNote.data.date }}<template v-if="previousNote.data.session_number"> · Buổi {{ previousNote.data.session_number }}</template>)</span>
+                </template>
+              </label>
+              <!-- Khóa của báo bài này (học nhiều khóa thì biết báo bài thuộc khóa nào) -->
+              <p v-if="previousNote.data?.course_name" class="mb-1.5 text-[11px] font-semibold text-indigo-600 truncate" :title="previousNote.data.course_name">
+                Khóa: {{ previousNote.data.course_name }}
+              </p>
+              <div class="flex-1 min-h-[120px] md:min-h-[200px] max-h-[65vh] overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 leading-relaxed whitespace-pre-line"
+                :class="previousNote.data ? 'text-slate-700' : 'text-slate-400 italic'">
+                <template v-if="previousNote.loading">Đang tải...</template>
+                <template v-else-if="previousNote.data">{{ previousNote.data.note }}</template>
+                <template v-else>Chưa có nhận xét buổi học nào trước đó.</template>
+              </div>
+            </div>
+            <div class="flex flex-col">
+              <label class="block font-medium text-slate-700 mb-1">Nội dung nhận xét & dặn dò</label>
+              <textarea v-model="noteForm.content" rows="12"
+                placeholder="VD: Bé giữ nhịp rất tốt, ngón tay thả lỏng hơn. Về nhà tập thêm trang 15 sách Alfred..."
+                class="w-full flex-1 min-h-[200px] max-h-[65vh] resize-y rounded-xl border border-slate-200 px-3 py-2 leading-relaxed text-slate-900 focus:border-rose-500 focus:outline-none"></textarea>
+            </div>
           </div>
 
           <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
