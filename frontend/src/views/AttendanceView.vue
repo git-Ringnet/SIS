@@ -27,6 +27,8 @@ import {
   Info,
   CalendarOff,
   Trash2,
+  Copy,
+  Check,
 } from 'lucide-vue-next';
 
 // Bộ lọc
@@ -411,6 +413,27 @@ const loadPreviousNote = async (student) => {
   } catch {
     previousNote.value = { loading: false, data: null };
   }
+};
+
+// Nút "Sao chép" nhận xét buổi trước
+const previousNoteCopied = ref(false);
+const copyPreviousNote = async () => {
+  const text = previousNote.value.data?.note || '';
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Trình duyệt chặn clipboard API: chép bằng ô ẩn
+    const area = document.createElement('textarea');
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+  }
+  previousNoteCopied.value = true;
+  setTimeout(() => {
+    previousNoteCopied.value = false;
+  }, 2000);
 };
 
 const submitNote = async () => {
@@ -989,11 +1012,20 @@ const openMessageModal = (student) => {
           <!-- Trái: báo bài buổi trước (chỉ xem); phải: báo bài buổi này. Điện thoại: xếp chồng -->
           <div class="grid gap-4 md:grid-cols-2">
             <div class="flex flex-col">
-              <label class="block font-medium text-slate-700 mb-1">
-                Nhận xét buổi trước<template v-if="previousNote.data">
-                  <span class="font-normal text-slate-500"> ({{ previousNote.data.weekday }}, {{ previousNote.data.date }}<template v-if="previousNote.data.session_number"> · Buổi {{ previousNote.data.session_number }}</template>)</span>
-                </template>
-              </label>
+              <div class="mb-1 flex items-start justify-between gap-2">
+                <label class="block font-medium text-slate-700">
+                  Nhận xét buổi trước<template v-if="previousNote.data">
+                    <span class="font-normal text-slate-500"> ({{ previousNote.data.weekday }}, {{ previousNote.data.date }}<template v-if="previousNote.data.session_number"> · Buổi {{ previousNote.data.session_number }}</template>)</span>
+                  </template>
+                </label>
+                <!-- Sao chép báo bài buổi trước (dán sang ô bên phải rồi sửa cho nhanh) -->
+                <button v-if="previousNote.data" type="button" @click="copyPreviousNote"
+                  class="inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-semibold transition-colors cursor-pointer"
+                  :class="previousNoteCopied ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'">
+                  <component :is="previousNoteCopied ? Check : Copy" class="h-3.5 w-3.5" />
+                  <span>{{ previousNoteCopied ? 'Đã sao chép' : 'Sao chép' }}</span>
+                </button>
+              </div>
               <!-- Khóa của báo bài này (học nhiều khóa thì biết báo bài thuộc khóa nào) -->
               <p v-if="previousNote.data?.course_name" class="mb-1.5 text-[11px] font-semibold text-indigo-600 truncate" :title="previousNote.data.course_name">
                 Khóa: {{ previousNote.data.course_name }}
