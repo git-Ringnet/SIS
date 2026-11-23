@@ -997,21 +997,22 @@ const openMessageModal = (student) => {
 
     <!-- MODAL 2: GHI NHẬN XÉT BÀI HỌC -->
     <div v-if="showNoteModal && selectedStudent"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
-      <!-- Nhận xét / báo bài thường dài: modal rộng, ô nhập cao (kéo giãn được) -->
-      <div class="w-full max-w-5xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white p-5 sm:p-6 shadow-xl space-y-4">
-        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
-          <h3 class="text-base font-bold text-slate-900">Nhận xét buổi học: {{ selectedStudent.name }}</h3>
+      class="fixed inset-0 z-50 flex items-stretch sm:items-center justify-center bg-slate-900/40 p-0 sm:p-4 backdrop-blur-xs">
+      <!-- Nhận xét / báo bài thường dài: máy tính = modal rộng 2 cột; điện thoại = toàn màn hình, tiêu đề và nút Lưu cố định,
+           khung báo bài buổi trước thấp (cuộn bên trong), ô nhập cao cố định để không nhảy khi gõ -->
+      <div class="flex w-full max-w-5xl flex-col h-[100dvh] sm:h-auto sm:max-h-[92vh] overflow-hidden rounded-none sm:rounded-2xl bg-white shadow-xl">
+        <div class="flex shrink-0 items-center justify-between gap-2 border-b border-slate-100 px-4 py-3 sm:px-6 sm:pt-5">
+          <h3 class="min-w-0 truncate text-base font-bold text-slate-900">Nhận xét buổi học: {{ selectedStudent.name }}</h3>
           <button type="button" @click="showNoteModal = false"
-            class="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 cursor-pointer">
+            class="shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 cursor-pointer">
             <X class="h-5 w-5" />
           </button>
         </div>
 
-        <form @submit.prevent="submitNote" class="space-y-3.5 text-xs sm:text-sm">
+        <form @submit.prevent="submitNote" class="flex min-h-0 flex-1 flex-col text-xs sm:text-sm">
           <!-- Trái: báo bài buổi trước (chỉ xem); phải: báo bài buổi này. Điện thoại: xếp chồng -->
-          <div class="grid gap-4 md:grid-cols-2">
-            <div class="flex flex-col">
+          <div class="grid min-h-0 flex-1 gap-3 overflow-y-auto overscroll-contain px-4 py-3 sm:gap-4 sm:px-6 sm:py-4 md:grid-cols-2">
+            <div class="flex min-w-0 flex-col">
               <div class="mb-1 flex items-start justify-between gap-2">
                 <label class="block font-medium text-slate-700">
                   Nhận xét buổi trước<template v-if="previousNote.data">
@@ -1030,22 +1031,23 @@ const openMessageModal = (student) => {
               <p v-if="previousNote.data?.course_name" class="mb-1.5 text-[11px] font-semibold text-indigo-600 truncate" :title="previousNote.data.course_name">
                 Khóa: {{ previousNote.data.course_name }}
               </p>
-              <div class="flex-1 min-h-[120px] md:min-h-[200px] max-h-[65vh] overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 leading-relaxed whitespace-pre-line"
+              <div class="max-h-[28dvh] min-h-[72px] md:flex-1 md:min-h-[200px] md:max-h-[65vh] overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 leading-relaxed whitespace-pre-line break-words"
                 :class="previousNote.data ? 'text-slate-700' : 'text-slate-400 italic'">
                 <template v-if="previousNote.loading">Đang tải...</template>
                 <template v-else-if="previousNote.data">{{ previousNote.data.note }}</template>
                 <template v-else>Chưa có nhận xét buổi học nào trước đó.</template>
               </div>
             </div>
-            <div class="flex flex-col">
+            <div class="flex min-w-0 flex-col">
               <label class="block font-medium text-slate-700 mb-1">Nội dung nhận xét & dặn dò</label>
+              <!-- Điện thoại: cao cố định, không kéo giãn (khung không nhảy khi gõ); máy tính: kéo giãn được -->
               <textarea v-model="noteForm.content" rows="12"
                 placeholder="VD: Bé giữ nhịp rất tốt, ngón tay thả lỏng hơn. Về nhà tập thêm trang 15 sách Alfred..."
-                class="w-full flex-1 min-h-[200px] max-h-[65vh] resize-y rounded-xl border border-slate-200 px-3 py-2 leading-relaxed text-slate-900 focus:border-rose-500 focus:outline-none"></textarea>
+                class="block w-full h-[40dvh] resize-none md:h-auto md:flex-1 md:min-h-[200px] md:max-h-[65vh] md:resize-y rounded-xl border border-slate-200 px-3 py-2 leading-relaxed text-slate-900 focus:border-rose-500 focus:outline-none"></textarea>
             </div>
           </div>
 
-          <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+          <div class="flex shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-white px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-5">
             <button type="button" @click="showNoteModal = false"
               class="rounded-xl border border-slate-200 px-4 py-2 font-medium text-slate-600 hover:bg-slate-50 cursor-pointer">
               Hủy

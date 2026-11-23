@@ -30,6 +30,16 @@ body {
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* iPhone (Safari) tự phóng to trang khi chạm vào ô nhập có chữ < 16px → màn hình nhảy, chữ tràn ra ngoài.
+ * Trên điện thoại mọi ô nhập dùng chữ 16px (ngoài @layer nên thắng class text-xs / text-sm của Tailwind). */
+@media (max-width: 767px) {
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+    textarea,
+    select {
+        font-size: 16px;
+    }
+}
+
 /* ------------------------------------------------------------------ Dark theme
  * Bật bằng class "dark" trên <html> (nút mặt trăng / mặt trời ở thanh trên cùng).
  * Tự áp cho mọi màn mà không phải sửa từng màn: chỉ đổi những gì vốn SÁNG — nền trắng / slate nhạt → nền tối,
